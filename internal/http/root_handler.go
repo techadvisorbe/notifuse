@@ -11,8 +11,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/Notifuse/notifuse/internal/domain"
 	"github.com/Notifuse/notifuse/internal/blogfeed"
+	"github.com/Notifuse/notifuse/internal/domain"
 	"github.com/Notifuse/notifuse/pkg/cache"
 	"github.com/Notifuse/notifuse/pkg/logger"
 )
@@ -71,13 +71,16 @@ func NewRootHandler(
 
 func (h *RootHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	// 1. Handle /config.js
-	if r.URL.Path == "/config.js" {
+
+	hideConsole := os.Getenv("NO_CONSOLE") == "true"
+
+	if r.URL.Path == "/config.js" && !hideConsole {
 		h.serveConfigJS(w, r)
 		return
 	}
 
 	// 2. Handle /console/* - serve console SPA
-	if strings.HasPrefix(r.URL.Path, "/console") {
+	if strings.HasPrefix(r.URL.Path, "/console") && !hideConsole {
 		h.serveConsole(w, r)
 		return
 	}
@@ -115,7 +118,12 @@ func (h *RootHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 6. ROOT PATH LOGIC: Default behavior is to redirect to console
-	http.Redirect(w, r, "/console", http.StatusTemporaryRedirect)
+	if !hideConsole {
+		http.Redirect(w, r, "/console", http.StatusTemporaryRedirect)
+	}
+
+	// return 404 for any other paths to avoid unintended redirects
+	http.NotFound(w, r)
 }
 
 // serveConfigJS generates and serves the config.js file with environment variables

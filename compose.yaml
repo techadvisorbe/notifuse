@@ -24,6 +24,7 @@ services:
       - DB_PREFIX=${DB_PREFIX:-notifuse}
       - DB_NAME=${DB_NAME:-notifuse_system}
       - DB_SSLMODE=${DB_SSLMODE:-disable}
+      - NO_CONSOLE=false
 
       # Secret Key (Required) - Generate a secure random string for production
       - SECRET_KEY=${SECRET_KEY:-d04zCk3Fa45oOjDWHpAvc1AZxnLdGffOnNWK+Jt2yXf37+FTfuMMHb8flcfPMqLluRR3rvhbr555r6j1DEigrA==}
