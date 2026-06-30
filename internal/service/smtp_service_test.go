@@ -28,6 +28,13 @@ type mockSMTPServer struct {
 	wg              sync.WaitGroup
 	mailFromCmd     string // captures the exact MAIL FROM command
 	multilineBanner bool   // send multi-line 220 banner (RFC 5321 compliant)
+	// authMode controls which AUTH mechanisms the mock advertises/accepts:
+	//   "" / "plain_login" -> advertises "AUTH PLAIN LOGIN" (default)
+	//   "login_only"       -> advertises "AUTH LOGIN" only, rejects PLAIN with 504 (Azure-like)
+	//   "no_auth_mech"     -> advertises only "AUTH CRAM-MD5" (no PLAIN/LOGIN)
+	authMode  string
+	loginUser string // decoded username captured during an AUTH LOGIN handshake
+	loginPass string // decoded password captured during an AUTH LOGIN handshake
 }
 
 type capturedMessage struct {
@@ -65,6 +72,26 @@ func newMockSMTPServerWithMultilineBanner(t *testing.T, authSuccess bool) *mockS
 		commands:        make([]string, 0),
 		messages:        make([]capturedMessage, 0),
 		multilineBanner: true,
+	}
+
+	server.wg.Add(1)
+	go server.serve()
+	return server
+}
+
+// newMockSMTPServerWithAuthMode creates a mock SMTP server with a specific AUTH
+// advertisement/acceptance behavior (see mockSMTPServer.authMode). Used to model
+// LOGIN-only servers such as Azure Communication Services.
+func newMockSMTPServerWithAuthMode(t *testing.T, authSuccess bool, authMode string) *mockSMTPServer {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	server := &mockSMTPServer{
+		listener:    listener,
+		authSuccess: authSuccess,
+		authMode:    authMode,
+		commands:    make([]string, 0),
+		messages:    make([]capturedMessage, 0),
 	}
 
 	server.wg.Add(1)
@@ -111,6 +138,10 @@ func (s *mockSMTPServer) handleConnection(conn net.Conn) {
 	var recipients []string
 	var inData bool
 	var dataBuffer strings.Builder
+	// AUTH LOGIN handshake state. The username/password arrive as bare base64
+	// lines with no command prefix, so they must be intercepted before the
+	// command switch (otherwise they fall through to the default "500" branch).
+	var awaitingLoginUser, awaitingLoginPass bool
 
 	for {
 		conn.SetReadDeadline(time.Now().Add(5 * time.Second))
@@ -141,6 +172,33 @@ func (s *mockSMTPServer) handleConnection(conn net.Conn) {
 			continue
 		}
 
+		// AUTH LOGIN handshake interception (must run before the command switch).
+		if awaitingLoginUser {
+			awaitingLoginUser = false
+			if decoded, derr := base64.StdEncoding.DecodeString(line); derr == nil {
+				s.mu.Lock()
+				s.loginUser = string(decoded)
+				s.mu.Unlock()
+			}
+			conn.Write([]byte("334 UGFzc3dvcmQ6\r\n")) // base64("Password:")
+			awaitingLoginPass = true
+			continue
+		}
+		if awaitingLoginPass {
+			awaitingLoginPass = false
+			if decoded, derr := base64.StdEncoding.DecodeString(line); derr == nil {
+				s.mu.Lock()
+				s.loginPass = string(decoded)
+				s.mu.Unlock()
+			}
+			if s.authSuccess {
+				conn.Write([]byte("235 Authentication successful\r\n"))
+			} else {
+				conn.Write([]byte("535 Authentication failed\r\n"))
+			}
+			continue
+		}
+
 		upperLine := strings.ToUpper(line)
 
 		switch {
@@ -149,9 +207,34 @@ func (s *mockSMTPServer) handleConnection(conn net.Conn) {
 			conn.Write([]byte("250-8BITMIME\r\n")) // Advertise 8BITMIME to test that we don't use it
 			conn.Write([]byte("250-SMTPUTF8\r\n")) // Advertise SMTPUTF8 to test that we don't use it
 			conn.Write([]byte("250-SIZE 10485760\r\n"))
-			conn.Write([]byte("250 AUTH PLAIN LOGIN\r\n"))
+			switch s.authMode {
+			case "login_only":
+				conn.Write([]byte("250 AUTH LOGIN\r\n"))
+			case "no_auth_mech":
+				conn.Write([]byte("250 AUTH CRAM-MD5\r\n"))
+			default:
+				conn.Write([]byte("250 AUTH PLAIN LOGIN\r\n"))
+			}
+
+		case strings.HasPrefix(upperLine, "AUTH LOGIN"):
+			// Prompt for the username; the username/password lines are handled by
+			// the awaitingLogin* interception above.
+			conn.Write([]byte("334 VXNlcm5hbWU6\r\n")) // base64("Username:")
+			awaitingLoginUser = true
+
+		case strings.HasPrefix(upperLine, "AUTH PLAIN"):
+			if s.authMode == "login_only" {
+				// Azure Communication Services advertises LOGIN only and rejects
+				// the PLAIN mechanism before checking credentials.
+				conn.Write([]byte("504 5.5.4 Unrecognized authentication type\r\n"))
+			} else if s.authSuccess {
+				conn.Write([]byte("235 Authentication successful\r\n"))
+			} else {
+				conn.Write([]byte("535 Authentication failed\r\n"))
+			}
 
 		case strings.HasPrefix(upperLine, "AUTH"):
+			// Any other mechanism (e.g. XOAUTH2).
 			if s.authSuccess {
 				conn.Write([]byte("235 Authentication successful\r\n"))
 			} else {
@@ -237,6 +320,14 @@ func (s *mockSMTPServer) GetCommands() []string {
 	result := make([]string, len(s.commands))
 	copy(result, s.commands)
 	return result
+}
+
+// GetLoginCredentials returns the username/password the mock decoded during an
+// AUTH LOGIN handshake.
+func (s *mockSMTPServer) GetLoginCredentials() (string, string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.loginUser, s.loginPass
 }
 
 // noopLogger implements logger.Logger interface for testing
@@ -328,6 +419,179 @@ func TestSendRawEmail_ConnectionError(t *testing.T) {
 
 	err := sendRawEmail("127.0.0.1", 59999, "", "", false, "sender@example.com", []string{"recipient@example.com"}, msg)
 	require.Error(t, err)
+}
+
+// ============================================================================
+// Tests for AUTH mechanism negotiation (Azure Communication Services advertises
+// AUTH LOGIN only, rejecting AUTH PLAIN with 504)
+// ============================================================================
+
+// indexOfCmd returns the index of the first command equal to needle, or -1.
+func indexOfCmd(commands []string, needle string) int {
+	for i, c := range commands {
+		if c == needle {
+			return i
+		}
+	}
+	return -1
+}
+
+func TestSendRawEmail_AuthLogin_Success(t *testing.T) {
+	// LOGIN-only server (ACS-like): the sender must use the AUTH LOGIN handshake.
+	server := newMockSMTPServerWithAuthMode(t, true, "login_only")
+	defer server.Close()
+
+	port := server.Port()
+	msg := []byte("From: sender@example.com\r\nTo: recipient@example.com\r\nSubject: Test\r\n\r\nTest body")
+
+	err := sendRawEmail("127.0.0.1", port, "acsuser", "acspass", false, "sender@example.com", []string{"recipient@example.com"}, msg)
+	require.NoError(t, err)
+
+	commands := server.GetCommands()
+	expectedUser := base64.StdEncoding.EncodeToString([]byte("acsuser"))
+	expectedPass := base64.StdEncoding.EncodeToString([]byte("acspass"))
+
+	// LOGIN must be used, PLAIN must NOT be attempted.
+	for _, cmd := range commands {
+		assert.NotContains(t, cmd, "AUTH PLAIN", "must not attempt AUTH PLAIN on a LOGIN-only server")
+	}
+
+	// Verify the exact handshake order: AUTH LOGIN -> base64(user) -> base64(pass).
+	authIdx := indexOfCmd(commands, "AUTH LOGIN")
+	userIdx := indexOfCmd(commands, expectedUser)
+	passIdx := indexOfCmd(commands, expectedPass)
+	require.GreaterOrEqual(t, authIdx, 0, "AUTH LOGIN not sent: %v", commands)
+	require.Greater(t, userIdx, authIdx, "base64(username) must follow AUTH LOGIN: %v", commands)
+	require.Greater(t, passIdx, userIdx, "base64(password) must follow username: %v", commands)
+
+	// Verify the wire bytes decoded to the intended credentials.
+	gotUser, gotPass := server.GetLoginCredentials()
+	assert.Equal(t, "acsuser", gotUser)
+	assert.Equal(t, "acspass", gotPass)
+
+	// And the message was delivered.
+	require.Len(t, server.GetMessages(), 1)
+}
+
+func TestSendRawEmail_AuthLogin_Failure(t *testing.T) {
+	// LOGIN-only server that rejects the credentials at the final step.
+	server := newMockSMTPServerWithAuthMode(t, false, "login_only")
+	defer server.Close()
+
+	port := server.Port()
+	msg := []byte("From: sender@example.com\r\nTo: recipient@example.com\r\nSubject: Test\r\n\r\nTest body")
+
+	err := sendRawEmail("127.0.0.1", port, "acsuser", "wrongpass", false, "sender@example.com", []string{"recipient@example.com"}, msg)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "authentication failed with code: 535")
+}
+
+func TestSendRawEmail_PlainPreferredWhenBothAdvertised(t *testing.T) {
+	// Default server advertises "AUTH PLAIN LOGIN"; PLAIN must win.
+	server := newMockSMTPServer(t, true)
+	defer server.Close()
+
+	port := server.Port()
+	msg := []byte("From: sender@example.com\r\nTo: recipient@example.com\r\nSubject: Test\r\n\r\nTest body")
+
+	err := sendRawEmail("127.0.0.1", port, "user", "pass", false, "sender@example.com", []string{"recipient@example.com"}, msg)
+	require.NoError(t, err)
+
+	commands := server.GetCommands()
+	foundPlain := false
+	for _, cmd := range commands {
+		if strings.HasPrefix(cmd, "AUTH PLAIN") {
+			foundPlain = true
+		}
+		assert.NotEqual(t, "AUTH LOGIN", cmd, "must prefer PLAIN when both are advertised")
+	}
+	assert.True(t, foundPlain, "expected AUTH PLAIN to be used when advertised")
+}
+
+func TestSendRawEmail_NoSupportedMechanism(t *testing.T) {
+	// Server advertises only CRAM-MD5 (neither PLAIN nor LOGIN). With credentials
+	// set, the sender must fail with a clear diagnostic rather than blind-firing
+	// AUTH PLAIN (which would leak credentials / reproduce the opaque error).
+	server := newMockSMTPServerWithAuthMode(t, true, "no_auth_mech")
+	defer server.Close()
+
+	port := server.Port()
+	msg := []byte("From: sender@example.com\r\nTo: recipient@example.com\r\nSubject: Test\r\n\r\nTest body")
+
+	err := sendRawEmail("127.0.0.1", port, "user", "pass", false, "sender@example.com", []string{"recipient@example.com"}, msg)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no supported AUTH mechanism")
+}
+
+func TestParseAuthMechanisms(t *testing.T) {
+	testCases := []struct {
+		name     string
+		lines    []string
+		expected map[string]bool
+	}{
+		{
+			name:     "plain and login",
+			lines:    []string{"localhost", "8BITMIME", "AUTH PLAIN LOGIN"},
+			expected: map[string]bool{"PLAIN": true, "LOGIN": true},
+		},
+		{
+			name:     "login only",
+			lines:    []string{"localhost", "AUTH LOGIN"},
+			expected: map[string]bool{"LOGIN": true},
+		},
+		{
+			name:     "legacy exchange equals syntax",
+			lines:    []string{"AUTH=LOGIN"},
+			expected: map[string]bool{"LOGIN": true},
+		},
+		{
+			name:     "mixed case",
+			lines:    []string{"auth Plain Login"},
+			expected: map[string]bool{"PLAIN": true, "LOGIN": true},
+		},
+		{
+			name:     "standard and legacy lines combined",
+			lines:    []string{"AUTH PLAIN LOGIN XOAUTH2", "AUTH=PLAIN", "AUTH=LOGIN"},
+			expected: map[string]bool{"PLAIN": true, "LOGIN": true, "XOAUTH2": true},
+		},
+		{
+			name:     "blank continuation lines ignored",
+			lines:    []string{"", "AUTH LOGIN", ""},
+			expected: map[string]bool{"LOGIN": true},
+		},
+		{
+			// Real EHLO capability set observed from Azure Communication Services
+			// (smtp.azurecomm.net): advertises LOGIN + XOAUTH2 but not PLAIN.
+			name: "azure communication services real capabilities",
+			lines: []string{
+				"ic3-transport Hello [1.2.3.4]",
+				"SIZE 31457280",
+				"ENHANCEDSTATUSCODES",
+				"AUTH LOGIN XOAUTH2",
+				"8BITMIME",
+				"BINARYMIME",
+				"CHUNKING",
+				"SMTPUTF8",
+			},
+			expected: map[string]bool{"LOGIN": true, "XOAUTH2": true},
+		},
+		{
+			name:     "no auth line",
+			lines:    []string{"localhost", "8BITMIME", "SIZE 1024"},
+			expected: map[string]bool{},
+		},
+		{
+			name:     "auth-prefixed non-auth capability ignored",
+			lines:    []string{"AUTHORIZE SOMETHING"},
+			expected: map[string]bool{},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.expected, parseAuthMechanisms(tc.lines))
+		})
+	}
 }
 
 func TestSendRawEmail_MultipleRecipients(t *testing.T) {

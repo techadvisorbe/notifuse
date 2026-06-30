@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/Notifuse/notifuse/config"
 	"github.com/Notifuse/notifuse/internal/domain"
 	"github.com/Notifuse/notifuse/pkg/crypto"
 	"github.com/Notifuse/notifuse/pkg/logger"
@@ -255,8 +256,8 @@ func (s *UserService) RootSignin(ctx context.Context, input domain.RootSigninInp
 		return nil, fmt.Errorf("too many sign-in attempts, please try again in a few minutes")
 	}
 
-	// Verify email matches root user
-	if input.Email != s.rootEmail {
+	// Verify email matches a configured root user
+	if !config.IsRootEmail(s.rootEmail, input.Email) {
 		s.logger.WithField("email", input.Email).Warn("Root signin attempted with non-root email")
 		s.tracer.AddAttribute(ctx, "error", "invalid_credentials")
 		return nil, fmt.Errorf("unauthorized: invalid credentials")

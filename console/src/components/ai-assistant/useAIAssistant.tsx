@@ -27,7 +27,13 @@ export function useAIAssistant(options: UseAIAssistantOptions): UseAIAssistantRe
   const abortControllerRef = useRef<AbortController | null>(null)
   const inputContainerRef = useRef<HTMLDivElement | null>(null)
 
-  const llmIntegration = workspace.integrations?.find((i) => i.type === 'llm')
+  const llmIntegrations = workspace.integrations?.filter((i) => i.type === 'llm') ?? []
+  const [selectedLLMIntegrationId, setSelectedLLMIntegrationId] = useState<string | undefined>(
+    undefined
+  )
+  // Resolve the active integration from the selection, defaulting to the first configured one
+  const llmIntegration =
+    llmIntegrations.find((i) => i.id === selectedLLMIntegrationId) ?? llmIntegrations[0]
 
   // Focus the input when opening
   useEffect(() => {
@@ -259,6 +265,8 @@ export function useAIAssistant(options: UseAIAssistantOptions): UseAIAssistantRe
     costs,
     inputContainerRef,
     llmIntegration,
+    llmIntegrations,
+    setSelectedLLMIntegrationId,
     handleCancel,
     handleSend,
     bubbleItems,

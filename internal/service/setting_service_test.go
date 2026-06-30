@@ -202,6 +202,57 @@ func TestSettingService_GetSystemConfig(t *testing.T) {
 	})
 }
 
+func TestSettingService_OIDC_RoundTrip(t *testing.T) {
+	repo := NewMockSettingRepository()
+	svc := NewSettingService(repo)
+	ctx := context.Background()
+
+	in := &SystemConfig{
+		IsInstalled:         true,
+		OIDCEnabled:         true,
+		OIDCIssuerURL:       "https://idp.example.com",
+		OIDCClientID:        "client-abc",
+		OIDCClientSecret:    "super-secret",
+		OIDCRedirectURI:     "https://app.example.com/api/user.oidc.callback",
+		OIDCScopes:          "openid email profile",
+		OIDCButtonLabel:     "Sign in with SSO",
+		OIDCAutoCreateUsers: true,
+		OIDCAllowedDomains:  "corp.com",
+	}
+	require.NoError(t, svc.SetSystemConfig(ctx, in, testSecretKey))
+
+	// The client secret must be stored ENCRYPTED, never as plaintext.
+	stored := repo.settings["encrypted_oidc_client_secret"]
+	assert.NotEmpty(t, stored)
+	assert.NotEqual(t, "super-secret", stored, "client secret must be encrypted at rest")
+	assert.Equal(t, "true", repo.settings["oidc_enabled"])
+	assert.Equal(t, "true", repo.settings["oidc_auto_create_users"])
+	assert.Equal(t, "https://idp.example.com", repo.settings["oidc_issuer_url"])
+
+	// GetSystemConfig decrypts the secret and reads the rest.
+	out, err := svc.GetSystemConfig(ctx, testSecretKey)
+	require.NoError(t, err)
+	assert.True(t, out.OIDCEnabled)
+	assert.True(t, out.OIDCAutoCreateUsers)
+	assert.Equal(t, "client-abc", out.OIDCClientID)
+	assert.Equal(t, "super-secret", out.OIDCClientSecret, "secret must decrypt back")
+	assert.Equal(t, "corp.com", out.OIDCAllowedDomains)
+	assert.Equal(t, "openid email profile", out.OIDCScopes)
+}
+
+func TestSettingService_OIDC_ClearSecret(t *testing.T) {
+	repo := NewMockSettingRepository()
+	svc := NewSettingService(repo)
+	ctx := context.Background()
+
+	require.NoError(t, svc.SetSystemConfig(ctx, &SystemConfig{OIDCClientSecret: "x"}, testSecretKey))
+	assert.NotEmpty(t, repo.settings["encrypted_oidc_client_secret"])
+
+	// Empty secret clears the stored value.
+	require.NoError(t, svc.SetSystemConfig(ctx, &SystemConfig{OIDCClientSecret: ""}, testSecretKey))
+	assert.Equal(t, "", repo.settings["encrypted_oidc_client_secret"])
+}
+
 func TestSettingService_SetSystemConfig(t *testing.T) {
 	ctx := context.Background()
 

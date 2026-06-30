@@ -33,6 +33,15 @@ func setupUserTest(t *testing.T) (
 	*UserService,
 	*mockEmailSender,
 ) {
+	return setupUserTestWithRootEmail(t, "root@example.com")
+}
+
+func setupUserTestWithRootEmail(t *testing.T, rootEmail string) (
+	*mocks.MockUserRepository,
+	*mocks.MockAuthService,
+	*UserService,
+	*mockEmailSender,
+) {
 	ctrl := gomock.NewController(t)
 	mockRepo := mocks.NewMockUserRepository(ctrl)
 	mockAuthService := mocks.NewMockAuthService(ctrl)
@@ -93,7 +102,7 @@ func setupUserTest(t *testing.T) (
 		Tracer:        mockTracer,
 		RateLimiter:   rl,
 		SecretKey:     "test-secret-key-for-hmac-verification",
-		RootEmail:     "root@example.com",
+		RootEmail:     rootEmail,
 	})
 	require.NoError(t, err)
 
@@ -615,6 +624,68 @@ func TestUserService_RootSignin(t *testing.T) {
 		require.Error(t, err)
 		require.Nil(t, result)
 		require.Contains(t, err.Error(), "failed to create session")
+	})
+}
+
+func TestUserService_RootSignin_MultipleRootEmails(t *testing.T) {
+	mockRepo, mockAuthService, service, _ := setupUserTestWithRootEmail(t, "root1@example.com,root2@example.com")
+	secretKey := "test-secret-key-for-hmac-verification"
+
+	t.Run("second listed root can sign in", func(t *testing.T) {
+		secondRoot := "root2@example.com"
+		timestamp := time.Now().Unix()
+		message := fmt.Sprintf("%s:%d", secondRoot, timestamp)
+		signature := crypto.ComputeHMAC256([]byte(message), secretKey)
+
+		user := &domain.User{ID: "root2-id", Email: secondRoot}
+
+		mockRepo.EXPECT().GetUserByEmail(gomock.Any(), secondRoot).Return(user, nil)
+		mockRepo.EXPECT().CreateSession(gomock.Any(), gomock.Any()).Return(nil)
+		mockAuthService.EXPECT().GenerateUserAuthToken(user, gomock.Any(), gomock.Any()).Return("jwt-token")
+
+		result, err := service.RootSignin(context.Background(), domain.RootSigninInput{
+			Email:     secondRoot,
+			Timestamp: timestamp,
+			Signature: signature,
+		})
+
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		require.Equal(t, secondRoot, result.User.Email)
+	})
+
+	t.Run("non-listed email is rejected", func(t *testing.T) {
+		outsider := "outsider@example.com"
+		timestamp := time.Now().Unix()
+		message := fmt.Sprintf("%s:%d", outsider, timestamp)
+		signature := crypto.ComputeHMAC256([]byte(message), secretKey)
+
+		result, err := service.RootSignin(context.Background(), domain.RootSigninInput{
+			Email:     outsider,
+			Timestamp: timestamp,
+			Signature: signature,
+		})
+
+		require.Error(t, err)
+		require.Nil(t, result)
+		require.Contains(t, err.Error(), "invalid credentials")
+	})
+
+	t.Run("case-sensitive mismatch is rejected", func(t *testing.T) {
+		mixedCase := "Root1@example.com" // configured as lowercase root1@example.com
+		timestamp := time.Now().Unix()
+		message := fmt.Sprintf("%s:%d", mixedCase, timestamp)
+		signature := crypto.ComputeHMAC256([]byte(message), secretKey)
+
+		result, err := service.RootSignin(context.Background(), domain.RootSigninInput{
+			Email:     mixedCase,
+			Timestamp: timestamp,
+			Signature: signature,
+		})
+
+		require.Error(t, err)
+		require.Nil(t, result)
+		require.Contains(t, err.Error(), "invalid credentials")
 	})
 }
 

@@ -19,10 +19,10 @@ import { ImageURLInput } from '../common/ImageURLInput'
 interface BlogSettingsProps {
   workspace: Workspace | null
   onWorkspaceUpdate: (workspace: Workspace) => void
-  isOwner: boolean
+  canManage: boolean
 }
 
-export function BlogSettings({ workspace, onWorkspaceUpdate, isOwner }: BlogSettingsProps) {
+export function BlogSettings({ workspace, onWorkspaceUpdate, canManage }: BlogSettingsProps) {
   const { t } = useLingui()
   const [savingSettings, setSavingSettings] = useState(false)
   const [formTouched, setFormTouched] = useState(false)
@@ -35,12 +35,12 @@ export function BlogSettings({ workspace, onWorkspaceUpdate, isOwner }: BlogSett
     queryKey: ['blog-themes', workspace?.id],
     queryFn: () =>
       workspace?.id ? blogThemesApi.list(workspace.id, { limit: 3, offset: 0 }) : null,
-    enabled: !!workspace?.id && isOwner
+    enabled: !!workspace?.id && canManage
   })
 
   useEffect(() => {
-    // Only set form values if user is owner (form exists)
-    if (!isOwner) return
+    // Only set form values if the user can manage the blog (form exists)
+    if (!canManage) return
 
     // Set form values from workspace data whenever workspace changes
     form.setFieldsValue({
@@ -65,7 +65,7 @@ export function BlogSettings({ workspace, onWorkspaceUpdate, isOwner }: BlogSett
       }
     })
     setFormTouched(false)
-  }, [workspace, form, isOwner])
+  }, [workspace, form, canManage])
 
   const handleSaveSettings = async (values: {
     blog_enabled?: boolean
@@ -129,21 +129,21 @@ export function BlogSettings({ workspace, onWorkspaceUpdate, isOwner }: BlogSett
         }
       }
 
-      const blogSettings = values.blog_settings || undefined
+      // Blog settings are saved via a dedicated, blog:write-gated endpoint (not the
+      // owner-only workspaces.update). The endpoint always sets both fields, so resolve
+      // the intended enabled state explicitly: honor an explicit form value, otherwise
+      // keep the workspace's current state (preserves "don't toggle when only editing
+      // settings").
+      const intendedEnabled =
+        values.blog_enabled !== undefined
+          ? values.blog_enabled === true
+          : (workspace.settings.blog_enabled ?? false)
 
-      const updatedSettings = {
-        ...workspace.settings,
-        // Only update blog_enabled if it's explicitly in the form values
-        // (i.e., when enabling/disabling, not when just updating settings)
-        ...(values.blog_enabled !== undefined && { blog_enabled: values.blog_enabled === true }),
-        blog_settings: blogSettings
-      }
-      const payload = {
-        ...workspace,
-        settings: updatedSettings
-      }
-
-      await workspaceService.update(payload)
+      await workspaceService.setBlogSettings({
+        workspace_id: workspace.id,
+        blog_enabled: intendedEnabled,
+        blog_settings: values.blog_settings
+      })
 
       // Refresh the workspace data
       const response = await workspaceService.get(workspace.id)
@@ -191,7 +191,7 @@ export function BlogSettings({ workspace, onWorkspaceUpdate, isOwner }: BlogSett
     })
   }
 
-  if (!isOwner) {
+  if (!canManage) {
     return (
       <>
         <SettingsSectionHeader title={t`Blog`} description={t`Blog styling and SEO settings`} />

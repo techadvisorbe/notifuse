@@ -73,7 +73,35 @@ func (h *LLMHandler) handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 5. Stream chat response
+	// 5. Stream chat response.
+	// Track whether a terminal event (done/error) reached the client so we can
+	// guarantee one is always sent — otherwise the frontend spinner hangs forever
+	// on any unexpected stream end (e.g. a provider panic or early return).
+	terminalSent := false
+	writeEvent := func(event domain.LLMChatEvent) {
+		data, marshalErr := json.Marshal(event)
+		if marshalErr != nil {
+			return
+		}
+		_, _ = fmt.Fprintf(w, "data: %s\n\n", data)
+		if event.Type == "done" || event.Type == "error" {
+			terminalSent = true
+		}
+		flusher.Flush()
+	}
+
+	// Recover from a provider panic so net/http doesn't abort the TCP connection
+	// (which surfaces in the browser as an opaque "NetworkError"). Emit a clean
+	// error event instead.
+	defer func() {
+		if rec := recover(); rec != nil {
+			h.logger.WithField("panic", fmt.Sprintf("%v", rec)).Error("Panic during LLM stream chat")
+			if !terminalSent {
+				writeEvent(domain.LLMChatEvent{Type: "error", Error: "internal server error"})
+			}
+		}
+	}()
+
 	err := h.service.StreamChat(r.Context(), &req, func(event domain.LLMChatEvent) error {
 		data, err := json.Marshal(event)
 		if err != nil {
@@ -85,21 +113,23 @@ func (h *LLMHandler) handleChat(w http.ResponseWriter, r *http.Request) {
 			return fmt.Errorf("failed to write event: %w", err)
 		}
 
+		if event.Type == "done" || event.Type == "error" {
+			terminalSent = true
+		}
+
 		flusher.Flush()
 		return nil
 	})
 
-	// 6. Handle errors
+	// 6. Always deliver a terminal event so the client stops loading.
 	if err != nil {
 		h.logger.WithField("error", err.Error()).Error("Stream chat failed")
-
-		// Send error event (client may or may not receive this)
-		errorEvent := domain.LLMChatEvent{
-			Type:  "error",
-			Error: err.Error(),
+	}
+	if !terminalSent {
+		ev := domain.LLMChatEvent{Type: "error", Error: "stream ended unexpectedly"}
+		if err != nil {
+			ev.Error = err.Error()
 		}
-		data, _ := json.Marshal(errorEvent)
-		_, _ = fmt.Fprintf(w, "data: %s\n\n", data)
-		flusher.Flush()
+		writeEvent(ev)
 	}
 }

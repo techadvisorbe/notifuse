@@ -92,3 +92,18 @@ func (mr *MockInboundWebhookEventRepositoryMockRecorder) StoreEvents(arg0, arg1,
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "StoreEvents", reflect.TypeOf((*MockInboundWebhookEventRepository)(nil).StoreEvents), arg0, arg1, arg2)
 }
+
+// StoreReplyEvent mocks base method.
+func (m *MockInboundWebhookEventRepository) StoreReplyEvent(arg0 context.Context, arg1 string, arg2 *domain.InboundWebhookEvent) (bool, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "StoreReplyEvent", arg0, arg1, arg2)
+	ret0, _ := ret[0].(bool)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// StoreReplyEvent indicates an expected call of StoreReplyEvent.
+func (mr *MockInboundWebhookEventRepositoryMockRecorder) StoreReplyEvent(arg0, arg1, arg2 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "StoreReplyEvent", reflect.TypeOf((*MockInboundWebhookEventRepository)(nil).StoreReplyEvent), arg0, arg1, arg2)
+}

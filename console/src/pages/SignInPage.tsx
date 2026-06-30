@@ -1,4 +1,4 @@
-import { Form, Input, Button, Card, App, Space } from 'antd'
+import { Form, Input, Button, Card, App, Space, Divider } from 'antd'
 import { useAuth } from '../contexts/AuthContext'
 import { useNavigate, useSearch } from '@tanstack/react-router'
 import { useState, useEffect, useCallback, useRef } from 'react'
@@ -6,6 +6,25 @@ import { authService } from '../services/api/auth'
 import { SignInRequest, VerifyCodeRequest } from '../services/api/types'
 import { MainLayout } from '../layouts/MainLayout'
 import { useLingui } from '@lingui/react/macro'
+
+// mapOidcError translates a backend OIDC error code (the fixed enum emitted by the
+// callback handler) into a localized message. Kept in sync with §4.5 of the plan.
+function mapOidcError(code: string, t: (s: TemplateStringsArray) => string): string {
+  switch (code) {
+    case 'not_provisioned':
+      return t`No Notifuse account is linked to that identity. Ask an administrator to invite you first.`
+    case 'email_unverified':
+      return t`Your identity provider has not verified your email address.`
+    case 'link_conflict':
+      return t`This account is already linked to a different single sign-on identity.`
+    case 'provider_unavailable':
+      return t`Single sign-on is temporarily unavailable. Please try a magic code.`
+    case 'rate_limited':
+      return t`Too many sign-in attempts. Please wait a moment and try again.`
+    default:
+      return t`Single sign-on failed. Please try again or use a magic code.`
+  }
+}
 
 export function SignInPage() {
   const { t } = useLingui()
@@ -19,6 +38,7 @@ export function SignInPage() {
   const { message } = App.useApp()
   const [form] = Form.useForm()
   const hasAutoSubmitted = useRef(false)
+  const hasExchangedOidc = useRef(false)
 
   const handleCodeSubmit = useCallback(
     async (values: { code: string }, emailToUse?: string) => {
@@ -78,6 +98,52 @@ export function SignInPage() {
     },
     [handleCodeSubmit, message, t]
   )
+
+  const handleOidcExchange = useCallback(
+    async (code: string) => {
+      try {
+        setLoading(true)
+        const { token } = await authService.oidcExchange(code) // code from URL fragment
+        await signin(token) // UNCHANGED AuthContext path -> localStorage('auth_token')
+        message.success(t`Successfully signed in`)
+        setTimeout(() => {
+          navigate({ to: '/console' })
+        }, 100)
+      } catch {
+        message.error(t`Single sign-on failed. Please try again or use a magic code.`)
+      } finally {
+        setLoading(false)
+      }
+    },
+    [signin, message, navigate, t]
+  )
+
+  // OIDC callback handoff: backend /callback 302s to
+  //   /console/signin#oidc_code=<code>   (success)  or
+  //   /console/signin?oidc_error=<code>  (failure).
+  // The success code rides the URL FRAGMENT (never the query string, never logged,
+  // stripped from Referer). Read it, IMMEDIATELY replaceState it away so a
+  // refresh/back cannot replay it, then POST it in the exchange body.
+  useEffect(() => {
+    if (hasExchangedOidc.current) return
+
+    if (search.oidc_error) {
+      hasExchangedOidc.current = true
+      message.error(mapOidcError(search.oidc_error, t))
+      navigate({ to: '/console/signin', search: {}, replace: true })
+      return
+    }
+
+    const hash = window.location.hash // e.g. "#oidc_code=AbC123..."
+    const m = /[#&]oidc_code=([^&]+)/.exec(hash)
+    if (m) {
+      hasExchangedOidc.current = true
+      const code = decodeURIComponent(m[1])
+      // Strip the fragment BEFORE the network round-trip (single-use + replaceState).
+      window.history.replaceState(null, '', window.location.pathname + window.location.search)
+      void handleOidcExchange(code)
+    }
+  }, [search.oidc_error, navigate, message, t, handleOidcExchange])
 
   // Initialize email from URL parameter or demo mode
   useEffect(() => {
@@ -154,6 +220,24 @@ export function SignInPage() {
                   {t`Send Magic Code`}
                 </Button>
               </Form.Item>
+
+              {window.OIDC_ENABLED && (
+                <>
+                  <Divider plain>{t`or`}</Divider>
+                  <Button
+                    block
+                    onClick={() => {
+                      const base =
+                        window.API_ENDPOINT?.trim().replace(/\/+$/, '') || window.location.origin
+                      // Full-page navigation: /api/user.oidc.start sets the AEAD flow
+                      // cookie and 302s to the IdP, so it must be a real navigation.
+                      window.location.assign(`${base}/api/user.oidc.start`)
+                    }}
+                  >
+                    {window.OIDC_BUTTON_LABEL || t`Sign in with SSO`}
+                  </Button>
+                </>
+              )}
             </Form>
           ) : (
             <>

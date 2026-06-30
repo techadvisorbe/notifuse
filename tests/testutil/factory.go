@@ -1075,6 +1075,18 @@ func WithMessageHistoryChannel(channel string) MessageHistoryOption {
 	}
 }
 
+func WithMessageHistorySMTPMessageID(smtpMessageID string) MessageHistoryOption {
+	return func(m *domain.MessageHistory) {
+		m.SMTPMessageID = &smtpMessageID
+	}
+}
+
+func WithMessageHistoryAutomationID(automationID string) MessageHistoryOption {
+	return func(m *domain.MessageHistory) {
+		m.AutomationID = &automationID
+	}
+}
+
 // ContactList options
 func WithContactListEmail(email string) ContactListOption {
 	return func(cl *domain.ContactList) {
@@ -1338,6 +1350,84 @@ func CreateMJMLBlockWithContent(content string) notifuse_mjml.EmailBlock {
 		"id":         "mjml-1",
 		"type":       "mjml",
 		"children":   []interface{}{bodyBlockMap},
+		"attributes": map[string]interface{}{},
+	}
+
+	jsonData, err := json.Marshal(mjmlBlockMap)
+	if err != nil {
+		panic(err)
+	}
+
+	block, err := notifuse_mjml.UnmarshalEmailBlock(jsonData)
+	if err != nil {
+		panic(err)
+	}
+
+	return block
+}
+
+// CreateMJMLBlockWithContentAndPreview is like CreateMJMLBlockWithContent but also adds an
+// mj-head containing an mj-preview block seeded with previewContent. Useful for asserting that
+// the send-time subject-preview override updates an existing inbox-preview block at compile time.
+func CreateMJMLBlockWithContentAndPreview(content string, previewContent string) notifuse_mjml.EmailBlock {
+	previewBlockMap := map[string]interface{}{
+		"id":         "preview-1",
+		"type":       "mj-preview",
+		"content":    previewContent,
+		"children":   []interface{}{},
+		"attributes": map[string]interface{}{},
+	}
+
+	headBlockMap := map[string]interface{}{
+		"id":         "head-1",
+		"type":       "mj-head",
+		"children":   []interface{}{previewBlockMap},
+		"attributes": map[string]interface{}{},
+	}
+
+	textBlockMap := map[string]interface{}{
+		"id":      "text-1",
+		"type":    "mj-text",
+		"content": content,
+		"attributes": map[string]interface{}{
+			"color":    "#000000",
+			"fontSize": "14px",
+		},
+		"children": []interface{}{},
+	}
+
+	columnBlockMap := map[string]interface{}{
+		"id":       "column-1",
+		"type":     "mj-column",
+		"children": []interface{}{textBlockMap},
+		"attributes": map[string]interface{}{
+			"width": "100%",
+		},
+	}
+
+	sectionBlockMap := map[string]interface{}{
+		"id":       "section-1",
+		"type":     "mj-section",
+		"children": []interface{}{columnBlockMap},
+		"attributes": map[string]interface{}{
+			"backgroundColor": "#ffffff",
+			"padding":         "20px 0",
+		},
+	}
+
+	bodyBlockMap := map[string]interface{}{
+		"id":       "body-1",
+		"type":     "mj-body",
+		"children": []interface{}{sectionBlockMap},
+		"attributes": map[string]interface{}{
+			"backgroundColor": "#f4f4f4",
+		},
+	}
+
+	mjmlBlockMap := map[string]interface{}{
+		"id":         "mjml-1",
+		"type":       "mjml",
+		"children":   []interface{}{headBlockMap, bodyBlockMap},
 		"attributes": map[string]interface{}{},
 	}
 

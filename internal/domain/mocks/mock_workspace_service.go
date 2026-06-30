@@ -256,6 +256,34 @@ func (mr *MockWorkspaceServiceInterfaceMockRecorder) RemoveUserFromWorkspace(arg
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RemoveUserFromWorkspace", reflect.TypeOf((*MockWorkspaceServiceInterface)(nil).RemoveUserFromWorkspace), arg0, arg1, arg2)
 }
 
+// SetBlogSettings mocks base method.
+func (m *MockWorkspaceServiceInterface) SetBlogSettings(arg0 context.Context, arg1 string, arg2 bool, arg3 *domain.BlogSettings) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "SetBlogSettings", arg0, arg1, arg2, arg3)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// SetBlogSettings indicates an expected call of SetBlogSettings.
+func (mr *MockWorkspaceServiceInterfaceMockRecorder) SetBlogSettings(arg0, arg1, arg2, arg3 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetBlogSettings", reflect.TypeOf((*MockWorkspaceServiceInterface)(nil).SetBlogSettings), arg0, arg1, arg2, arg3)
+}
+
+// SetCustomFieldLabels mocks base method.
+func (m *MockWorkspaceServiceInterface) SetCustomFieldLabels(arg0 context.Context, arg1 string, arg2 map[string]string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "SetCustomFieldLabels", arg0, arg1, arg2)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// SetCustomFieldLabels indicates an expected call of SetCustomFieldLabels.
+func (mr *MockWorkspaceServiceInterfaceMockRecorder) SetCustomFieldLabels(arg0, arg1, arg2 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetCustomFieldLabels", reflect.TypeOf((*MockWorkspaceServiceInterface)(nil).SetCustomFieldLabels), arg0, arg1, arg2)
+}
+
 // SetUserPermissions mocks base method.
 func (m *MockWorkspaceServiceInterface) SetUserPermissions(arg0 context.Context, arg1, arg2 string, arg3 domain.UserPermissions) error {
 	m.ctrl.T.Helper()

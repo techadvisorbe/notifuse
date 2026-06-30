@@ -184,7 +184,11 @@ func (r *workspaceRepository) List(ctx context.Context) ([]*domain.Workspace, er
 	}
 	defer func() { _ = rows.Close() }()
 
-	var workspaces []*domain.Workspace
+	// Initialize as an empty (non-nil) slice so an installation with no
+	// workspaces serializes to `[]` rather than `null`. The root user hits
+	// this path directly (see WorkspaceService.ListWorkspaces), and a null
+	// value crashes the console which accesses `workspaces.length`.
+	workspaces := []*domain.Workspace{}
 	for rows.Next() {
 		workspace, err := domain.ScanWorkspace(rows)
 		if err != nil {
@@ -447,7 +451,7 @@ func (r *workspaceRepository) GetUserWorkspace(ctx context.Context, userID strin
 		&uw.UserID, &uw.WorkspaceID, &uw.Role, &uw.Permissions, &uw.CreatedAt, &uw.UpdatedAt,
 	)
 	if err == sql.ErrNoRows {
-		return nil, fmt.Errorf("user is not a member of the workspace")
+		return nil, domain.ErrUserNotInWorkspace
 	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to get user workspace: %w", err)

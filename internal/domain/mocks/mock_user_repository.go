@@ -150,6 +150,21 @@ func (mr *MockUserRepositoryMockRecorder) GetUserByEmail(arg0, arg1 interface{})
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetUserByEmail", reflect.TypeOf((*MockUserRepository)(nil).GetUserByEmail), arg0, arg1)
 }
 
+// GetUserByEmailInsensitive mocks base method.
+func (m *MockUserRepository) GetUserByEmailInsensitive(arg0 context.Context, arg1 string) (*domain.User, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetUserByEmailInsensitive", arg0, arg1)
+	ret0, _ := ret[0].(*domain.User)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetUserByEmailInsensitive indicates an expected call of GetUserByEmailInsensitive.
+func (mr *MockUserRepositoryMockRecorder) GetUserByEmailInsensitive(arg0, arg1 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetUserByEmailInsensitive", reflect.TypeOf((*MockUserRepository)(nil).GetUserByEmailInsensitive), arg0, arg1)
+}
+
 // GetUserByID mocks base method.
 func (m *MockUserRepository) GetUserByID(arg0 context.Context, arg1 string) (*domain.User, error) {
 	m.ctrl.T.Helper()

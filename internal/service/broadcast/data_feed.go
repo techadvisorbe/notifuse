@@ -12,12 +12,10 @@ import (
 
 	"github.com/Notifuse/notifuse/internal/domain"
 	"github.com/Notifuse/notifuse/pkg/logger"
+	"github.com/Notifuse/notifuse/pkg/safehttpclient"
 )
 
 const (
-	// DefaultFetchTimeout is the default timeout for data feed requests
-	DefaultFetchTimeout = 10 * time.Second
-
 	// MaxResponseSize is the maximum response size (10MB)
 	MaxResponseSize = 10 * 1024 * 1024
 
@@ -47,19 +45,41 @@ type dataFeedFetcher struct {
 	logger     logger.Logger
 }
 
-// NewDataFeedFetcher creates a new DataFeedFetcher instance
+// NewDataFeedFetcher creates a new DataFeedFetcher with SSRF protection.
+//
+// The underlying HTTP client validates every resolved address at dial time and
+// refuses to connect to private, loopback, link-local, or otherwise reserved IP
+// ranges (including the cloud instance metadata endpoint). It also re-validates
+// redirects, which prevents DNS-rebinding and redirect-based SSRF. This is the
+// constructor that should be used in production.
 func NewDataFeedFetcher(log logger.Logger) DataFeedFetcher {
-	return &dataFeedFetcher{
-		httpClient: &http.Client{
-			// Base timeout; will be overridden per-request
-			Timeout: 30 * time.Second,
-			Transport: &http.Transport{
-				MaxIdleConns:        100,
-				MaxIdleConnsPerHost: 10,
-				IdleConnTimeout:     90 * time.Second,
-			},
+	return newDataFeedFetcher(safehttpclient.New(), log)
+}
+
+// NewUnsafeDataFeedFetcher creates a DataFeedFetcher WITHOUT SSRF protection.
+//
+// It permits requests to private, loopback, and link-local addresses. This is
+// intended only for trusted, self-hosted deployments that deliberately fetch
+// data feeds from services on their internal network, and is gated in production
+// behind the BROADCAST_DATA_FEED_ALLOW_PRIVATE_HOSTS setting (off by default).
+// It is also used by tests that need to reach loopback test servers.
+func NewUnsafeDataFeedFetcher(log logger.Logger) DataFeedFetcher {
+	return newDataFeedFetcher(&http.Client{
+		// Base timeout; the effective deadline is set per-request via context.
+		Timeout: 30 * time.Second,
+		Transport: &http.Transport{
+			MaxIdleConns:        100,
+			MaxIdleConnsPerHost: 10,
+			IdleConnTimeout:     90 * time.Second,
 		},
-		logger: log,
+	}, log)
+}
+
+// newDataFeedFetcher builds a fetcher around the given HTTP client.
+func newDataFeedFetcher(httpClient *http.Client, log logger.Logger) *dataFeedFetcher {
+	return &dataFeedFetcher{
+		httpClient: httpClient,
+		logger:     log,
 	}
 }
 

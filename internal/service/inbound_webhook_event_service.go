@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/Notifuse/notifuse/internal/domain"
 	"github.com/Notifuse/notifuse/pkg/logger"
+	"github.com/Notifuse/notifuse/pkg/safehttpclient"
 	"github.com/Notifuse/notifuse/pkg/tracing"
 	"github.com/google/uuid"
 )
@@ -24,6 +26,8 @@ type InboundWebhookEventService struct {
 	workspaceRepo      domain.WorkspaceRepository
 	messageHistoryRepo domain.MessageHistoryRepository
 	contactRepo        domain.ContactRepository
+	automationRepo     domain.AutomationRepository
+	replyParsers       map[domain.EmailProviderKind]domain.ReplyParser
 }
 
 // NewInboundWebhookEventService creates a new InboundWebhookEventService
@@ -34,6 +38,7 @@ func NewInboundWebhookEventService(
 	workspaceRepo domain.WorkspaceRepository,
 	messageHistoryRepo domain.MessageHistoryRepository,
 	contactRepo domain.ContactRepository,
+	automationRepo domain.AutomationRepository,
 ) *InboundWebhookEventService {
 	return &InboundWebhookEventService{
 		repo:               repo,
@@ -42,7 +47,215 @@ func NewInboundWebhookEventService(
 		workspaceRepo:      workspaceRepo,
 		messageHistoryRepo: messageHistoryRepo,
 		contactRepo:        contactRepo,
+		automationRepo:     automationRepo,
+		replyParsers: map[domain.EmailProviderKind]domain.ReplyParser{
+			domain.EmailProviderKindMailgun: &MailgunReplyParser{},
+			// SES delivers replies via SNS (signed); the parser needs an SSRF-safe client
+			// to fetch the signing cert and confirm the subscription.
+			domain.EmailProviderKindSES: NewSESReplyParser(safehttpclient.New()),
+		},
 	}
+}
+
+// ProcessInboundReply ingests an inbound reply forwarded by a provider's inbound
+// parsing feature. See the interface doc for the contract.
+func (s *InboundWebhookEventService) ProcessInboundReply(ctx context.Context, workspaceID, integrationID string, req *domain.InboundRequest) error {
+	ctx, span := tracing.StartServiceSpan(ctx, "InboundWebhookEventService", "ProcessInboundReply")
+	defer tracing.EndSpan(span, nil)
+	tracing.AddAttribute(ctx, "workspaceID", workspaceID)
+	tracing.AddAttribute(ctx, "integrationID", integrationID)
+
+	workspace, err := s.workspaceRepo.GetByID(ctx, workspaceID)
+	if err != nil {
+		return fmt.Errorf("failed to get workspace: %w", err)
+	}
+	var integration domain.Integration
+	found := false
+	for _, i := range workspace.Integrations {
+		if i.ID == integrationID {
+			integration = i
+			found = true
+			break
+		}
+	}
+	if !found {
+		return fmt.Errorf("%q: %w", integrationID, domain.ErrInboundIntegrationNotFound)
+	}
+	// Integration secrets (provider signing key) are already decrypted by
+	// workspaceRepo.GetByID (AfterLoad), so no decryption is needed here.
+
+	// Resolve the provider parser.
+	parser, ok := s.replyParsers[integration.EmailProvider.Kind]
+	if !ok {
+		return fmt.Errorf("%q: %w", integration.EmailProvider.Kind, domain.ErrInboundProviderUnsupported)
+	}
+
+	// Authenticate via the provider's native signature (e.g. Mailgun HMAC, SNS RSA).
+	if err := parser.Verify(req, &integration); err != nil {
+		// A provider control message (e.g. an SNS subscription confirmation) is handled by
+		// the parser itself — there is no reply to ingest; acknowledge with 200.
+		if errors.Is(err, domain.ErrInboundControlMessage) {
+			s.logger.WithField("workspace_id", workspaceID).
+				WithField("integration_id", integrationID).
+				Info("Acknowledged inbound provider control message")
+			return nil
+		}
+		return fmt.Errorf("inbound reply verification failed: %w", err)
+	}
+
+	reply, err := parser.Parse(req)
+	if err != nil {
+		return fmt.Errorf("failed to parse inbound reply: %w", err)
+	}
+
+	// Classify: drop bounces/unsubscribes; auto-replies are recorded but never exit.
+	class := domain.Classify(reply)
+	if class == domain.ReplyBounce || class == domain.ReplyUnsubscribe {
+		return nil
+	}
+
+	// Match the reply to a contact (and, via Message-ID, an exact automation).
+	contactEmail, automationID, err := s.matchReply(ctx, workspaceID, reply)
+	if err != nil {
+		return err // real error → non-2xx → provider retries
+	}
+	if contactEmail == "" {
+		// An SES-style In-Reply-To that matched no stored send is logged at WARN so the miss is
+		// observable. It is almost always a reply to mail we didn't send/track (a transactional
+		// email, or a pruned history row), but it could in theory be the narrow send→store race
+		// for capture providers: SES returns the Message-ID only AFTER send, so the smtp_message_id
+		// is persisted post-dispatch. In practice the inbound SNS delivery latency (seconds) far
+		// exceeds that store latency (ms), so the row is present by the time a reply arrives. We
+		// deliberately do NOT return 5xx here: that would make SNS retry every genuinely-unknown
+		// reply on its full schedule until it dead-letters.
+		if replyHasSESShapedThreading(reply) {
+			s.logger.WithField("workspace_id", workspaceID).
+				WithField("sender", reply.FromEmail).
+				WithField("in_reply_to", reply.InReplyTo).
+				Warn("Inbound SES-threaded reply matched no stored send")
+			return nil
+		}
+		s.logger.WithField("workspace_id", workspaceID).
+			WithField("sender", reply.FromEmail).
+			Info("Ignoring inbound reply from unknown contact")
+		return nil
+	}
+
+	// Record the event (the type drives the timeline kind via the DB trigger).
+	eventType := domain.EmailEventReply
+	if class == domain.ReplyAutoResponder {
+		eventType = domain.EmailEventAutoReply
+	}
+	// Dedup key: a reply usually carries its own Message-Id; when it doesn't, synthesize a
+	// stable one from its content so the (message_id) dedup index still catches provider
+	// retries. Truncate to the column width (VARCHAR(255)) so an oversized client-supplied
+	// id can't cause a permanent 22001 -> 500 -> infinite-retry loop.
+	replyMessageID := reply.MessageID
+	if replyMessageID == "" {
+		replyMessageID = syntheticReplyMessageID(reply)
+	}
+	if len(replyMessageID) > 255 {
+		replyMessageID = replyMessageID[:255]
+	}
+	event := domain.NewInboundWebhookEvent(
+		uuid.New().String(),
+		eventType,
+		parser.Source(),
+		integrationID,
+		contactEmail,
+		&replyMessageID,
+		reply.ReceivedAt,
+		compactReplyPayload(reply, parser.Source()),
+	)
+	inserted, err := s.repo.StoreReplyEvent(ctx, workspaceID, event)
+	if err != nil {
+		return fmt.Errorf("failed to store inbound reply event: %w", err)
+	}
+
+	// Only a genuine human reply exits the journey, and only when this reply was NEWLY
+	// stored — a deduped provider retry must not re-fire the exit, or a replay that lands
+	// after the contact re-enrolled would wrongly kill the fresh journey instance. The exit
+	// is also bounded to journeys entered before the reply was received (you cannot reply to
+	// an email from a journey instance that did not exist yet).
+	if class == domain.ReplyGenuine && inserted {
+		n, err := s.automationRepo.ExitContactJourneysOnReply(ctx, workspaceID, contactEmail, automationID, "replied", reply.ReceivedAt)
+		if err != nil {
+			return fmt.Errorf("failed to exit journeys on reply: %w", err)
+		}
+		s.logger.WithField("workspace_id", workspaceID).
+			WithField("contact", contactEmail).
+			WithField("exited", n).
+			Info("Processed inbound reply")
+	}
+
+	return nil
+}
+
+// replyHasSESShapedThreading reports whether the reply threads to an SES-stamped Message-ID
+// (an "...@*.amazonses.com" In-Reply-To/References), used to flag a capture-provider miss.
+func replyHasSESShapedThreading(reply *domain.InboundReply) bool {
+	if domain.SESReplyCandidate(reply.InReplyTo) != "" {
+		return true
+	}
+	for _, ref := range reply.References {
+		if domain.SESReplyCandidate(ref) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// matchReply resolves the contact and the exact automation for a reply, strictly via
+// RFC threading headers (In-Reply-To / References) matched against the Message-ID we
+// stored at send time. Returns an empty contactEmail when no stored send is referenced.
+//
+// The previous sender-address fallback was removed deliberately: matching by the From
+// address alone cannot tell which send was replied to, so it over-exited every flagged
+// journey for the contact (including automations the replied-to email never belonged to).
+// Replies that carry no usable threading header are intended to be recovered by a
+// header-independent but send-precise signal (a per-send Reply-To/VERP token, or a body
+// watermark) so the exit stays scoped to the exact send — not yet implemented.
+func (s *InboundWebhookEventService) matchReply(ctx context.Context, workspaceID string, reply *domain.InboundReply) (string, *string, error) {
+	threaded := append([]string{reply.InReplyTo}, reply.References...)
+	candidates := make([]string, 0, len(threaded)*2)
+	for _, mid := range threaded {
+		if mid == "" {
+			continue
+		}
+		candidates = append(candidates, mid)
+		// SES overwrites the Message-ID with "<localpart@<sub>.amazonses.com>" and the host
+		// it uses is not contractually stable, so also try the host-independent local part
+		// (the bare MessageId we stored). No-op for non-SES threading headers.
+		if local := domain.SESReplyCandidate(mid); local != "" && local != mid {
+			candidates = append(candidates, local)
+		}
+	}
+	for _, mid := range candidates {
+		mh, err := s.messageHistoryRepo.GetBySMTPMessageID(ctx, workspaceID, mid)
+		if err != nil {
+			return "", nil, fmt.Errorf("failed to look up message by smtp_message_id: %w", err)
+		}
+		if mh != nil {
+			return mh.ContactEmail, mh.AutomationID, nil
+		}
+	}
+	return "", nil, nil
+}
+
+// compactReplyPayload serializes only the canonical reply fields (no body) for
+// storage, minimizing stored PII.
+func compactReplyPayload(reply *domain.InboundReply, source domain.WebhookSource) string {
+	b, _ := json.Marshal(map[string]interface{}{
+		"from":        reply.FromEmail,
+		"to":          reply.ToEmail,
+		"subject":     reply.Subject,
+		"message_id":  reply.MessageID,
+		"in_reply_to": reply.InReplyTo,
+		"references":  reply.References,
+		"received_at": reply.ReceivedAt,
+		"source":      string(source),
+	})
+	return string(b)
 }
 
 // ProcessWebhook processes a webhook event from an email provider

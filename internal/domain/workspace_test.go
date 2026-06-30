@@ -26,11 +26,11 @@ func TestWorkspace_Validate(t *testing.T) {
 				ID:   "test123",
 				Name: "Test Workspace",
 				Settings: WorkspaceSettings{
-					WebsiteURL: "https://example.com",
-					LogoURL:    "https://example.com/logo.png",
-					Timezone:   "UTC",
+					WebsiteURL:      "https://example.com",
+					LogoURL:         "https://example.com/logo.png",
+					Timezone:        "UTC",
 					DefaultLanguage: "en",
-					Languages: []string{"en"},
+					Languages:       []string{"en"},
 					FileManager: FileManagerSettings{
 						Endpoint:  "https://s3.amazonaws.com",
 						Bucket:    "my-bucket",
@@ -48,11 +48,11 @@ func TestWorkspace_Validate(t *testing.T) {
 				ID:   "",
 				Name: "Test Workspace",
 				Settings: WorkspaceSettings{
-					WebsiteURL: "https://example.com",
-					LogoURL:    "https://example.com/logo.png",
-					Timezone:   "UTC",
+					WebsiteURL:      "https://example.com",
+					LogoURL:         "https://example.com/logo.png",
+					Timezone:        "UTC",
 					DefaultLanguage: "en",
-					Languages: []string{"en"},
+					Languages:       []string{"en"},
 					FileManager: FileManagerSettings{
 						Endpoint:  "https://s3.amazonaws.com",
 						Bucket:    "my-bucket",
@@ -68,11 +68,11 @@ func TestWorkspace_Validate(t *testing.T) {
 				ID:   "test-123", // Contains hyphen
 				Name: "Test Workspace",
 				Settings: WorkspaceSettings{
-					WebsiteURL: "https://example.com",
-					LogoURL:    "https://example.com/logo.png",
-					Timezone:   "UTC",
+					WebsiteURL:      "https://example.com",
+					LogoURL:         "https://example.com/logo.png",
+					Timezone:        "UTC",
 					DefaultLanguage: "en",
-					Languages: []string{"en"},
+					Languages:       []string{"en"},
 					FileManager: FileManagerSettings{
 						Endpoint:  "https://s3.amazonaws.com",
 						Bucket:    "my-bucket",
@@ -88,11 +88,11 @@ func TestWorkspace_Validate(t *testing.T) {
 				ID:   "test123",
 				Name: "",
 				Settings: WorkspaceSettings{
-					WebsiteURL: "https://example.com",
-					LogoURL:    "https://example.com/logo.png",
-					Timezone:   "UTC",
+					WebsiteURL:      "https://example.com",
+					LogoURL:         "https://example.com/logo.png",
+					Timezone:        "UTC",
 					DefaultLanguage: "en",
-					Languages: []string{"en"},
+					Languages:       []string{"en"},
 					FileManager: FileManagerSettings{
 						Endpoint:  "https://s3.amazonaws.com",
 						Bucket:    "my-bucket",
@@ -108,11 +108,11 @@ func TestWorkspace_Validate(t *testing.T) {
 				ID:   "test123",
 				Name: "Test Workspace",
 				Settings: WorkspaceSettings{
-					WebsiteURL: "https://example.com",
-					LogoURL:    "https://example.com/logo.png",
-					Timezone:   "InvalidTimezone",
+					WebsiteURL:      "https://example.com",
+					LogoURL:         "https://example.com/logo.png",
+					Timezone:        "InvalidTimezone",
 					DefaultLanguage: "en",
-					Languages: []string{"en"},
+					Languages:       []string{"en"},
 					FileManager: FileManagerSettings{
 						Endpoint:  "https://s3.amazonaws.com",
 						Bucket:    "my-bucket",
@@ -128,11 +128,11 @@ func TestWorkspace_Validate(t *testing.T) {
 				ID:   "test123",
 				Name: "Test Workspace",
 				Settings: WorkspaceSettings{
-					WebsiteURL: "https://example.com",
-					LogoURL:    "https://example.com/logo.png",
-					Timezone:   "",
+					WebsiteURL:      "https://example.com",
+					LogoURL:         "https://example.com/logo.png",
+					Timezone:        "",
 					DefaultLanguage: "en",
-					Languages: []string{"en"},
+					Languages:       []string{"en"},
 					FileManager: FileManagerSettings{
 						Endpoint:  "https://s3.amazonaws.com",
 						Bucket:    "my-bucket",
@@ -148,11 +148,11 @@ func TestWorkspace_Validate(t *testing.T) {
 				ID:   "test123",
 				Name: "Test Workspace",
 				Settings: WorkspaceSettings{
-					WebsiteURL: "not-a-url",
-					LogoURL:    "https://example.com/logo.png",
-					Timezone:   "UTC",
+					WebsiteURL:      "not-a-url",
+					LogoURL:         "https://example.com/logo.png",
+					Timezone:        "UTC",
 					DefaultLanguage: "en",
-					Languages: []string{"en"},
+					Languages:       []string{"en"},
 					FileManager: FileManagerSettings{
 						Endpoint:  "https://s3.amazonaws.com",
 						Bucket:    "my-bucket",
@@ -168,11 +168,11 @@ func TestWorkspace_Validate(t *testing.T) {
 				ID:   "test123",
 				Name: "Test Workspace",
 				Settings: WorkspaceSettings{
-					WebsiteURL: "https://example.com",
-					LogoURL:    "not-a-url",
-					Timezone:   "UTC",
+					WebsiteURL:      "https://example.com",
+					LogoURL:         "not-a-url",
+					Timezone:        "UTC",
 					DefaultLanguage: "en",
-					Languages: []string{"en"},
+					Languages:       []string{"en"},
 					FileManager: FileManagerSettings{
 						Endpoint:  "https://s3.amazonaws.com",
 						Bucket:    "my-bucket",
@@ -188,12 +188,12 @@ func TestWorkspace_Validate(t *testing.T) {
 				ID:   "test123",
 				Name: "Test Workspace",
 				Settings: WorkspaceSettings{
-					WebsiteURL: "https://example.com",
-					LogoURL:    "https://example.com/logo.png",
-					CoverURL:   "not-a-url",
-					Timezone:   "UTC",
+					WebsiteURL:      "https://example.com",
+					LogoURL:         "https://example.com/logo.png",
+					CoverURL:        "not-a-url",
+					Timezone:        "UTC",
 					DefaultLanguage: "en",
-					Languages: []string{"en"},
+					Languages:       []string{"en"},
 					FileManager: FileManagerSettings{
 						Endpoint:  "https://s3.amazonaws.com",
 						Bucket:    "my-bucket",
@@ -209,11 +209,11 @@ func TestWorkspace_Validate(t *testing.T) {
 				ID:   "test123",
 				Name: string(make([]byte, 256)), // 256 chars
 				Settings: WorkspaceSettings{
-					WebsiteURL: "https://example.com",
-					LogoURL:    "https://example.com/logo.png",
-					Timezone:   "UTC",
+					WebsiteURL:      "https://example.com",
+					LogoURL:         "https://example.com/logo.png",
+					Timezone:        "UTC",
 					DefaultLanguage: "en",
-					Languages: []string{"en"},
+					Languages:       []string{"en"},
 					FileManager: FileManagerSettings{
 						Endpoint:  "https://s3.amazonaws.com",
 						Bucket:    "my-bucket",
@@ -229,11 +229,11 @@ func TestWorkspace_Validate(t *testing.T) {
 				ID:   string(make([]byte, 21)), // 21 chars
 				Name: "Test Workspace",
 				Settings: WorkspaceSettings{
-					WebsiteURL: "https://example.com",
-					LogoURL:    "https://example.com/logo.png",
-					Timezone:   "UTC",
+					WebsiteURL:      "https://example.com",
+					LogoURL:         "https://example.com/logo.png",
+					Timezone:        "UTC",
 					DefaultLanguage: "en",
-					Languages: []string{"en"},
+					Languages:       []string{"en"},
 					FileManager: FileManagerSettings{
 						Endpoint:  "https://s3.amazonaws.com",
 						Bucket:    "my-bucket",
@@ -349,11 +349,11 @@ func (m *mockScanner) Scan(dest ...interface{}) error {
 func TestScanWorkspace(t *testing.T) {
 	now := time.Now()
 	settingsJSON, _ := json.Marshal(WorkspaceSettings{
-		WebsiteURL: "https://example.com",
-		LogoURL:    "https://example.com/logo.png",
-		Timezone:   "UTC",
+		WebsiteURL:      "https://example.com",
+		LogoURL:         "https://example.com/logo.png",
+		Timezone:        "UTC",
 		DefaultLanguage: "en",
-		Languages: []string{"en"},
+		Languages:       []string{"en"},
 	})
 
 	integrationsJSON, _ := json.Marshal([]Integration{
@@ -457,11 +457,11 @@ func TestCreateWorkspaceRequest_Validate(t *testing.T) {
 				ID:   "test123",
 				Name: "Test Workspace",
 				Settings: WorkspaceSettings{
-					WebsiteURL: "https://example.com",
-					LogoURL:    "https://example.com/logo.png",
-					Timezone:   "UTC",
+					WebsiteURL:      "https://example.com",
+					LogoURL:         "https://example.com/logo.png",
+					Timezone:        "UTC",
 					DefaultLanguage: "en",
-					Languages: []string{"en"},
+					Languages:       []string{"en"},
 					FileManager: FileManagerSettings{
 						Endpoint:  "https://s3.amazonaws.com",
 						Bucket:    "my-bucket",
@@ -477,11 +477,11 @@ func TestCreateWorkspaceRequest_Validate(t *testing.T) {
 				ID:   "",
 				Name: "Test Workspace",
 				Settings: WorkspaceSettings{
-					WebsiteURL: "https://example.com",
-					LogoURL:    "https://example.com/logo.png",
-					Timezone:   "UTC",
+					WebsiteURL:      "https://example.com",
+					LogoURL:         "https://example.com/logo.png",
+					Timezone:        "UTC",
 					DefaultLanguage: "en",
-					Languages: []string{"en"},
+					Languages:       []string{"en"},
 					FileManager: FileManagerSettings{
 						Endpoint:  "https://s3.amazonaws.com",
 						Bucket:    "my-bucket",
@@ -497,11 +497,11 @@ func TestCreateWorkspaceRequest_Validate(t *testing.T) {
 				ID:   "test-123",
 				Name: "Test Workspace",
 				Settings: WorkspaceSettings{
-					WebsiteURL: "https://example.com",
-					LogoURL:    "https://example.com/logo.png",
-					Timezone:   "UTC",
+					WebsiteURL:      "https://example.com",
+					LogoURL:         "https://example.com/logo.png",
+					Timezone:        "UTC",
 					DefaultLanguage: "en",
-					Languages: []string{"en"},
+					Languages:       []string{"en"},
 					FileManager: FileManagerSettings{
 						Endpoint:  "https://s3.amazonaws.com",
 						Bucket:    "my-bucket",
@@ -517,11 +517,11 @@ func TestCreateWorkspaceRequest_Validate(t *testing.T) {
 				ID:   "test123",
 				Name: "",
 				Settings: WorkspaceSettings{
-					WebsiteURL: "https://example.com",
-					LogoURL:    "https://example.com/logo.png",
-					Timezone:   "UTC",
+					WebsiteURL:      "https://example.com",
+					LogoURL:         "https://example.com/logo.png",
+					Timezone:        "UTC",
 					DefaultLanguage: "en",
-					Languages: []string{"en"},
+					Languages:       []string{"en"},
 					FileManager: FileManagerSettings{
 						Endpoint:  "https://s3.amazonaws.com",
 						Bucket:    "my-bucket",
@@ -537,11 +537,11 @@ func TestCreateWorkspaceRequest_Validate(t *testing.T) {
 				ID:   "test123",
 				Name: "Test Workspace",
 				Settings: WorkspaceSettings{
-					WebsiteURL: "https://example.com",
-					LogoURL:    "https://example.com/logo.png",
-					Timezone:   "InvalidTimezone",
+					WebsiteURL:      "https://example.com",
+					LogoURL:         "https://example.com/logo.png",
+					Timezone:        "InvalidTimezone",
 					DefaultLanguage: "en",
-					Languages: []string{"en"},
+					Languages:       []string{"en"},
 					FileManager: FileManagerSettings{
 						Endpoint:  "https://s3.amazonaws.com",
 						Bucket:    "my-bucket",
@@ -557,11 +557,11 @@ func TestCreateWorkspaceRequest_Validate(t *testing.T) {
 				ID:   "test123",
 				Name: "Test Workspace",
 				Settings: WorkspaceSettings{
-					WebsiteURL: "not-a-url",
-					LogoURL:    "https://example.com/logo.png",
-					Timezone:   "UTC",
+					WebsiteURL:      "not-a-url",
+					LogoURL:         "https://example.com/logo.png",
+					Timezone:        "UTC",
 					DefaultLanguage: "en",
-					Languages: []string{"en"},
+					Languages:       []string{"en"},
 					FileManager: FileManagerSettings{
 						Endpoint:  "https://s3.amazonaws.com",
 						Bucket:    "my-bucket",
@@ -577,11 +577,11 @@ func TestCreateWorkspaceRequest_Validate(t *testing.T) {
 				ID:   "test123",
 				Name: "Test Workspace",
 				Settings: WorkspaceSettings{
-					WebsiteURL: "https://example.com",
-					LogoURL:    "not-a-url",
-					Timezone:   "UTC",
+					WebsiteURL:      "https://example.com",
+					LogoURL:         "not-a-url",
+					Timezone:        "UTC",
 					DefaultLanguage: "en",
-					Languages: []string{"en"},
+					Languages:       []string{"en"},
 					FileManager: FileManagerSettings{
 						Endpoint:  "https://s3.amazonaws.com",
 						Bucket:    "my-bucket",
@@ -597,11 +597,11 @@ func TestCreateWorkspaceRequest_Validate(t *testing.T) {
 				ID:   "test123",
 				Name: "Test Workspace",
 				Settings: WorkspaceSettings{
-					WebsiteURL: "https://example.com",
-					LogoURL:    "https://example.com/logo.png",
-					Timezone:   "", // Missing timezone which is required
+					WebsiteURL:      "https://example.com",
+					LogoURL:         "https://example.com/logo.png",
+					Timezone:        "", // Missing timezone which is required
 					DefaultLanguage: "en",
-					Languages: []string{"en"},
+					Languages:       []string{"en"},
 					FileManager: FileManagerSettings{
 						Endpoint:  "https://s3.amazonaws.com",
 						Bucket:    "my-bucket",
@@ -617,11 +617,11 @@ func TestCreateWorkspaceRequest_Validate(t *testing.T) {
 				ID:   "test123",
 				Name: string(make([]byte, 33)), // 33 chars
 				Settings: WorkspaceSettings{
-					WebsiteURL: "https://example.com",
-					LogoURL:    "https://example.com/logo.png",
-					Timezone:   "UTC",
+					WebsiteURL:      "https://example.com",
+					LogoURL:         "https://example.com/logo.png",
+					Timezone:        "UTC",
 					DefaultLanguage: "en",
-					Languages: []string{"en"},
+					Languages:       []string{"en"},
 					FileManager: FileManagerSettings{
 						Endpoint:  "https://s3.amazonaws.com",
 						Bucket:    "my-bucket",
@@ -658,11 +658,11 @@ func TestUpdateWorkspaceRequest_Validate(t *testing.T) {
 				ID:   "test123",
 				Name: "Test Workspace",
 				Settings: WorkspaceSettings{
-					WebsiteURL: "https://example.com",
-					LogoURL:    "https://example.com/logo.png",
-					Timezone:   "UTC",
+					WebsiteURL:      "https://example.com",
+					LogoURL:         "https://example.com/logo.png",
+					Timezone:        "UTC",
 					DefaultLanguage: "en",
-					Languages: []string{"en"},
+					Languages:       []string{"en"},
 					FileManager: FileManagerSettings{
 						Endpoint:  "https://s3.amazonaws.com",
 						Bucket:    "my-bucket",
@@ -678,11 +678,11 @@ func TestUpdateWorkspaceRequest_Validate(t *testing.T) {
 				ID:   "",
 				Name: "Test Workspace",
 				Settings: WorkspaceSettings{
-					WebsiteURL: "https://example.com",
-					LogoURL:    "https://example.com/logo.png",
-					Timezone:   "UTC",
+					WebsiteURL:      "https://example.com",
+					LogoURL:         "https://example.com/logo.png",
+					Timezone:        "UTC",
 					DefaultLanguage: "en",
-					Languages: []string{"en"},
+					Languages:       []string{"en"},
 					FileManager: FileManagerSettings{
 						Endpoint:  "https://s3.amazonaws.com",
 						Bucket:    "my-bucket",
@@ -698,11 +698,11 @@ func TestUpdateWorkspaceRequest_Validate(t *testing.T) {
 				ID:   "test-123",
 				Name: "Test Workspace",
 				Settings: WorkspaceSettings{
-					WebsiteURL: "https://example.com",
-					LogoURL:    "https://example.com/logo.png",
-					Timezone:   "UTC",
+					WebsiteURL:      "https://example.com",
+					LogoURL:         "https://example.com/logo.png",
+					Timezone:        "UTC",
 					DefaultLanguage: "en",
-					Languages: []string{"en"},
+					Languages:       []string{"en"},
 					FileManager: FileManagerSettings{
 						Endpoint:  "https://s3.amazonaws.com",
 						Bucket:    "my-bucket",
@@ -718,11 +718,11 @@ func TestUpdateWorkspaceRequest_Validate(t *testing.T) {
 				ID:   "test123",
 				Name: "",
 				Settings: WorkspaceSettings{
-					WebsiteURL: "https://example.com",
-					LogoURL:    "https://example.com/logo.png",
-					Timezone:   "UTC",
+					WebsiteURL:      "https://example.com",
+					LogoURL:         "https://example.com/logo.png",
+					Timezone:        "UTC",
 					DefaultLanguage: "en",
-					Languages: []string{"en"},
+					Languages:       []string{"en"},
 					FileManager: FileManagerSettings{
 						Endpoint:  "https://s3.amazonaws.com",
 						Bucket:    "my-bucket",
@@ -738,11 +738,11 @@ func TestUpdateWorkspaceRequest_Validate(t *testing.T) {
 				ID:   "test123",
 				Name: "Test Workspace",
 				Settings: WorkspaceSettings{
-					WebsiteURL: "https://example.com",
-					LogoURL:    "https://example.com/logo.png",
-					Timezone:   "InvalidTimezone",
+					WebsiteURL:      "https://example.com",
+					LogoURL:         "https://example.com/logo.png",
+					Timezone:        "InvalidTimezone",
 					DefaultLanguage: "en",
-					Languages: []string{"en"},
+					Languages:       []string{"en"},
 					FileManager: FileManagerSettings{
 						Endpoint:  "https://s3.amazonaws.com",
 						Bucket:    "my-bucket",
@@ -864,11 +864,11 @@ func TestWorkspace_Validate_TimezoneValidatorRegistration(t *testing.T) {
 		ID:   "test123",
 		Name: "Test Workspace",
 		Settings: WorkspaceSettings{
-			WebsiteURL: "https://example.com",
-			LogoURL:    "https://example.com/logo.png",
-			Timezone:   "UTC", // Use a valid timezone
+			WebsiteURL:      "https://example.com",
+			LogoURL:         "https://example.com/logo.png",
+			Timezone:        "UTC", // Use a valid timezone
 			DefaultLanguage: "en",
-			Languages: []string{"en"},
+			Languages:       []string{"en"},
 			FileManager: FileManagerSettings{
 				Endpoint:  "https://s3.amazonaws.com",
 				Bucket:    "my-bucket",
@@ -898,11 +898,11 @@ func TestCreateWorkspaceRequest_Validate_TimezoneValidatorRegistration(t *testin
 		ID:   "test123",
 		Name: "Test Workspace",
 		Settings: WorkspaceSettings{
-			WebsiteURL: "https://example.com",
-			LogoURL:    "https://example.com/logo.png",
-			Timezone:   "UTC", // Use a valid timezone
+			WebsiteURL:      "https://example.com",
+			LogoURL:         "https://example.com/logo.png",
+			Timezone:        "UTC", // Use a valid timezone
 			DefaultLanguage: "en",
-			Languages: []string{"en"},
+			Languages:       []string{"en"},
 			FileManager: FileManagerSettings{
 				Endpoint:  "https://s3.amazonaws.com",
 				Bucket:    "my-bucket",
@@ -926,11 +926,11 @@ func TestWorkspace_Validate_FirstValidationFails(t *testing.T) {
 		ID:   "", // Invalid ID to fail first validation
 		Name: "Test Workspace",
 		Settings: WorkspaceSettings{
-			WebsiteURL: "https://example.com",
-			LogoURL:    "https://example.com/logo.png",
-			Timezone:   "UTC",
+			WebsiteURL:      "https://example.com",
+			LogoURL:         "https://example.com/logo.png",
+			Timezone:        "UTC",
 			DefaultLanguage: "en",
-			Languages: []string{"en"},
+			Languages:       []string{"en"},
 			FileManager: FileManagerSettings{
 				Endpoint:  "https://s3.amazonaws.com",
 				Bucket:    "my-bucket",
@@ -950,11 +950,11 @@ func TestCreateWorkspaceRequest_Validate_FirstValidationFails(t *testing.T) {
 		ID:   "", // Invalid ID to fail first validation
 		Name: "Test Workspace",
 		Settings: WorkspaceSettings{
-			WebsiteURL: "https://example.com",
-			LogoURL:    "https://example.com/logo.png",
-			Timezone:   "UTC",
+			WebsiteURL:      "https://example.com",
+			LogoURL:         "https://example.com/logo.png",
+			Timezone:        "UTC",
 			DefaultLanguage: "en",
-			Languages: []string{"en"},
+			Languages:       []string{"en"},
 			FileManager: FileManagerSettings{
 				Endpoint:  "https://s3.amazonaws.com",
 				Bucket:    "my-bucket",
@@ -1551,8 +1551,8 @@ func TestWorkspaceSettings_ValidateWithEmailProviders(t *testing.T) {
 				WebsiteURL:                   "https://example.com",
 				LogoURL:                      "https://example.com/logo.png",
 				Timezone:                     "UTC",
-				DefaultLanguage: "en",
-				Languages: []string{"en"},
+				DefaultLanguage:              "en",
+				Languages:                    []string{"en"},
 				TransactionalEmailProviderID: "transactional-id",
 				MarketingEmailProviderID:     "marketing-id",
 			},
@@ -1564,8 +1564,8 @@ func TestWorkspaceSettings_ValidateWithEmailProviders(t *testing.T) {
 				WebsiteURL:                   "https://example.com",
 				LogoURL:                      "https://example.com/logo.png",
 				Timezone:                     "UTC",
-				DefaultLanguage: "en",
-				Languages: []string{"en"},
+				DefaultLanguage:              "en",
+				Languages:                    []string{"en"},
 				TransactionalEmailProviderID: "transactional-id",
 			},
 			wantErr: false,
@@ -1576,8 +1576,8 @@ func TestWorkspaceSettings_ValidateWithEmailProviders(t *testing.T) {
 				WebsiteURL:               "https://example.com",
 				LogoURL:                  "https://example.com/logo.png",
 				Timezone:                 "UTC",
-				DefaultLanguage: "en",
-				Languages: []string{"en"},
+				DefaultLanguage:          "en",
+				Languages:                []string{"en"},
 				MarketingEmailProviderID: "marketing-id",
 			},
 			wantErr: false,
@@ -1585,11 +1585,11 @@ func TestWorkspaceSettings_ValidateWithEmailProviders(t *testing.T) {
 		{
 			name: "valid settings with empty provider IDs",
 			settings: WorkspaceSettings{
-				WebsiteURL: "https://example.com",
-				LogoURL:    "https://example.com/logo.png",
-				Timezone:   "UTC",
+				WebsiteURL:      "https://example.com",
+				LogoURL:         "https://example.com/logo.png",
+				Timezone:        "UTC",
 				DefaultLanguage: "en",
-				Languages: []string{"en"},
+				Languages:       []string{"en"},
 			},
 			wantErr: false,
 		},
@@ -1621,8 +1621,8 @@ func TestWorkspace_BeforeSaveAndAfterLoadWithEmailProviders(t *testing.T) {
 			WebsiteURL:                   "https://example.com",
 			LogoURL:                      "https://example.com/logo.png",
 			Timezone:                     "UTC",
-			DefaultLanguage: "en",
-			Languages: []string{"en"},
+			DefaultLanguage:              "en",
+			Languages:                    []string{"en"},
 			TransactionalEmailProviderID: "transactional-id",
 			MarketingEmailProviderID:     "marketing-id",
 			SecretKey:                    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", // Add workspace secret key
@@ -2699,12 +2699,12 @@ func TestDeleteIntegrationRequest_Validate(t *testing.T) {
 func TestWorkspaceSettings_ValueAndScan(t *testing.T) {
 	// Create a sample workspace settings
 	originalSettings := WorkspaceSettings{
-		WebsiteURL: "https://example.com",
-		LogoURL:    "https://example.com/logo.png",
-		CoverURL:   "https://example.com/cover.jpg",
-		Timezone:   "UTC",
+		WebsiteURL:      "https://example.com",
+		LogoURL:         "https://example.com/logo.png",
+		CoverURL:        "https://example.com/cover.jpg",
+		Timezone:        "UTC",
 		DefaultLanguage: "en",
-		Languages: []string{"en"},
+		Languages:       []string{"en"},
 		FileManager: FileManagerSettings{
 			Endpoint:  "https://s3.amazonaws.com",
 			Bucket:    "my-bucket",
@@ -2790,11 +2790,11 @@ func TestWorkspace_BeforeSave(t *testing.T) {
 			ID:   "test-workspace",
 			Name: "Test Workspace",
 			Settings: WorkspaceSettings{
-				WebsiteURL: "https://example.com",
-				Timezone:   "UTC",
+				WebsiteURL:      "https://example.com",
+				Timezone:        "UTC",
 				DefaultLanguage: "en",
-				Languages: []string{"en"},
-				SecretKey:  "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", // Add workspace secret key
+				Languages:       []string{"en"},
+				SecretKey:       "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", // Add workspace secret key
 				FileManager: FileManagerSettings{
 					Endpoint:  "https://s3.amazonaws.com",
 					Bucket:    "my-bucket",
@@ -2817,11 +2817,11 @@ func TestWorkspace_BeforeSave(t *testing.T) {
 			ID:   "test-workspace",
 			Name: "Test Workspace",
 			Settings: WorkspaceSettings{
-				WebsiteURL: "https://example.com",
-				Timezone:   "UTC",
+				WebsiteURL:      "https://example.com",
+				Timezone:        "UTC",
 				DefaultLanguage: "en",
-				Languages: []string{"en"},
-				SecretKey:  "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", // Add workspace secret key
+				Languages:       []string{"en"},
+				SecretKey:       "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", // Add workspace secret key
 				FileManager: FileManagerSettings{
 					Endpoint:  "https://s3.amazonaws.com",
 					Bucket:    "my-bucket",
@@ -2844,11 +2844,11 @@ func TestWorkspace_BeforeSave(t *testing.T) {
 			ID:   "test-workspace",
 			Name: "Test Workspace",
 			Settings: WorkspaceSettings{
-				WebsiteURL: "https://example.com",
-				Timezone:   "UTC",
+				WebsiteURL:      "https://example.com",
+				Timezone:        "UTC",
 				DefaultLanguage: "en",
-				Languages: []string{"en"},
-				SecretKey:  "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", // Add workspace secret key
+				Languages:       []string{"en"},
+				SecretKey:       "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", // Add workspace secret key
 			},
 			Integrations: []Integration{
 				{
@@ -2895,11 +2895,11 @@ func TestWorkspace_AfterLoad(t *testing.T) {
 			ID:   "test-workspace",
 			Name: "Test Workspace",
 			Settings: WorkspaceSettings{
-				WebsiteURL: "https://example.com",
-				LogoURL:    "https://example.com/logo.png",
-				Timezone:   "UTC",
+				WebsiteURL:      "https://example.com",
+				LogoURL:         "https://example.com/logo.png",
+				Timezone:        "UTC",
 				DefaultLanguage: "en",
-				Languages: []string{"en"},
+				Languages:       []string{"en"},
 				FileManager: FileManagerSettings{
 					Endpoint:  "https://s3.amazonaws.com",
 					Bucket:    "my-bucket",
@@ -2932,10 +2932,10 @@ func TestWorkspace_AfterLoad(t *testing.T) {
 			ID:   "test-workspace",
 			Name: "Test Workspace",
 			Settings: WorkspaceSettings{
-				WebsiteURL: "https://example.com",
-				Timezone:   "UTC",
+				WebsiteURL:      "https://example.com",
+				Timezone:        "UTC",
 				DefaultLanguage: "en",
-				Languages: []string{"en"},
+				Languages:       []string{"en"},
 				FileManager: FileManagerSettings{
 					Endpoint:  "https://s3.amazonaws.com",
 					Bucket:    "my-bucket",
@@ -2992,11 +2992,11 @@ func TestWorkspace_AfterLoad(t *testing.T) {
 			ID:   "test-workspace",
 			Name: "Test Workspace",
 			Settings: WorkspaceSettings{
-				WebsiteURL: "https://example.com",
-				Timezone:   "UTC",
+				WebsiteURL:      "https://example.com",
+				Timezone:        "UTC",
 				DefaultLanguage: "en",
-				Languages: []string{"en"},
-				SecretKey:  "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", // Add workspace secret key
+				Languages:       []string{"en"},
+				SecretKey:       "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", // Add workspace secret key
 			},
 			Integrations: []Integration{integration},
 			CreatedAt:    now,
@@ -3041,11 +3041,11 @@ func TestWorkspace_SecretKeyHandling(t *testing.T) {
 			ID:   "test-workspace",
 			Name: "Test Workspace",
 			Settings: WorkspaceSettings{
-				WebsiteURL: "https://example.com",
-				Timezone:   "UTC",
+				WebsiteURL:      "https://example.com",
+				Timezone:        "UTC",
 				DefaultLanguage: "en",
-				Languages: []string{"en"},
-				SecretKey:  hexEncodedKey,
+				Languages:       []string{"en"},
+				SecretKey:       hexEncodedKey,
 			},
 			CreatedAt: now,
 			UpdatedAt: now,
@@ -3078,11 +3078,11 @@ func TestWorkspace_SecretKeyHandling(t *testing.T) {
 			ID:   "test-workspace",
 			Name: "Test Workspace",
 			Settings: WorkspaceSettings{
-				WebsiteURL: "https://example.com",
-				Timezone:   "UTC",
+				WebsiteURL:      "https://example.com",
+				Timezone:        "UTC",
 				DefaultLanguage: "en",
-				Languages: []string{"en"},
-				SecretKey:  hexEncodedKey,
+				Languages:       []string{"en"},
+				SecretKey:       hexEncodedKey,
 			},
 			CreatedAt: now,
 			UpdatedAt: now,
@@ -3369,6 +3369,291 @@ func TestSetUserPermissionsRequest_Validate(t *testing.T) {
 	}
 }
 
+func TestSetCustomFieldLabelsRequest_Validate(t *testing.T) {
+	testCases := []struct {
+		name       string
+		request    SetCustomFieldLabelsRequest
+		wantErr    bool
+		errMsg     string
+		wantLabels map[string]string
+	}{
+		{
+			name: "valid request with labels",
+			request: SetCustomFieldLabelsRequest{
+				WorkspaceID: "workspace123",
+				CustomFieldLabels: map[string]string{
+					"custom_string_1": "Company Name",
+					"custom_number_1": "Revenue",
+				},
+			},
+			wantErr: false,
+			wantLabels: map[string]string{
+				"custom_string_1": "Company Name",
+				"custom_number_1": "Revenue",
+			},
+		},
+		{
+			name: "empty labels map is valid (clears all)",
+			request: SetCustomFieldLabelsRequest{
+				WorkspaceID:       "workspace123",
+				CustomFieldLabels: map[string]string{},
+			},
+			wantErr:    false,
+			wantLabels: map[string]string{},
+		},
+		{
+			name: "nil labels map is valid",
+			request: SetCustomFieldLabelsRequest{
+				WorkspaceID:       "workspace123",
+				CustomFieldLabels: nil,
+			},
+			wantErr:    false,
+			wantLabels: nil,
+		},
+		{
+			name: "missing workspace ID",
+			request: SetCustomFieldLabelsRequest{
+				WorkspaceID:       "",
+				CustomFieldLabels: map[string]string{"custom_string_1": "Company Name"},
+			},
+			wantErr: true,
+			errMsg:  "workspace_id is required",
+		},
+		{
+			name: "non-alphanumeric workspace ID",
+			request: SetCustomFieldLabelsRequest{
+				WorkspaceID:       "workspace-123",
+				CustomFieldLabels: map[string]string{"custom_string_1": "Company Name"},
+			},
+			wantErr: true,
+			errMsg:  "workspace_id must be alphanumeric",
+		},
+		{
+			name: "workspace ID too long",
+			request: SetCustomFieldLabelsRequest{
+				WorkspaceID:       strings.Repeat("a", 33),
+				CustomFieldLabels: map[string]string{"custom_string_1": "Company Name"},
+			},
+			wantErr: true,
+			errMsg:  "workspace_id length must be between 1 and 32",
+		},
+		{
+			name: "invalid custom field key",
+			request: SetCustomFieldLabelsRequest{
+				WorkspaceID:       "workspace123",
+				CustomFieldLabels: map[string]string{"custom_string_6": "Invalid"},
+			},
+			wantErr: true,
+			errMsg:  "invalid custom field key",
+		},
+		{
+			name: "empty label value",
+			request: SetCustomFieldLabelsRequest{
+				WorkspaceID:       "workspace123",
+				CustomFieldLabels: map[string]string{"custom_string_1": ""},
+			},
+			wantErr: true,
+			errMsg:  "cannot be empty",
+		},
+		{
+			name: "label too long",
+			request: SetCustomFieldLabelsRequest{
+				WorkspaceID:       "workspace123",
+				CustomFieldLabels: map[string]string{"custom_string_1": strings.Repeat("a", 101)},
+			},
+			wantErr: true,
+			errMsg:  "exceeds maximum length",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			workspaceID, labels, err := tc.request.Validate()
+			if tc.wantErr {
+				assert.Error(t, err)
+				if tc.errMsg != "" {
+					assert.Contains(t, err.Error(), tc.errMsg)
+				}
+				assert.Empty(t, workspaceID)
+				assert.Nil(t, labels)
+			} else {
+				assert.NoError(t, err)
+				assert.Equal(t, tc.request.WorkspaceID, workspaceID)
+				assert.Equal(t, tc.wantLabels, labels)
+			}
+		})
+	}
+}
+
+func TestBlogSettings_Validate(t *testing.T) {
+	testCases := []struct {
+		name     string
+		settings *BlogSettings
+		wantErr  bool
+		errMsg   string
+	}{
+		{name: "nil settings is valid", settings: nil, wantErr: false},
+		{name: "empty settings is valid", settings: &BlogSettings{}, wantErr: false},
+		{
+			name:     "valid settings within bounds",
+			settings: &BlogSettings{Title: "My Blog", HomePageSize: 20, CategoryPageSize: 10, FeedMaxItems: 15},
+			wantErr:  false,
+		},
+		{
+			name:     "zero sizes are treated as unset and valid",
+			settings: &BlogSettings{HomePageSize: 0, CategoryPageSize: 0, FeedMaxItems: 0},
+			wantErr:  false,
+		},
+		{
+			name:     "title at max length (255) is valid",
+			settings: &BlogSettings{Title: strings.Repeat("a", 255)},
+			wantErr:  false,
+		},
+		{
+			name:     "title too long",
+			settings: &BlogSettings{Title: strings.Repeat("a", 256)},
+			wantErr:  true,
+			errMsg:   "blog title exceeds maximum length",
+		},
+		{
+			name:     "home page size over maximum",
+			settings: &BlogSettings{HomePageSize: 101},
+			wantErr:  true,
+			errMsg:   "home_page_size must be between 1 and 100",
+		},
+		{
+			name:     "category page size over maximum",
+			settings: &BlogSettings{CategoryPageSize: 101},
+			wantErr:  true,
+			errMsg:   "category_page_size must be between 1 and 100",
+		},
+		{
+			name:     "feed max items over cap",
+			settings: &BlogSettings{FeedMaxItems: 21},
+			wantErr:  true,
+			errMsg:   "feed_max_items must be between 1 and 20",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.settings.Validate()
+			if tc.wantErr {
+				assert.Error(t, err)
+				if tc.errMsg != "" {
+					assert.Contains(t, err.Error(), tc.errMsg)
+				}
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestSetBlogSettingsRequest_Validate(t *testing.T) {
+	testCases := []struct {
+		name         string
+		request      SetBlogSettingsRequest
+		wantErr      bool
+		errMsg       string
+		wantEnabled  bool
+		wantSettings *BlogSettings
+	}{
+		{
+			name: "valid request with settings",
+			request: SetBlogSettingsRequest{
+				WorkspaceID:  "workspace123",
+				BlogEnabled:  true,
+				BlogSettings: &BlogSettings{Title: "My Blog", HomePageSize: 10},
+			},
+			wantErr:      false,
+			wantEnabled:  true,
+			wantSettings: &BlogSettings{Title: "My Blog", HomePageSize: 10},
+		},
+		{
+			name: "nil settings disables blog and is valid",
+			request: SetBlogSettingsRequest{
+				WorkspaceID:  "workspace123",
+				BlogEnabled:  false,
+				BlogSettings: nil,
+			},
+			wantErr:      false,
+			wantEnabled:  false,
+			wantSettings: nil,
+		},
+		{
+			name: "missing workspace ID",
+			request: SetBlogSettingsRequest{
+				WorkspaceID:  "",
+				BlogEnabled:  true,
+				BlogSettings: &BlogSettings{Title: "My Blog"},
+			},
+			wantErr: true,
+			errMsg:  "workspace_id is required",
+		},
+		{
+			name: "non-alphanumeric workspace ID",
+			request: SetBlogSettingsRequest{
+				WorkspaceID:  "workspace-123",
+				BlogEnabled:  true,
+				BlogSettings: &BlogSettings{Title: "My Blog"},
+			},
+			wantErr: true,
+			errMsg:  "workspace_id must be alphanumeric",
+		},
+		{
+			name: "workspace ID too long",
+			request: SetBlogSettingsRequest{
+				WorkspaceID:  strings.Repeat("a", 33),
+				BlogEnabled:  true,
+				BlogSettings: &BlogSettings{Title: "My Blog"},
+			},
+			wantErr: true,
+			errMsg:  "workspace_id length must be between 1 and 32",
+		},
+		{
+			name: "invalid home page size in settings",
+			request: SetBlogSettingsRequest{
+				WorkspaceID:  "workspace123",
+				BlogEnabled:  true,
+				BlogSettings: &BlogSettings{HomePageSize: 200},
+			},
+			wantErr: true,
+			errMsg:  "home_page_size must be between 1 and 100",
+		},
+		{
+			name: "title too long in settings",
+			request: SetBlogSettingsRequest{
+				WorkspaceID:  "workspace123",
+				BlogEnabled:  true,
+				BlogSettings: &BlogSettings{Title: strings.Repeat("a", 256)},
+			},
+			wantErr: true,
+			errMsg:  "exceeds maximum length",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			workspaceID, enabled, settings, err := tc.request.Validate()
+			if tc.wantErr {
+				assert.Error(t, err)
+				if tc.errMsg != "" {
+					assert.Contains(t, err.Error(), tc.errMsg)
+				}
+				assert.Empty(t, workspaceID)
+				assert.False(t, enabled)
+				assert.Nil(t, settings)
+			} else {
+				assert.NoError(t, err)
+				assert.Equal(t, tc.request.WorkspaceID, workspaceID)
+				assert.Equal(t, tc.wantEnabled, enabled)
+				assert.Equal(t, tc.wantSettings, settings)
+			}
+		})
+	}
+}
+
 func TestWorkspaceSettings_ValidateCustomFieldLabels(t *testing.T) {
 	testCases := []struct {
 		name      string
@@ -3477,8 +3762,8 @@ func TestWorkspaceSettings_ValidateCustomFieldLabels(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ws := WorkspaceSettings{
 				Timezone:          "UTC",
-				DefaultLanguage: "en",
-				Languages: []string{"en"},
+				DefaultLanguage:   "en",
+				Languages:         []string{"en"},
 				CustomFieldLabels: tc.labels,
 			}
 			err := ws.ValidateCustomFieldLabels()
@@ -3497,9 +3782,9 @@ func TestWorkspaceSettings_ValidateCustomFieldLabels(t *testing.T) {
 func TestWorkspaceSettings_CustomFieldLabels_JSONSerialization(t *testing.T) {
 	// Test that custom field labels are properly serialized to/from JSON
 	settings := WorkspaceSettings{
-		Timezone: "UTC",
+		Timezone:        "UTC",
 		DefaultLanguage: "en",
-		Languages: []string{"en"},
+		Languages:       []string{"en"},
 		CustomFieldLabels: map[string]string{
 			"custom_string_1": "Company Name",
 			"custom_number_1": "Employee Count",
@@ -3555,9 +3840,9 @@ func TestWorkspace_Validate_WithCustomFieldLabels(t *testing.T) {
 				ID:   "test123",
 				Name: "Test Workspace",
 				Settings: WorkspaceSettings{
-					Timezone: "UTC",
+					Timezone:        "UTC",
 					DefaultLanguage: "en",
-					Languages: []string{"en"},
+					Languages:       []string{"en"},
 					CustomFieldLabels: map[string]string{
 						"invalid_field": "Invalid",
 					},
@@ -3574,9 +3859,9 @@ func TestWorkspace_Validate_WithCustomFieldLabels(t *testing.T) {
 				ID:   "test123",
 				Name: "Test Workspace",
 				Settings: WorkspaceSettings{
-					Timezone: "UTC",
+					Timezone:        "UTC",
 					DefaultLanguage: "en",
-					Languages: []string{"en"},
+					Languages:       []string{"en"},
 					CustomFieldLabels: map[string]string{
 						"custom_string_1": "",
 					},
@@ -4008,10 +4293,10 @@ func TestBlogSettings_ValueAndScan(t *testing.T) {
 func TestWorkspaceSettings_WithBlogSettings(t *testing.T) {
 	t.Run("workspace settings with blog enabled", func(t *testing.T) {
 		settings := WorkspaceSettings{
-			Timezone:    "UTC",
+			Timezone:        "UTC",
 			DefaultLanguage: "en",
-			Languages: []string{"en"},
-			BlogEnabled: true,
+			Languages:       []string{"en"},
+			BlogEnabled:     true,
 			BlogSettings: &BlogSettings{
 				Title: "My Amazing Blog",
 				SEO: &SEOSettings{
@@ -4040,11 +4325,11 @@ func TestWorkspaceSettings_WithBlogSettings(t *testing.T) {
 
 	t.Run("workspace settings with blog disabled", func(t *testing.T) {
 		settings := WorkspaceSettings{
-			Timezone:     "UTC",
+			Timezone:        "UTC",
 			DefaultLanguage: "en",
-			Languages: []string{"en"},
-			BlogEnabled:  false,
-			BlogSettings: nil,
+			Languages:       []string{"en"},
+			BlogEnabled:     false,
+			BlogSettings:    nil,
 		}
 
 		value, err := settings.Value()
@@ -4865,9 +5150,9 @@ func TestWorkspaceSettings_ValidateTemplateBlocks(t *testing.T) {
 		{
 			name: "template block with missing name",
 			settings: WorkspaceSettings{
-				Timezone: "UTC",
+				Timezone:        "UTC",
 				DefaultLanguage: "en",
-				Languages: []string{"en"},
+				Languages:       []string{"en"},
 				TemplateBlocks: []TemplateBlock{
 					{
 						ID:    "block1",
@@ -4882,9 +5167,9 @@ func TestWorkspaceSettings_ValidateTemplateBlocks(t *testing.T) {
 		{
 			name: "template block with name too long",
 			settings: WorkspaceSettings{
-				Timezone: "UTC",
+				Timezone:        "UTC",
 				DefaultLanguage: "en",
-				Languages: []string{"en"},
+				Languages:       []string{"en"},
 				TemplateBlocks: []TemplateBlock{
 					{
 						ID:    "block1",
@@ -4899,9 +5184,9 @@ func TestWorkspaceSettings_ValidateTemplateBlocks(t *testing.T) {
 		{
 			name: "template block with nil block",
 			settings: WorkspaceSettings{
-				Timezone: "UTC",
+				Timezone:        "UTC",
 				DefaultLanguage: "en",
-				Languages: []string{"en"},
+				Languages:       []string{"en"},
 				TemplateBlocks: []TemplateBlock{
 					{
 						ID:    "block1",
@@ -4916,9 +5201,9 @@ func TestWorkspaceSettings_ValidateTemplateBlocks(t *testing.T) {
 		{
 			name: "template block with empty block type",
 			settings: WorkspaceSettings{
-				Timezone: "UTC",
+				Timezone:        "UTC",
 				DefaultLanguage: "en",
-				Languages: []string{"en"},
+				Languages:       []string{"en"},
 				TemplateBlocks: []TemplateBlock{
 					{
 						ID:    "block1",
@@ -5035,4 +5320,25 @@ func TestErrWorkspaceLimitReached_Error(t *testing.T) {
 		Current: 3,
 	}
 	assert.Equal(t, "workspace limit reached: 3 workspaces exist (limit: 3)", err.Error())
+}
+
+func TestWorkspaceSettings_ResolveEndpoint(t *testing.T) {
+	const apiEndpoint = "https://api.example.com"
+
+	testCases := []struct {
+		name     string
+		custom   *string
+		expected string
+	}{
+		{name: "custom endpoint set", custom: stringPtr("https://track.example.com"), expected: "https://track.example.com"},
+		{name: "custom endpoint nil falls back to api", custom: nil, expected: apiEndpoint},
+		{name: "custom endpoint empty falls back to api", custom: stringPtr(""), expected: apiEndpoint},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			ws := &WorkspaceSettings{CustomEndpointURL: tc.custom}
+			assert.Equal(t, tc.expected, ws.ResolveEndpoint(apiEndpoint))
+		})
+	}
 }

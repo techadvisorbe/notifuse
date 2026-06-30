@@ -10,6 +10,7 @@ vi.mock('../services/api/auth', () => ({
   authService: {
     signIn: vi.fn(),
     verifyCode: vi.fn(),
+    oidcExchange: vi.fn(),
     getCurrentUser: vi.fn().mockRejectedValue(new Error('Not authenticated')),
     logout: vi.fn().mockResolvedValue(undefined)
   },
@@ -18,7 +19,7 @@ vi.mock('../services/api/auth', () => ({
 
 // Mock the navigate function and useSearch
 const mockNavigate = vi.fn(() => ({}))
-const mockSearch = { email: undefined }
+const mockSearch: { email?: string; oidc_error?: string } = { email: undefined }
 
 vi.mock('@tanstack/react-router', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@tanstack/react-router')>()
@@ -58,6 +59,12 @@ describe('SignInPage', () => {
     } as ReturnType<typeof App.useApp>)
     // Reset search mock
     mockSearch.email = undefined
+    mockSearch.oidc_error = undefined
+    // Reset OIDC window globals + URL fragment between tests
+    window.OIDC_ENABLED = false
+    window.OIDC_BUTTON_LABEL = ''
+    window.API_ENDPOINT = 'https://api.example.com'
+    window.location.hash = ''
   })
 
   it('renders the email form initially', () => {
@@ -234,5 +241,111 @@ describe('SignInPage', () => {
 
     // Email form should be visible
     expect(screen.getByLabelText(/email/i)).toBeInTheDocument()
+  })
+
+  describe('OIDC SSO', () => {
+    it('renders the SSO button + divider when window.OIDC_ENABLED', () => {
+      window.OIDC_ENABLED = true
+      renderWithProviders(<SignInPage />)
+      expect(screen.getByText(/sign in with sso/i)).toBeInTheDocument()
+      expect(screen.getByText(/^or$/i)).toBeInTheDocument()
+    })
+
+    it('hides the SSO button when OIDC disabled', () => {
+      window.OIDC_ENABLED = false
+      renderWithProviders(<SignInPage />)
+      expect(screen.queryByText(/sign in with sso/i)).not.toBeInTheDocument()
+    })
+
+    it('uses OIDC_BUTTON_LABEL as plain text when set', () => {
+      window.OIDC_ENABLED = true
+      window.OIDC_BUTTON_LABEL = 'Continue with Acme'
+      renderWithProviders(<SignInPage />)
+      expect(screen.getByText('Continue with Acme')).toBeInTheDocument()
+    })
+
+    it('SSO button click navigates to the API start endpoint', () => {
+      window.OIDC_ENABLED = true
+      const assignSpy = vi.fn()
+      Object.defineProperty(window, 'location', {
+        value: { ...window.location, assign: assignSpy, hash: '' },
+        writable: true
+      })
+      renderWithProviders(<SignInPage />)
+      fireEvent.click(screen.getByText(/sign in with sso/i))
+      expect(assignSpy).toHaveBeenCalledWith('https://api.example.com/api/user.oidc.start')
+    })
+
+    it('on #oidc_code=<code> exchanges, signs in, strips the fragment, and navigates', async () => {
+      const replaceStateSpy = vi.spyOn(window.history, 'replaceState')
+      Object.defineProperty(window, 'location', {
+        value: { ...window.location, hash: '#oidc_code=one-time-xyz', pathname: '/console/signin', search: '' },
+        writable: true
+      })
+      vi.mocked(authService.authService.oidcExchange).mockResolvedValueOnce({ token: 'jwt-from-oidc' })
+      // signin(token) calls getCurrentUser; resolve it so the success path navigates.
+      vi.mocked(authService.authService.getCurrentUser).mockResolvedValueOnce({
+        user: { id: 'u1', email: 'u1@corp.com', timezone: 'UTC', language: 'en' },
+        workspaces: []
+      })
+
+      renderWithProviders(<SignInPage />)
+
+      await waitFor(() => {
+        expect(authService.authService.oidcExchange).toHaveBeenCalledWith('one-time-xyz')
+      })
+      // Fragment stripped before the exchange resolves.
+      expect(replaceStateSpy).toHaveBeenCalled()
+      await waitFor(
+        () => {
+          expect(mockNavigate).toHaveBeenCalledWith({ to: '/console' })
+        },
+        { timeout: 1000 }
+      )
+    })
+
+    it('runs the exchange exactly once even if re-rendered', async () => {
+      Object.defineProperty(window, 'location', {
+        value: { ...window.location, hash: '#oidc_code=abc', pathname: '/console/signin', search: '' },
+        writable: true
+      })
+      vi.mocked(authService.authService.oidcExchange).mockResolvedValue({ token: 'jwt' })
+
+      const { rerender } = renderWithProviders(<SignInPage />)
+      rerender(
+        <App message={{ maxCount: 3 }}>
+          <AuthProvider>
+            <SignInPage />
+          </AuthProvider>
+        </App>
+      )
+
+      await waitFor(() => {
+        expect(authService.authService.oidcExchange).toHaveBeenCalledTimes(1)
+      })
+    })
+
+    it('on ?oidc_error shows a message and does not call oidcExchange', async () => {
+      mockSearch.oidc_error = 'not_provisioned'
+      renderWithProviders(<SignInPage />)
+      await waitFor(() => {
+        expect(mockMessage.error).toHaveBeenCalled()
+      })
+      expect(authService.authService.oidcExchange).not.toHaveBeenCalled()
+    })
+
+    it('on oidcExchange rejection shows an error toast and does not navigate to /console', async () => {
+      Object.defineProperty(window, 'location', {
+        value: { ...window.location, hash: '#oidc_code=bad', pathname: '/console/signin', search: '' },
+        writable: true
+      })
+      vi.mocked(authService.authService.oidcExchange).mockRejectedValueOnce(new Error('boom'))
+
+      renderWithProviders(<SignInPage />)
+      await waitFor(() => {
+        expect(mockMessage.error).toHaveBeenCalled()
+      })
+      expect(mockNavigate).not.toHaveBeenCalledWith({ to: '/console' })
+    })
   })
 })

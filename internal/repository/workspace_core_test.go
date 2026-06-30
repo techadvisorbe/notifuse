@@ -634,6 +634,10 @@ func TestWorkspaceRepository_List_Postgres(t *testing.T) {
 	list, err = repo.List(context.Background())
 	require.NoError(t, err)
 	assert.Empty(t, list)
+	// Must be a non-nil empty slice so the API serializes `[]` not `null`.
+	// The root user reads this list directly and the console crashes on a
+	// null `workspaces.length`.
+	assert.NotNil(t, list)
 
 	// db error
 	mock.ExpectQuery(`SELECT id, name, settings, integrations, created_at, updated_at\s+FROM workspaces\s+ORDER BY created_at DESC`).

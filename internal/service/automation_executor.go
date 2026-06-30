@@ -161,9 +161,18 @@ func (e *AutomationExecutor) Execute(ctx context.Context, workspaceID string, co
 			contactAutomation.Status = result.Status
 		}
 
-		// PERSIST STATE (critical for crash recovery)
-		if err := e.automationRepo.UpdateContactAutomation(ctx, workspaceID, contactAutomation); err != nil {
+		// PERSIST STATE (critical for crash recovery). Optimistic lock on
+		// status='active' so a concurrent exit (e.g. a stop-on-reply interrupt that
+		// landed mid-tick) is not clobbered back to active/next-node.
+		updated, err := e.automationRepo.UpdateContactAutomationIfActive(ctx, workspaceID, contactAutomation)
+		if err != nil {
 			return e.handleError(ctx, workspaceID, contactAutomation, err, "failed to update contact automation")
+		}
+		if !updated {
+			// The journey was exited concurrently; stop processing this tick.
+			e.logger.WithField("contact_automation_id", contactAutomation.ID).
+				Info("Contact automation no longer active (exited concurrently); aborting tick")
+			return nil
 		}
 
 		// Update node execution to completed
@@ -288,7 +297,23 @@ func (e *AutomationExecutor) handleError(ctx context.Context, workspaceID string
 		_ = e.automationRepo.CreateNodeExecution(ctx, workspaceID, entry)
 	}
 
-	return e.automationRepo.UpdateContactAutomation(ctx, workspaceID, ca)
+	return e.persistIfActive(ctx, workspaceID, ca)
+}
+
+// persistIfActive writes the contact automation only while the row is still active, so a
+// concurrent stop-on-reply exit (ExitContactJourneysOnReply flips status to 'exited') is
+// never clobbered back to active/failed/completed. A 0-row result means the journey was
+// exited concurrently — we leave that exit in place and stop, rather than resurrecting it.
+func (e *AutomationExecutor) persistIfActive(ctx context.Context, workspaceID string, ca *domain.ContactAutomation) error {
+	updated, err := e.automationRepo.UpdateContactAutomationIfActive(ctx, workspaceID, ca)
+	if err != nil {
+		return err
+	}
+	if !updated {
+		e.logger.WithField("contact_automation_id", ca.ID).
+			Info("Contact automation no longer active (exited concurrently); skipping terminal/retry write")
+	}
+	return nil
 }
 
 // markAsCompleted marks a contact automation as completed
@@ -308,7 +333,7 @@ func (e *AutomationExecutor) markAsCompleted(ctx context.Context, workspaceID st
 
 	e.createAutomationEndEvent(ctx, workspaceID, ca, reason)
 
-	return e.automationRepo.UpdateContactAutomation(ctx, workspaceID, ca)
+	return e.persistIfActive(ctx, workspaceID, ca)
 }
 
 // markAsExited marks a contact automation as exited
@@ -328,7 +353,7 @@ func (e *AutomationExecutor) markAsExited(ctx context.Context, workspaceID strin
 
 	e.createAutomationEndEvent(ctx, workspaceID, ca, reason)
 
-	return e.automationRepo.UpdateContactAutomation(ctx, workspaceID, ca)
+	return e.persistIfActive(ctx, workspaceID, ca)
 }
 
 // createNodeExecution creates a new node execution entry for logging

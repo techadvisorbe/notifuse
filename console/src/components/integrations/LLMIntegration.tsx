@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react'
-import { Form, Input, message, Select } from 'antd'
+import { AutoComplete, Form, Input, message, Select } from 'antd'
 import { useLingui } from '@lingui/react/macro'
 import { Integration, LLMProviderKind, Workspace } from '../../services/api/types'
 import { llmProviders } from './LLMProviders'
@@ -10,6 +10,13 @@ const anthropicModels = [
   { value: 'claude-opus-4-6', label: 'Claude Opus 4.6 ($5/$25 per MTok)' },
   { value: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6 ($3/$15 per MTok)' },
   { value: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5 ($1/$5 per MTok)' }
+]
+
+// Suggested Gemini models with pricing (input/output per million tokens).
+// Free text is allowed, so any current/future model ID can be entered.
+// Pricing from: https://ai.google.dev/gemini-api/docs/pricing
+const geminiModels = [
+  { value: 'gemini-3.1-pro-preview', label: 'gemini-3.1-pro-preview ($2/$12 per MTok)' }
 ]
 
 interface LLMIntegrationProps {
@@ -58,6 +65,19 @@ export const LLMIntegration: React.FC<LLMIntegrationProps> = ({
           base_url: ''
         })
       }
+    } else if (providerKind === 'gemini') {
+      if (integration?.llm_provider?.gemini) {
+        const provider = integration.llm_provider.gemini
+        form.setFieldsValue({
+          name: integration.name,
+          model: provider.model || providerInfo?.defaultModel || 'gemini-3.1-pro-preview'
+        })
+      } else {
+        form.setFieldsValue({
+          name: providerInfo?.name || 'Google Gemini',
+          model: providerInfo?.defaultModel || 'gemini-3.1-pro-preview'
+        })
+      }
     } else {
       if (integration?.llm_provider) {
         const provider = integration.llm_provider
@@ -104,6 +124,15 @@ export const LLMIntegration: React.FC<LLMIntegrationProps> = ({
               base_url:
                 isString(values.base_url) && values.base_url !== '' ? values.base_url : undefined
             }
+          }),
+          ...(providerKind === 'gemini' && {
+            gemini: {
+              api_key:
+                isString(values.api_key) && values.api_key !== '' ? values.api_key : undefined,
+              model: isString(values.model)
+                ? values.model
+                : providerInfo?.defaultModel || 'gemini-3.1-pro-preview'
+            }
           })
         },
         created_at: integration?.created_at || new Date().toISOString(),
@@ -128,7 +157,9 @@ export const LLMIntegration: React.FC<LLMIntegrationProps> = ({
           placeholder={
             providerKind === 'openai'
               ? t`e.g., My OpenAI Integration`
-              : t`e.g., My Anthropic Integration`
+              : providerKind === 'gemini'
+                ? t`e.g., My Google Gemini Integration`
+                : t`e.g., My Anthropic Integration`
           }
         />
       </Form.Item>
@@ -142,7 +173,13 @@ export const LLMIntegration: React.FC<LLMIntegrationProps> = ({
         }
       >
         <Input.Password
-          placeholder={providerKind === 'openai' ? 'sk-proj-...' : 'sk-ant-api03-...'}
+          placeholder={
+            providerKind === 'openai'
+              ? 'sk-proj-...'
+              : providerKind === 'gemini'
+                ? 'AIza...'
+                : 'sk-ant-api03-...'
+          }
         />
       </Form.Item>
 
@@ -174,6 +211,22 @@ export const LLMIntegration: React.FC<LLMIntegrationProps> = ({
             <Input placeholder="https://api.openai.com/v1" />
           </Form.Item>
         </>
+      )}
+
+      {providerKind === 'gemini' && (
+        <Form.Item
+          label={t`Model`}
+          name="model"
+          rules={[{ required: true, message: t`Please select or enter a model` }]}
+        >
+          <AutoComplete
+            options={geminiModels}
+            placeholder={t`gemini-3.1-pro-preview or a custom model ID`}
+            filterOption={(inputValue, option) =>
+              ((option?.value as string) ?? '').toLowerCase().includes(inputValue.toLowerCase())
+            }
+          />
+        </Form.Item>
       )}
     </Form>
   )

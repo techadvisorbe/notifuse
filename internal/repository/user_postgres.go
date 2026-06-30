@@ -88,6 +88,34 @@ func (r *userRepository) GetUserByEmail(ctx context.Context, email string) (*dom
 	return &user, nil
 }
 
+// GetUserByEmailInsensitive matches a user by case-insensitive email
+// (lower(email)=lower($1)). Used by the OIDC bridge so a mixed-case invited user is
+// found regardless of the casing the IdP asserts. Backed by idx_users_lower_email.
+func (r *userRepository) GetUserByEmailInsensitive(ctx context.Context, email string) (*domain.User, error) {
+	var user domain.User
+	query := `
+		SELECT id, email, name, type, language, created_at, updated_at
+		FROM users
+		WHERE lower(email)=lower($1)
+	`
+	err := r.systemDB.QueryRowContext(ctx, query, email).Scan(
+		&user.ID,
+		&user.Email,
+		&user.Name,
+		&user.Type,
+		&user.Language,
+		&user.CreatedAt,
+		&user.UpdatedAt,
+	)
+	if err == sql.ErrNoRows {
+		return nil, &domain.ErrUserNotFound{Message: "user not found"}
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to get user: %w", err)
+	}
+	return &user, nil
+}
+
 func (r *userRepository) GetUserByID(ctx context.Context, id string) (*domain.User, error) {
 	ctx, span := tracing.StartServiceSpan(ctx, "UserRepository", "GetUserByID")
 	defer span.End()

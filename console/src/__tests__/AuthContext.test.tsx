@@ -35,7 +35,7 @@ vi.mock('../services/api/auth', () => ({
 
 // Create a test component that uses the auth context
 const TestComponent = () => {
-  const { user, isAuthenticated, signin, signout, loading } = useAuth()
+  const { user, workspaces, isAuthenticated, signin, signout, loading } = useAuth()
 
   return (
     <div>
@@ -43,6 +43,7 @@ const TestComponent = () => {
       <div data-testid="authenticated">
         {isAuthenticated ? 'Authenticated' : 'Not Authenticated'}
       </div>
+      <div data-testid="workspaces-count">{workspaces.length}</div>
       <div data-testid="user">{user ? JSON.stringify(user) : 'No User'}</div>
       <button data-testid="signin" onClick={() => signin('fake-token')}>
         Sign In
@@ -141,6 +142,27 @@ describe('AuthContext', () => {
     })
 
     expect(authService.getCurrentUser).toHaveBeenCalled()
+  })
+
+  it('normalizes null workspaces from the API to an empty array', async () => {
+    // A freshly installed root account gets `workspaces: null` from user.me.
+    // The context must coerce it to [] so consumers can safely read .length.
+    vi.mocked(authService.getCurrentUser).mockResolvedValueOnce({
+      user: { id: '123', email: 'root@example.com', timezone: 'UTC', language: 'en' },
+      workspaces: null
+    })
+
+    localStorageMock.setItem('auth_token', 'existing-token')
+
+    render(<TestComponent />, { wrapper })
+
+    await waitFor(() => {
+      expect(screen.getByTestId('loading')).toHaveTextContent('Not Loading')
+      expect(screen.getByTestId('authenticated')).toHaveTextContent('Authenticated')
+    })
+
+    // Should not crash and should expose an empty array (length 0)
+    expect(screen.getByTestId('workspaces-count')).toHaveTextContent('0')
   })
 
   it('throws error when useAuth is used outside AuthProvider', () => {

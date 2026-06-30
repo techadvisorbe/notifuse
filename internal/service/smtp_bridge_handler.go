@@ -179,7 +179,10 @@ func (s *SMTPBridgeHandlerService) HandleMessage(userID string, from string, to 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// Verify the user has access to the workspace
+	// Verify the user has access to the workspace.
+	// Note: no platform-admin (ROOT_EMAIL) override here on purpose — this path
+	// authenticates an API-key identity (validated above), and ROOT_EMAIL configures
+	// human operator accounts, which never authenticate through the SMTP bridge.
 	userWorkspace, err := s.workspaceRepo.GetUserWorkspace(ctx, userID, workspaceID)
 	if err != nil {
 		s.logger.WithFields(map[string]interface{}{

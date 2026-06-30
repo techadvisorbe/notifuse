@@ -84,6 +84,11 @@ func (s *WorkspaceService) ListWorkspaces(ctx context.Context) ([]*domain.Worksp
 		return nil, err
 	}
 
+	// Platform admins (ROOT_EMAIL) have owner access to every workspace, so they see them all.
+	if s.config.IsRootEmail(user.Email) {
+		return s.repo.List(ctx)
+	}
+
 	userWorkspaces, err := s.repo.GetUserWorkspaces(ctx, user.ID)
 	if err != nil {
 		s.logger.WithField("user_id", user.ID).WithField("error", err.Error()).Error("Failed to get user workspaces")
@@ -112,18 +117,12 @@ func (s *WorkspaceService) ListWorkspaces(ctx context.Context) ([]*domain.Worksp
 func (s *WorkspaceService) GetWorkspace(ctx context.Context, id string) (*domain.Workspace, error) {
 	// Check if this is a system call that should bypass authentication
 	if ctx.Value(domain.SystemCallKey) == nil {
-		// Validate user is a member of the workspace
-		var user *domain.User
+		// Validate user has access to the workspace. Platform admins (ROOT_EMAIL) get
+		// owner access to every workspace via the AuthService override.
 		var err error
-		ctx, user, _, err = s.authService.AuthenticateUserForWorkspace(ctx, id)
+		ctx, _, _, err = s.authService.AuthenticateUserForWorkspace(ctx, id)
 		if err != nil {
 			return nil, fmt.Errorf("failed to authenticate user: %w", err)
-		}
-
-		_, err = s.repo.GetUserWorkspace(ctx, user.ID, id)
-		if err != nil {
-			s.logger.WithField("workspace_id", id).WithField("user_id", user.ID).WithField("error", err.Error()).Error("Failed to get user workspace")
-			return nil, err
 		}
 	}
 
@@ -144,7 +143,7 @@ func (s *WorkspaceService) CreateWorkspace(ctx context.Context, id string, name 
 	}
 
 	// Only allow root user to create workspaces
-	if user.Email != s.config.RootEmail {
+	if !s.config.IsRootEmail(user.Email) {
 		s.logger.WithField("user_email", user.Email).WithField("root_email", s.config.RootEmail).Error("Non-root user attempted to create workspace")
 		return nil, &domain.ErrUnauthorized{Message: "only root user can create workspaces"}
 	}
@@ -301,19 +300,14 @@ func (s *WorkspaceService) CreateWorkspace(ctx context.Context, id string, name 
 
 // UpdateWorkspace updates a workspace if the user is an owner
 func (s *WorkspaceService) UpdateWorkspace(ctx context.Context, id string, name string, settings domain.WorkspaceSettings) (*domain.Workspace, error) {
-	// Check if user can access this workspace
+	// Check if user can access this workspace and is an owner. Platform admins (ROOT_EMAIL)
+	// are synthesized as owners of every workspace by the AuthService override.
 	var user *domain.User
+	var userWorkspace *domain.UserWorkspace
 	var err error
-	ctx, user, _, err = s.authService.AuthenticateUserForWorkspace(ctx, id)
+	ctx, user, userWorkspace, err = s.authService.AuthenticateUserForWorkspace(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("failed to authenticate user: %w", err)
-	}
-
-	// Check if user is an owner
-	userWorkspace, err := s.repo.GetUserWorkspace(ctx, user.ID, id)
-	if err != nil {
-		s.logger.WithField("workspace_id", id).WithField("user_id", user.ID).WithField("error", err.Error()).Error("Failed to get user workspace")
-		return nil, err
 	}
 
 	if userWorkspace.Role != "owner" {
@@ -372,9 +366,14 @@ func (s *WorkspaceService) UpdateWorkspace(ctx context.Context, id string, name 
 	}
 
 	existingWorkspace.Settings.CustomEndpointURL = settings.CustomEndpointURL
-	existingWorkspace.Settings.CustomFieldLabels = settings.CustomFieldLabels
-	existingWorkspace.Settings.BlogEnabled = settings.BlogEnabled
-	existingWorkspace.Settings.BlogSettings = settings.BlogSettings
+	// Note: Custom field labels and blog settings are intentionally NOT updated here.
+	// They are each managed exclusively via dedicated, permission-checked endpoints
+	// (/api/workspaces.setCustomFieldLabels for labels, /api/workspaces.setBlogSettings
+	// for the blog enable flag + config), which enforce granular permissions
+	// (workspace:write and blog:write respectively) instead of requiring owner role.
+	// This also prevents an owner's (possibly stale) settings save from clobbering
+	// values set by a member. Existing labels and blog settings on existingWorkspace
+	// are preserved as-is.
 	existingWorkspace.Settings.DefaultLanguage = settings.DefaultLanguage
 	existingWorkspace.Settings.Languages = settings.Languages
 
@@ -421,18 +420,14 @@ func (s *WorkspaceService) UpdateWorkspace(ctx context.Context, id string, name 
 
 // DeleteWorkspace deletes a workspace if the user is an owner
 func (s *WorkspaceService) DeleteWorkspace(ctx context.Context, id string) error {
-	// Check if user can access this workspace and is the owner
+	// Check if user can access this workspace and is the owner. Platform admins (ROOT_EMAIL)
+	// are synthesized as owners of every workspace by the AuthService override.
 	var user *domain.User
+	var userWorkspace *domain.UserWorkspace
 	var err error
-	ctx, user, _, err = s.authService.AuthenticateUserForWorkspace(ctx, id)
+	ctx, user, userWorkspace, err = s.authService.AuthenticateUserForWorkspace(ctx, id)
 	if err != nil {
 		return fmt.Errorf("failed to authenticate user: %w", err)
-	}
-
-	userWorkspace, err := s.repo.GetUserWorkspace(ctx, user.ID, id)
-	if err != nil {
-		s.logger.WithField("workspace_id", id).WithField("user_id", user.ID).WithField("error", err.Error()).Error("Failed to get user workspace")
-		return err
 	}
 
 	if userWorkspace.Role != "owner" {
@@ -473,19 +468,14 @@ func (s *WorkspaceService) DeleteWorkspace(ctx context.Context, id string) error
 // AddUserToWorkspace adds a user to a workspace if the requester is an owner
 func (s *WorkspaceService) AddUserToWorkspace(ctx context.Context, workspaceID string, userID string, role string, permissions domain.UserPermissions) error {
 	var user *domain.User
+	var requesterWorkspace *domain.UserWorkspace
 	var err error
-	ctx, user, _, err = s.authService.AuthenticateUserForWorkspace(ctx, workspaceID)
+	ctx, user, requesterWorkspace, err = s.authService.AuthenticateUserForWorkspace(ctx, workspaceID)
 	if err != nil {
 		return fmt.Errorf("failed to authenticate user: %w", err)
 	}
 
-	// Check if requester is an owner
-	requesterWorkspace, err := s.repo.GetUserWorkspace(ctx, user.ID, workspaceID)
-	if err != nil {
-		s.logger.WithField("workspace_id", workspaceID).WithField("user_id", userID).WithField("requester_id", user.ID).WithField("error", err.Error()).Error("Failed to get requester workspace")
-		return err
-	}
-
+	// Check if requester is an owner (platform admins are synthesized as owners)
 	if requesterWorkspace.Role != "owner" {
 		s.logger.WithField("workspace_id", workspaceID).WithField("user_id", userID).WithField("requester_id", user.ID).WithField("role", requesterWorkspace.Role).Error("Requester is not an owner of the workspace")
 		return &domain.ErrUnauthorized{Message: "user is not an owner of the workspace"}
@@ -532,18 +522,13 @@ func (s *WorkspaceService) AddUserToWorkspace(ctx context.Context, workspaceID s
 
 // RemoveUserFromWorkspace removes a user from a workspace if the requester is an owner
 func (s *WorkspaceService) RemoveUserFromWorkspace(ctx context.Context, workspaceID string, userID string) error {
-	// Check if requester is an owner
+	// Check if requester is an owner (platform admins are synthesized as owners)
 	var owner *domain.User
+	var requesterWorkspace *domain.UserWorkspace
 	var err error
-	ctx, owner, _, err = s.authService.AuthenticateUserForWorkspace(ctx, workspaceID)
+	ctx, owner, requesterWorkspace, err = s.authService.AuthenticateUserForWorkspace(ctx, workspaceID)
 	if err != nil {
 		return fmt.Errorf("failed to authenticate user: %w", err)
-	}
-
-	requesterWorkspace, err := s.repo.GetUserWorkspace(ctx, owner.ID, workspaceID)
-	if err != nil {
-		s.logger.WithField("workspace_id", workspaceID).WithField("user_id", userID).WithField("requester_id", owner.ID).WithField("error", err.Error()).Error("Failed to get requester workspace")
-		return err
 	}
 
 	if requesterWorkspace.Role != "owner" {
@@ -633,6 +618,14 @@ func (s *WorkspaceService) InviteMember(ctx context.Context, workspaceID, email 
 		return nil, "", fmt.Errorf("invalid email format")
 	}
 
+	// Defense-in-depth: a configured platform admin (ROOT_EMAIL) already has owner access to
+	// every workspace via the override, so inviting one is redundant. Rejecting it also closes a
+	// theoretical path where inviting a not-yet-provisioned root address could create that root
+	// identity through invitation acceptance.
+	if s.config.IsRootEmail(email) {
+		return nil, "", fmt.Errorf("cannot invite a platform admin email")
+	}
+
 	// Check if workspace exists
 	workspace, err := s.repo.GetByID(ctx, workspaceID)
 	if err != nil {
@@ -643,15 +636,8 @@ func (s *WorkspaceService) InviteMember(ctx context.Context, workspaceID, email 
 		return nil, "", fmt.Errorf("workspace not found")
 	}
 
-	// Check if the inviter has permission to invite members (is a member of the workspace)
-	isMember, err := s.repo.IsUserWorkspaceMember(ctx, inviter.ID, workspaceID)
-	if err != nil {
-		s.logger.WithField("workspace_id", workspaceID).WithField("inviter_id", inviter.ID).WithField("error", err.Error()).Error("Failed to check if inviter is a member")
-		return nil, "", err
-	}
-	if !isMember {
-		return nil, "", fmt.Errorf("inviter is not a member of the workspace")
-	}
+	// The inviter's access was already verified by AuthenticateUserForWorkspace above
+	// (members, owners, and platform admins all pass), so no extra membership check is needed.
 
 	// Check team member limit
 	if s.config.MaxUsers > 0 {
@@ -757,20 +743,14 @@ func (s *WorkspaceService) InviteMember(ctx context.Context, workspaceID, email 
 
 // SetUserPermissions sets the permissions for a user in a workspace
 func (s *WorkspaceService) SetUserPermissions(ctx context.Context, workspaceID, userID string, permissions domain.UserPermissions) error {
-	var currentUser *domain.User
+	var userWorkspace *domain.UserWorkspace
 	var err error
-	ctx, currentUser, _, err = s.authService.AuthenticateUserForWorkspace(ctx, workspaceID)
+	ctx, _, userWorkspace, err = s.authService.AuthenticateUserForWorkspace(ctx, workspaceID)
 	if err != nil {
 		return fmt.Errorf("failed to authenticate user: %w", err)
 	}
 
-	// Check if the current user is the owner of the workspace
-	userWorkspace, err := s.repo.GetUserWorkspace(ctx, currentUser.ID, workspaceID)
-	if err != nil {
-		s.logger.WithField("workspace_id", workspaceID).WithField("user_id", currentUser.ID).WithField("error", err.Error()).Error("Failed to get user workspace for permission check")
-		return fmt.Errorf("failed to verify workspace membership: %w", err)
-	}
-
+	// Check if the current user is the owner of the workspace (platform admins are synthesized as owners)
 	if userWorkspace.Role != "owner" {
 		return fmt.Errorf("only workspace owners can manage user permissions")
 	}
@@ -820,20 +800,106 @@ func (s *WorkspaceService) SetUserPermissions(ctx context.Context, workspaceID, 
 	return nil
 }
 
-// GetWorkspaceMembersWithEmail returns all users with emails for a workspace, verifying the requester has access
-func (s *WorkspaceService) GetWorkspaceMembersWithEmail(ctx context.Context, id string) ([]*domain.UserWorkspaceWithEmail, error) {
-	// Check if user has access to the workspace
-	var user *domain.User
+// SetCustomFieldLabels updates the custom field display labels for a workspace.
+// Unlike most workspace settings (which are owner-only via UpdateWorkspace), this
+// is the dedicated, granular-permission path: it requires write access to the
+// workspace resource, so workspace owners and members with workspace:write (e.g.
+// "full access") can manage custom field labels.
+func (s *WorkspaceService) SetCustomFieldLabels(ctx context.Context, workspaceID string, labels map[string]string) error {
+	var userWorkspace *domain.UserWorkspace
 	var err error
-	ctx, user, _, err = s.authService.AuthenticateUserForWorkspace(ctx, id)
+	ctx, _, userWorkspace, err = s.authService.AuthenticateUserForWorkspace(ctx, workspaceID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to authenticate user: %w", err)
+		return fmt.Errorf("failed to authenticate user: %w", err)
 	}
 
-	_, err = s.repo.GetUserWorkspace(ctx, user.ID, id)
+	// Check permission for writing workspace settings
+	if !userWorkspace.HasPermission(domain.PermissionResourceWorkspace, domain.PermissionTypeWrite) {
+		return domain.NewPermissionError(
+			domain.PermissionResourceWorkspace,
+			domain.PermissionTypeWrite,
+			"Insufficient permissions: write access to workspace required",
+		)
+	}
+
+	// Load the existing workspace and update only the custom field labels,
+	// preserving all other settings.
+	existingWorkspace, err := s.repo.GetByID(ctx, workspaceID)
 	if err != nil {
-		s.logger.WithField("workspace_id", id).WithField("user_id", user.ID).WithField("error", err.Error()).Error("Failed to get user workspace")
-		return nil, &domain.ErrUnauthorized{Message: "You do not have access to this workspace"}
+		s.logger.WithField("workspace_id", workspaceID).WithField("error", err.Error()).Error("Failed to get existing workspace")
+		return err
+	}
+
+	existingWorkspace.Settings.CustomFieldLabels = labels
+
+	// Canonical validation (covers non-console API consumers too)
+	if err := existingWorkspace.Settings.ValidateCustomFieldLabels(); err != nil {
+		return err
+	}
+
+	if err := s.repo.Update(ctx, existingWorkspace); err != nil {
+		s.logger.WithField("workspace_id", workspaceID).WithField("error", err.Error()).Error("Failed to update custom field labels")
+		return err
+	}
+
+	return nil
+}
+
+// SetBlogSettings updates the workspace-level blog configuration (the enable flag
+// plus title/SEO/pagination/feed settings). Unlike UpdateWorkspace (owner-only),
+// this is gated on the granular blog:write permission so a delegated blog manager
+// can manage blog config. It loads the workspace and mutates only the blog fields,
+// preserving all other settings.
+func (s *WorkspaceService) SetBlogSettings(ctx context.Context, workspaceID string, enabled bool, settings *domain.BlogSettings) error {
+	var userWorkspace *domain.UserWorkspace
+	var err error
+	ctx, _, userWorkspace, err = s.authService.AuthenticateUserForWorkspace(ctx, workspaceID)
+	if err != nil {
+		return fmt.Errorf("failed to authenticate user: %w", err)
+	}
+
+	// Blog settings follow the blog feature's own permission, not workspace:write.
+	if !userWorkspace.HasPermission(domain.PermissionResourceBlog, domain.PermissionTypeWrite) {
+		return domain.NewPermissionError(
+			domain.PermissionResourceBlog,
+			domain.PermissionTypeWrite,
+			"Insufficient permissions: write access to blog required",
+		)
+	}
+
+	// Load the existing workspace and update only the blog fields, preserving all
+	// other settings.
+	existingWorkspace, err := s.repo.GetByID(ctx, workspaceID)
+	if err != nil {
+		s.logger.WithField("workspace_id", workspaceID).WithField("error", err.Error()).Error("Failed to get existing workspace")
+		return err
+	}
+
+	existingWorkspace.Settings.BlogEnabled = enabled
+	existingWorkspace.Settings.BlogSettings = settings
+
+	// Canonical validation (covers non-console API consumers too). Validate has a
+	// nil-receiver guard, so a nil settings (disable/clear) is fine.
+	if err := existingWorkspace.Settings.BlogSettings.Validate(); err != nil {
+		return err
+	}
+
+	if err := s.repo.Update(ctx, existingWorkspace); err != nil {
+		s.logger.WithField("workspace_id", workspaceID).WithField("error", err.Error()).Error("Failed to update blog settings")
+		return err
+	}
+
+	return nil
+}
+
+// GetWorkspaceMembersWithEmail returns all users with emails for a workspace, verifying the requester has access
+func (s *WorkspaceService) GetWorkspaceMembersWithEmail(ctx context.Context, id string) ([]*domain.UserWorkspaceWithEmail, error) {
+	// Check if user has access to the workspace (platform admins get owner access via the override)
+	var requesterWorkspace *domain.UserWorkspace
+	var err error
+	ctx, _, requesterWorkspace, err = s.authService.AuthenticateUserForWorkspace(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("failed to authenticate user: %w", err)
 	}
 
 	// Get all workspace users with emails
@@ -883,6 +949,40 @@ func (s *WorkspaceService) GetWorkspaceMembersWithEmail(ctx context.Context, id 
 		members = append(members, invitationMember)
 	}
 
+	// Surface platform admins (ROOT_EMAIL) as virtual owner entries for visibility — but only
+	// to a workspace owner (platform admins themselves are synthesized as owners), so operator
+	// identities are not exposed to ordinary members. They have owner access to every workspace
+	// via the AuthService override but may not hold a membership row.
+	if requesterWorkspace != nil && requesterWorkspace.Role == "owner" {
+		existingEmails := make(map[string]struct{}, len(members))
+		for _, m := range members {
+			existingEmails[m.Email] = struct{}{}
+		}
+		for _, rootEmail := range s.config.RootEmails() {
+			if _, ok := existingEmails[rootEmail]; ok {
+				continue
+			}
+			rootUser, err := s.userService.GetUserByEmail(ctx, rootEmail)
+			if err != nil || rootUser == nil {
+				// Root account not provisioned yet (e.g. never signed in) — skip.
+				continue
+			}
+			members = append(members, &domain.UserWorkspaceWithEmail{
+				UserWorkspace: domain.UserWorkspace{
+					UserID:      rootUser.ID,
+					WorkspaceID: id,
+					Role:        "owner",
+					Permissions: domain.FullPermissions,
+					CreatedAt:   now,
+					UpdatedAt:   now,
+				},
+				Email: rootEmail,
+				Type:  domain.UserTypeUser,
+			})
+			existingEmails[rootEmail] = struct{}{}
+		}
+	}
+
 	return members, nil
 }
 
@@ -890,19 +990,14 @@ func (s *WorkspaceService) GetWorkspaceMembersWithEmail(ctx context.Context, id 
 func (s *WorkspaceService) CreateAPIKey(ctx context.Context, workspaceID string, emailPrefix string) (string, string, error) {
 	// Validate user is a member of the workspace and has owner role
 	var user *domain.User
+	var userWorkspace *domain.UserWorkspace
 	var err error
-	ctx, user, _, err = s.authService.AuthenticateUserForWorkspace(ctx, workspaceID)
+	ctx, user, userWorkspace, err = s.authService.AuthenticateUserForWorkspace(ctx, workspaceID)
 	if err != nil {
 		return "", "", fmt.Errorf("failed to authenticate user: %w", err)
 	}
 
-	// Check if user is an owner
-	userWorkspace, err := s.repo.GetUserWorkspace(ctx, user.ID, workspaceID)
-	if err != nil {
-		s.logger.WithField("workspace_id", workspaceID).WithField("user_id", user.ID).WithField("error", err.Error()).Error("Failed to get user workspace")
-		return "", "", err
-	}
-
+	// Check if user is an owner (platform admins are synthesized as owners)
 	if userWorkspace.Role != "owner" {
 		s.logger.WithField("workspace_id", workspaceID).WithField("user_id", user.ID).WithField("role", userWorkspace.Role).Error("User is not an owner of the workspace")
 		return "", "", &domain.ErrUnauthorized{Message: "user is not an owner of the workspace"}
@@ -1103,11 +1198,18 @@ func (s *WorkspaceService) DeleteInvitation(ctx context.Context, invitationID st
 		return fmt.Errorf("invitation not found: %w", err)
 	}
 
-	// Check if the user is a member of the workspace that the invitation belongs to
-	_, err = s.repo.GetUserWorkspace(ctx, user.ID, invitation.WorkspaceID)
-	if err != nil {
-		s.logger.WithField("workspace_id", invitation.WorkspaceID).WithField("user_id", user.ID).WithField("error", err.Error()).Error("User does not have access to this workspace")
-		return &domain.ErrUnauthorized{Message: "You do not have access to this workspace"}
+	// Check if the user is a member of the workspace that the invitation belongs to.
+	// This method authenticates via context (not AuthenticateUserForWorkspace), so the
+	// platform-admin override is applied explicitly here: ROOT_EMAIL users have access
+	// to every workspace even without a membership row.
+	if _, err = s.repo.GetUserWorkspace(ctx, user.ID, invitation.WorkspaceID); err != nil {
+		// Bypass only the genuine "not a member" case for platform admins so real DB errors
+		// still surface instead of being silently treated as authorized.
+		rootBypass := errors.Is(err, domain.ErrUserNotInWorkspace) && s.config.IsRootEmail(user.Email)
+		if !rootBypass {
+			s.logger.WithField("workspace_id", invitation.WorkspaceID).WithField("user_id", user.ID).WithField("error", err.Error()).Error("User does not have access to this workspace")
+			return &domain.ErrUnauthorized{Message: "You do not have access to this workspace"}
+		}
 	}
 
 	// Delete the invitation
@@ -1124,19 +1226,14 @@ func (s *WorkspaceService) DeleteInvitation(ctx context.Context, invitationID st
 func (s *WorkspaceService) RemoveMember(ctx context.Context, workspaceID string, userIDToRemove string) error {
 	// Authenticate the user making the request
 	var requester *domain.User
+	var requesterWorkspace *domain.UserWorkspace
 	var err error
-	ctx, requester, _, err = s.authService.AuthenticateUserForWorkspace(ctx, workspaceID)
+	ctx, requester, requesterWorkspace, err = s.authService.AuthenticateUserForWorkspace(ctx, workspaceID)
 	if err != nil {
 		return fmt.Errorf("failed to authenticate user: %w", err)
 	}
 
-	// Check if requester is an owner
-	requesterWorkspace, err := s.repo.GetUserWorkspace(ctx, requester.ID, workspaceID)
-	if err != nil {
-		s.logger.WithField("workspace_id", workspaceID).WithField("user_id", userIDToRemove).WithField("requester_id", requester.ID).WithField("error", err.Error()).Error("Failed to get requester workspace")
-		return err
-	}
-
+	// Check if requester is an owner (platform admins are synthesized as owners)
 	if requesterWorkspace.Role != "owner" {
 		s.logger.WithField("workspace_id", workspaceID).WithField("user_id", userIDToRemove).WithField("requester_id", requester.ID).WithField("role", requesterWorkspace.Role).Error("Requester is not an owner of the workspace")
 		return &domain.ErrUnauthorized{Message: "user is not an owner of the workspace"}
@@ -1177,16 +1274,10 @@ func (s *WorkspaceService) RemoveMember(ctx context.Context, workspaceID string,
 // CreateIntegration creates a new integration for a workspace
 func (s *WorkspaceService) CreateIntegration(ctx context.Context, req domain.CreateIntegrationRequest) (string, error) {
 	// Authenticate user and verify they are an owner of the workspace
-	ctx, user, _, err := s.authService.AuthenticateUserForWorkspace(ctx, req.WorkspaceID)
+	// (platform admins are synthesized as owners).
+	ctx, user, userWorkspace, err := s.authService.AuthenticateUserForWorkspace(ctx, req.WorkspaceID)
 	if err != nil {
 		return "", fmt.Errorf("failed to authenticate user: %w", err)
-	}
-
-	// Check if user is an owner
-	userWorkspace, err := s.repo.GetUserWorkspace(ctx, user.ID, req.WorkspaceID)
-	if err != nil {
-		s.logger.WithField("workspace_id", req.WorkspaceID).WithField("user_id", user.ID).WithField("error", err.Error()).Error("Failed to get user workspace")
-		return "", err
 	}
 
 	if userWorkspace.Role != "owner" {
@@ -1293,16 +1384,10 @@ func (s *WorkspaceService) CreateIntegration(ctx context.Context, req domain.Cre
 // UpdateIntegration updates an existing integration in a workspace
 func (s *WorkspaceService) UpdateIntegration(ctx context.Context, req domain.UpdateIntegrationRequest) error {
 	// Authenticate user and verify they are an owner of the workspace
-	ctx, user, _, err := s.authService.AuthenticateUserForWorkspace(ctx, req.WorkspaceID)
+	// (platform admins are synthesized as owners).
+	ctx, user, userWorkspace, err := s.authService.AuthenticateUserForWorkspace(ctx, req.WorkspaceID)
 	if err != nil {
 		return fmt.Errorf("failed to authenticate user: %w", err)
-	}
-
-	// Check if user is an owner
-	userWorkspace, err := s.repo.GetUserWorkspace(ctx, user.ID, req.WorkspaceID)
-	if err != nil {
-		s.logger.WithField("workspace_id", req.WorkspaceID).WithField("user_id", user.ID).WithField("error", err.Error()).Error("Failed to get user workspace")
-		return err
 	}
 
 	if userWorkspace.Role != "owner" {
@@ -1386,6 +1471,16 @@ func (s *WorkspaceService) UpdateIntegration(ctx context.Context, req domain.Upd
 				updatedIntegration.LLMProvider.OpenAI.EncryptedAPIKey =
 					existingIntegration.LLMProvider.OpenAI.EncryptedAPIKey
 			}
+
+			// Preserve Gemini encrypted API key if not provided in update
+			if req.LLMProvider.Gemini != nil &&
+				req.LLMProvider.Gemini.APIKey == "" &&
+				req.LLMProvider.Gemini.EncryptedAPIKey == "" &&
+				existingIntegration.LLMProvider != nil &&
+				existingIntegration.LLMProvider.Gemini != nil {
+				updatedIntegration.LLMProvider.Gemini.EncryptedAPIKey =
+					existingIntegration.LLMProvider.Gemini.EncryptedAPIKey
+			}
 		} else {
 			// If no settings provided, preserve existing
 			updatedIntegration.LLMProvider = existingIntegration.LLMProvider
@@ -1429,16 +1524,10 @@ func (s *WorkspaceService) UpdateIntegration(ctx context.Context, req domain.Upd
 // DeleteIntegration deletes an integration from a workspace
 func (s *WorkspaceService) DeleteIntegration(ctx context.Context, workspaceID, integrationID string) error {
 	// Authenticate user and verify they are an owner of the workspace
-	ctx, user, _, err := s.authService.AuthenticateUserForWorkspace(ctx, workspaceID)
+	// (platform admins are synthesized as owners).
+	ctx, user, userWorkspace, err := s.authService.AuthenticateUserForWorkspace(ctx, workspaceID)
 	if err != nil {
 		return fmt.Errorf("failed to authenticate user: %w", err)
-	}
-
-	// Check if user is an owner
-	userWorkspace, err := s.repo.GetUserWorkspace(ctx, user.ID, workspaceID)
-	if err != nil {
-		s.logger.WithField("workspace_id", workspaceID).WithField("user_id", user.ID).WithField("error", err.Error()).Error("Failed to get user workspace")
-		return err
 	}
 
 	if userWorkspace.Role != "owner" {

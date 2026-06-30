@@ -303,7 +303,7 @@ func TestInboundWebhookEventRepository_StoreEvents(t *testing.T) {
 			Return(db, nil)
 
 		// We're expecting a multi-value INSERT statement
-		mock.ExpectExec("INSERT INTO inbound_webhook_events").
+		mock.ExpectExec("(?s)INSERT INTO inbound_webhook_events.*ON CONFLICT DO NOTHING").
 			WithArgs(
 				events[0].ID, events[0].Type, events[0].Source, events[0].IntegrationID, events[0].RecipientEmail,
 				events[0].MessageID, events[0].Timestamp, events[0].RawPayload,
@@ -334,7 +334,7 @@ func TestInboundWebhookEventRepository_StoreEvents(t *testing.T) {
 			Return(db, nil)
 
 		// We're expecting a single-value INSERT statement
-		mock.ExpectExec("INSERT INTO inbound_webhook_events").
+		mock.ExpectExec("(?s)INSERT INTO inbound_webhook_events.*ON CONFLICT DO NOTHING").
 			WithArgs(
 				events[0].ID, events[0].Type, events[0].Source, events[0].IntegrationID, events[0].RecipientEmail,
 				events[0].MessageID, events[0].Timestamp, events[0].RawPayload,
@@ -379,7 +379,7 @@ func TestInboundWebhookEventRepository_StoreEvents(t *testing.T) {
 			Return(db, nil)
 
 		// Expect the SQL query but return an error
-		mock.ExpectExec("INSERT INTO inbound_webhook_events").
+		mock.ExpectExec("(?s)INSERT INTO inbound_webhook_events.*ON CONFLICT DO NOTHING").
 			WithArgs(
 				events[0].ID, events[0].Type, events[0].Source, events[0].IntegrationID, events[0].RecipientEmail,
 				events[0].MessageID, events[0].Timestamp, events[0].RawPayload,
@@ -436,7 +436,7 @@ func TestInboundWebhookEventRepository_StoreEvent(t *testing.T) {
 			Return(db, nil)
 
 		// We're expecting a single-value INSERT statement
-		mock.ExpectExec("INSERT INTO inbound_webhook_events").
+		mock.ExpectExec("(?s)INSERT INTO inbound_webhook_events.*ON CONFLICT DO NOTHING").
 			WithArgs(
 				event.ID, event.Type, event.Source, event.IntegrationID, event.RecipientEmail,
 				event.MessageID, event.Timestamp, event.RawPayload,
@@ -475,7 +475,7 @@ func TestInboundWebhookEventRepository_StoreEvent(t *testing.T) {
 			Return(db, nil)
 
 		// Expect the SQL query but return an error
-		mock.ExpectExec("INSERT INTO inbound_webhook_events").
+		mock.ExpectExec("(?s)INSERT INTO inbound_webhook_events.*ON CONFLICT DO NOTHING").
 			WithArgs(
 				event.ID, event.Type, event.Source, event.IntegrationID, event.RecipientEmail,
 				event.MessageID, event.Timestamp, event.RawPayload,

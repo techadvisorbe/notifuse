@@ -39,6 +39,7 @@ import {
 import { workspaceService } from '../../services/api/workspace'
 import { emailService } from '../../services/api/email'
 import { listsApi } from '../../services/api/list'
+import { INBOUND_REPLY_PROVIDER_KINDS } from '../../services/api/automation'
 import {
   faCheck,
   faChevronDown,
@@ -192,6 +193,43 @@ const EmailIntegration = ({
   }
 
   // Render webhook status
+  // Inbound (reply) forwarding status — for providers that support stop-on-reply. The
+  // "Register Webhooks" action also creates the provider-side route (a Mailgun Route, or an
+  // SES receipt rule + SNS topic) that forwards replies to Notifuse (for automation
+  // Exit-on-reply); surface whether that route exists, plus the manual MX-records prerequisite.
+  const renderInboundReplyStatus = () => {
+    if (!INBOUND_REPLY_PROVIDER_KINDS.includes(provider.kind) || !webhookStatus) return null
+    const inboundRegistered = webhookStatus.provider_details?.inbound_registered === true
+
+    // Provider-specific MX target the operator must point their domain at.
+    const mxTarget =
+      provider.kind === 'ses'
+        ? t`Amazon SES (inbound-smtp.<region>.amazonaws.com, in a region that supports email receiving)`
+        : t`Mailgun (mxa.mailgun.org / mxb.mailgun.org)`
+
+    return (
+      <div className="mb-2">
+        <Tooltip
+          title={t`Forwards inbound replies to Notifuse so automations can stop when a contact replies (Exit on reply). Registering webhooks creates the provider-side route; you must also point your domain's MX records at your email provider.`}
+        >
+          <Tag bordered={false} color={inboundRegistered ? 'green' : 'orange'}>
+            {inboundRegistered ? (
+              <FontAwesomeIcon icon={faCheck} className="text-green-500 mr-1" />
+            ) : (
+              <FontAwesomeIcon icon={faExclamationTriangle} className="text-yellow-500 mr-1" />
+            )}
+            {t`inbound replies`}
+          </Tag>
+        </Tooltip>
+        <div className="text-xs text-gray-400 mt-1">
+          {inboundRegistered
+            ? t`Reply forwarding is set up. Inbound replies also require your domain's MX records to point at ${mxTarget}.`
+            : t`Click Register Webhooks to set up reply forwarding, then point your domain's MX records at ${mxTarget}.`}
+        </div>
+      </div>
+    )
+  }
+
   const renderWebhookStatus = () => {
     if (loadingWebhooks) {
       return (
@@ -218,6 +256,7 @@ const EmailIntegration = ({
               {t`complaint`}
             </Tag>
           </div>
+          {renderInboundReplyStatus()}
           {isOwner && (
             <Button
               size="small"
@@ -257,6 +296,8 @@ const EmailIntegration = ({
               ))}
             </div>
           )}
+
+          {renderInboundReplyStatus()}
 
           <div className="mb-2">
             {isOwner && (
@@ -1365,7 +1406,9 @@ export function Integrations({ workspace, onSave, loading, isOwner }: Integratio
                       <Tag bordered={false} color="purple">
                         {provider.kind === 'openai'
                           ? provider.openai?.model || 'Not configured'
-                          : provider.anthropic?.model || 'Not configured'}
+                          : provider.kind === 'gemini'
+                            ? provider.gemini?.model || 'Not configured'
+                            : provider.anthropic?.model || 'Not configured'}
                       </Tag>
                     </Descriptions.Item>
                     {provider.kind === 'openai' && provider.openai?.base_url && (

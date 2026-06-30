@@ -23,7 +23,7 @@ func TestDataFeedFetcher_FetchGlobal_NilSettings(t *testing.T) {
 	mockLogger.EXPECT().WithFields(gomock.Any()).Return(mockLogger).AnyTimes()
 	mockLogger.EXPECT().Debug(gomock.Any()).AnyTimes()
 
-	fetcher := NewDataFeedFetcher(mockLogger)
+	fetcher := NewUnsafeDataFeedFetcher(mockLogger)
 
 	// Test: nil settings returns nil, nil
 	result, err := fetcher.FetchGlobal(context.Background(), nil, nil)
@@ -40,7 +40,7 @@ func TestDataFeedFetcher_FetchGlobal_Disabled(t *testing.T) {
 	mockLogger.EXPECT().WithFields(gomock.Any()).Return(mockLogger).AnyTimes()
 	mockLogger.EXPECT().Debug(gomock.Any()).AnyTimes()
 
-	fetcher := NewDataFeedFetcher(mockLogger)
+	fetcher := NewUnsafeDataFeedFetcher(mockLogger)
 
 	// Test: disabled settings returns nil, nil
 	settings := &domain.GlobalFeedSettings{
@@ -93,7 +93,7 @@ func TestDataFeedFetcher_FetchGlobal_Success(t *testing.T) {
 	}))
 	defer server.Close()
 
-	fetcher := NewDataFeedFetcher(mockLogger)
+	fetcher := NewUnsafeDataFeedFetcher(mockLogger)
 
 	settings := &domain.GlobalFeedSettings{
 		Enabled: true,
@@ -166,7 +166,7 @@ func TestDataFeedFetcher_FetchGlobal_CustomHeaders(t *testing.T) {
 	}))
 	defer server.Close()
 
-	fetcher := NewDataFeedFetcher(mockLogger)
+	fetcher := NewUnsafeDataFeedFetcher(mockLogger)
 
 	settings := &domain.GlobalFeedSettings{
 		Enabled: true,
@@ -211,7 +211,7 @@ func TestDataFeedFetcher_FetchGlobal_Timeout(t *testing.T) {
 	}))
 	defer server.Close()
 
-	fetcher := NewDataFeedFetcher(mockLogger)
+	fetcher := NewUnsafeDataFeedFetcher(mockLogger)
 
 	settings := &domain.GlobalFeedSettings{
 		Enabled: true,
@@ -263,7 +263,7 @@ func TestDataFeedFetcher_FetchGlobal_HTTPErrors(t *testing.T) {
 			}))
 			defer server.Close()
 
-			fetcher := NewDataFeedFetcher(mockLogger)
+			fetcher := NewUnsafeDataFeedFetcher(mockLogger)
 
 			settings := &domain.GlobalFeedSettings{
 				Enabled: true,
@@ -303,7 +303,7 @@ func TestDataFeedFetcher_FetchGlobal_InvalidJSON(t *testing.T) {
 	}))
 	defer server.Close()
 
-	fetcher := NewDataFeedFetcher(mockLogger)
+	fetcher := NewUnsafeDataFeedFetcher(mockLogger)
 
 	settings := &domain.GlobalFeedSettings{
 		Enabled: true,
@@ -341,7 +341,7 @@ func TestDataFeedFetcher_FetchGlobal_EmptyDataResponse(t *testing.T) {
 	}))
 	defer server.Close()
 
-	fetcher := NewDataFeedFetcher(mockLogger)
+	fetcher := NewUnsafeDataFeedFetcher(mockLogger)
 
 	settings := &domain.GlobalFeedSettings{
 		Enabled: true,
@@ -382,7 +382,7 @@ func TestDataFeedFetcher_FetchGlobal_ContextCancelled(t *testing.T) {
 	}))
 	defer server.Close()
 
-	fetcher := NewDataFeedFetcher(mockLogger)
+	fetcher := NewUnsafeDataFeedFetcher(mockLogger)
 
 	settings := &domain.GlobalFeedSettings{
 		Enabled: true,
@@ -426,7 +426,7 @@ func TestDataFeedFetcher_FetchGlobal_NilPayload(t *testing.T) {
 	}))
 	defer server.Close()
 
-	fetcher := NewDataFeedFetcher(mockLogger)
+	fetcher := NewUnsafeDataFeedFetcher(mockLogger)
 
 	settings := &domain.GlobalFeedSettings{
 		Enabled: true,
@@ -448,10 +448,57 @@ func TestNewDataFeedFetcher(t *testing.T) {
 
 	mockLogger := pkgmocks.NewMockLogger(ctrl)
 
-	fetcher := NewDataFeedFetcher(mockLogger)
+	// Both the SSRF-safe (production) and unsafe (opt-in) constructors must
+	// produce a working DataFeedFetcher.
+	safe := NewDataFeedFetcher(mockLogger)
+	assert.NotNil(t, safe)
+	assert.Implements(t, (*DataFeedFetcher)(nil), safe)
 
-	assert.NotNil(t, fetcher)
-	assert.Implements(t, (*DataFeedFetcher)(nil), fetcher)
+	unsafe := NewUnsafeDataFeedFetcher(mockLogger)
+	assert.NotNil(t, unsafe)
+	assert.Implements(t, (*DataFeedFetcher)(nil), unsafe)
+}
+
+// TestDataFeedFetcher_SSRFProtection verifies that the production fetcher
+// (NewDataFeedFetcher) refuses to connect to private/loopback addresses, while
+// the opt-in unsafe fetcher is allowed to reach them. httptest servers always
+// listen on loopback (127.0.0.1), which makes them a convenient private target.
+func TestDataFeedFetcher_SSRFProtection(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockLogger := pkgmocks.NewMockLogger(ctrl)
+	mockLogger.EXPECT().WithFields(gomock.Any()).Return(mockLogger).AnyTimes()
+	mockLogger.EXPECT().Debug(gomock.Any()).AnyTimes()
+	mockLogger.EXPECT().Info(gomock.Any()).AnyTimes()
+	mockLogger.EXPECT().Warn(gomock.Any()).AnyTimes()
+	mockLogger.EXPECT().Error(gomock.Any()).AnyTimes()
+
+	// A loopback server that would leak data if reached.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"secret": "internal-data"})
+	}))
+	defer server.Close()
+
+	settings := &domain.GlobalFeedSettings{Enabled: true, URL: server.URL}
+
+	t.Run("safe fetcher blocks loopback target", func(t *testing.T) {
+		fetcher := NewDataFeedFetcher(mockLogger)
+		result, err := fetcher.FetchGlobal(context.Background(), settings, nil)
+		require.Error(t, err)
+		assert.Nil(t, result)
+		// The dial-time guard rejects private/reserved IPs before any data is read.
+		assert.Contains(t, err.Error(), "private or reserved IP address")
+	})
+
+	t.Run("unsafe fetcher reaches loopback target", func(t *testing.T) {
+		fetcher := NewUnsafeDataFeedFetcher(mockLogger)
+		result, err := fetcher.FetchGlobal(context.Background(), settings, nil)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		assert.Equal(t, "internal-data", result["secret"])
+	})
 }
 
 func TestDataFeedFetcher_FetchGlobal_HardcodedTimeout(t *testing.T) {
@@ -470,7 +517,7 @@ func TestDataFeedFetcher_FetchGlobal_HardcodedTimeout(t *testing.T) {
 	}))
 	defer server.Close()
 
-	fetcher := NewDataFeedFetcher(mockLogger)
+	fetcher := NewUnsafeDataFeedFetcher(mockLogger)
 
 	// Timeout is now hardcoded to 5 seconds
 	settings := &domain.GlobalFeedSettings{
@@ -525,7 +572,7 @@ func TestDataFeedFetcher_FetchGlobal_LargeResponse(t *testing.T) {
 	}))
 	defer server.Close()
 
-	fetcher := NewDataFeedFetcher(mockLogger)
+	fetcher := NewUnsafeDataFeedFetcher(mockLogger)
 
 	settings := &domain.GlobalFeedSettings{
 		Enabled: true,
@@ -560,7 +607,7 @@ func TestDataFeedFetcher_FetchRecipient_Disabled(t *testing.T) {
 	mockLogger.EXPECT().WithFields(gomock.Any()).Return(mockLogger).AnyTimes()
 	mockLogger.EXPECT().Debug(gomock.Any()).AnyTimes()
 
-	fetcher := NewDataFeedFetcher(mockLogger)
+	fetcher := NewUnsafeDataFeedFetcher(mockLogger)
 
 	// Test: disabled settings returns nil, nil
 	settings := &domain.RecipientFeedSettings{
@@ -582,7 +629,7 @@ func TestDataFeedFetcher_FetchRecipient_NilSettings(t *testing.T) {
 	mockLogger.EXPECT().WithFields(gomock.Any()).Return(mockLogger).AnyTimes()
 	mockLogger.EXPECT().Debug(gomock.Any()).AnyTimes()
 
-	fetcher := NewDataFeedFetcher(mockLogger)
+	fetcher := NewUnsafeDataFeedFetcher(mockLogger)
 
 	// Test: nil settings returns nil, nil
 	result, err := fetcher.FetchRecipient(context.Background(), nil, nil)
@@ -630,7 +677,7 @@ func TestDataFeedFetcher_FetchRecipient_Success(t *testing.T) {
 	}))
 	defer server.Close()
 
-	fetcher := NewDataFeedFetcher(mockLogger)
+	fetcher := NewUnsafeDataFeedFetcher(mockLogger)
 
 	settings := &domain.RecipientFeedSettings{
 		Enabled: true,
@@ -721,7 +768,7 @@ func TestDataFeedFetcher_FetchRecipient_Retry(t *testing.T) {
 	}))
 	defer server.Close()
 
-	fetcher := NewDataFeedFetcher(mockLogger)
+	fetcher := NewUnsafeDataFeedFetcher(mockLogger)
 
 	settings := &domain.RecipientFeedSettings{
 		Enabled: true,
@@ -769,7 +816,7 @@ func TestDataFeedFetcher_FetchRecipient_RetryExhausted(t *testing.T) {
 	}))
 	defer server.Close()
 
-	fetcher := NewDataFeedFetcher(mockLogger)
+	fetcher := NewUnsafeDataFeedFetcher(mockLogger)
 
 	settings := &domain.RecipientFeedSettings{
 		Enabled: true,
@@ -817,7 +864,7 @@ func TestDataFeedFetcher_FetchRecipient_NoRetryOn4xx(t *testing.T) {
 	}))
 	defer server.Close()
 
-	fetcher := NewDataFeedFetcher(mockLogger)
+	fetcher := NewUnsafeDataFeedFetcher(mockLogger)
 
 	settings := &domain.RecipientFeedSettings{
 		Enabled: true,
@@ -864,7 +911,7 @@ func TestDataFeedFetcher_FetchRecipient_CustomHeaders(t *testing.T) {
 	}))
 	defer server.Close()
 
-	fetcher := NewDataFeedFetcher(mockLogger)
+	fetcher := NewUnsafeDataFeedFetcher(mockLogger)
 
 	settings := &domain.RecipientFeedSettings{
 		Enabled: true,
@@ -923,7 +970,7 @@ func TestDataFeedFetcher_FetchRecipient_RetryOn408(t *testing.T) {
 	}))
 	defer server.Close()
 
-	fetcher := NewDataFeedFetcher(mockLogger)
+	fetcher := NewUnsafeDataFeedFetcher(mockLogger)
 
 	settings := &domain.RecipientFeedSettings{
 		Enabled: true,
@@ -978,7 +1025,7 @@ func TestDataFeedFetcher_FetchRecipient_RetryOn429(t *testing.T) {
 	}))
 	defer server.Close()
 
-	fetcher := NewDataFeedFetcher(mockLogger)
+	fetcher := NewUnsafeDataFeedFetcher(mockLogger)
 
 	settings := &domain.RecipientFeedSettings{
 		Enabled: true,

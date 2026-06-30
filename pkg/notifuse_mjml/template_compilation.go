@@ -321,6 +321,7 @@ type CompileTemplateResponse struct {
 	Subject        *string     `json:"subject,omitempty"`         // Rendered email subject (Liquid processed); omit if not provided in request
 	SubjectPreview *string     `json:"subject_preview,omitempty"` // Rendered email subject preview (Liquid processed); omit if not provided in request
 	Error          *mjml.Error `json:"error,omitempty"`           // Pointer, omit if nil
+	TemplateData   MapOfAny    `json:"test_data,omitempty"`       // Effective template data used for rendering (includes the injected workspace object); omit if empty
 }
 
 // renderSubjectField applies the same Liquid rules used for the body to a header
@@ -428,7 +429,11 @@ func CompileTemplate(req CompileTemplateRequest) (resp *CompileTemplateResponse,
 
 		tree := req.VisualEditorTree
 
-		// Apply subject_preview override in the tree before conversion
+		// Apply subject_preview override in the tree before conversion.
+		// WARNING: updateBlockContent mutates the caller's tree in place (the mj-preview block).
+		// Callers pass VisualEditorTree by pointer; this is safe only because templates are loaded
+		// fresh per send and compiled sequentially. If a shared template cache is introduced, clone
+		// the tree before concurrent compilation to avoid a data race on the mj-preview block.
 		if req.SubjectPreviewOverride != nil && *req.SubjectPreviewOverride != "" {
 			updateBlockContent(tree, MJMLComponentMjPreview, *req.SubjectPreviewOverride)
 		}

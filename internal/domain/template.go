@@ -144,6 +144,40 @@ func (t *Template) ResolveEmailContent(contactLanguage string, workspaceDefaultL
 	return t.Email
 }
 
+// ResolveSubjectPreviewOverride picks the preview text to inject into the mj-preview block at
+// compile time. An explicit caller-supplied override (e.g. transactional EmailOptions) wins;
+// otherwise it falls back to the resolved email content's own SubjectPreview. This guarantees a
+// translation renders its own inbox preview text even if its stored mj-preview block is stale.
+func ResolveSubjectPreviewOverride(explicit *string, content *EmailTemplate) *string {
+	if explicit != nil && *explicit != "" {
+		return explicit
+	}
+	if content != nil {
+		return content.SubjectPreview
+	}
+	return nil
+}
+
+// ApplyToCompileRequest fills the fields of a send-time compile request that derive from this email
+// variant: the visual editor tree, the code-mode MJML source, and the subject-preview override that
+// makes a translation render its OWN inbox preview text. Every outbound send (broadcast,
+// automation, transactional) must route the resolved email content through here so the preview
+// override travels with the body and cannot be forgotten — a send path that skips this call ends up
+// with no tree/source and fails compilation loudly instead of silently shipping a stale preview.
+// An explicit caller override (e.g. transactional EmailOptions.SubjectPreview) takes precedence over
+// the variant's own SubjectPreview.
+//
+// CONCURRENCY: req.VisualEditorTree shares e's tree by pointer, and CompileTemplate mutates that
+// tree's mj-preview block in place when the override is applied (visual mode only). This is safe
+// today because templates are loaded fresh per send (no shared template cache) and recipients
+// compile sequentially. If a shared template cache is ever introduced, clone the tree before
+// compiling concurrently — otherwise concurrent sends would race on the same mj-preview block.
+func (e *EmailTemplate) ApplyToCompileRequest(req *CompileTemplateRequest, explicitPreviewOverride *string) {
+	req.VisualEditorTree = e.VisualEditorTree
+	req.MjmlSource = e.GetCodeModeMjmlSource()
+	req.SubjectPreviewOverride = ResolveSubjectPreviewOverride(explicitPreviewOverride, e)
+}
+
 // ResolveWebContent returns the WebTemplate for the given contact language.
 // Falls back to the default template content if no translation exists.
 func (t *Template) ResolveWebContent(contactLanguage string, workspaceDefaultLanguage string) *WebTemplate {
@@ -930,9 +964,13 @@ func BuildTemplateData(req TemplateDataRequest) (MapOfAny, error) {
 			req.TrackingSettings.Endpoint, unsubscribeParams.Encode())
 		templateData["unsubscribe_url"] = unsubscribeURL
 
-		// Build oneclick unsubscribe URL query params
+		// Build oneclick unsubscribe URL query params.
+		// email_hmac is required: the public /unsubscribe-oneclick endpoint has no
+		// bearer token, so ListService.UnsubscribeFromLists authenticates the request
+		// by verifying this HMAC against the workspace secret key (RFC 8058 one-click).
 		oneclickParams := url.Values{}
 		oneclickParams.Set("email", req.ContactWithList.Contact.Email)
+		oneclickParams.Set("email_hmac", emailHMAC)
 		oneclickParams.Set("lids", req.ContactWithList.ListID)
 		oneclickParams.Set("wid", req.WorkspaceID)
 		oneclickParams.Set("mid", req.MessageID)
@@ -961,16 +999,12 @@ func BuildTemplateData(req TemplateDataRequest) (MapOfAny, error) {
 		templateData["global_feed"] = req.Broadcast.DataFeed.GlobalFeedData
 	}
 
-	// Expose workspace URLs for composing links from relative paths. Trailing slashes are
-	// trimmed so templates can write "{{ workspace.base_url }}/path".
+	// Expose workspace URLs for composing links from relative paths.
 	//   - base_url: the tracking endpoint (resolved CustomEndpointURL, or API endpoint fallback),
 	//     used for unsubscribe/tracking/notification-center links on the Notifuse domain.
 	//   - website_url: the workspace's public Website URL, for composing application links
 	//     (e.g. "{{ workspace.website_url }}/users/verify/xxx").
-	templateData["workspace"] = MapOfAny{
-		"base_url":    strings.TrimRight(req.TrackingSettings.Endpoint, "/"),
-		"website_url": strings.TrimRight(req.WorkspaceWebsiteURL, "/"),
-	}
+	templateData["workspace"] = BuildWorkspaceTemplateVars(req.TrackingSettings.Endpoint, req.WorkspaceWebsiteURL)
 
 	// Add tracking data
 	templateData["message_id"] = req.MessageID
@@ -989,4 +1023,16 @@ func BuildTemplateData(req TemplateDataRequest) (MapOfAny, error) {
 	templateData["tracking_opens_url"] = trackingPixelURL
 
 	return templateData, nil
+}
+
+// BuildWorkspaceTemplateVars builds the `workspace` template object exposing the
+// base URL and website URL for composing links from relative paths. Trailing
+// slashes are trimmed so templates can write "{{ workspace.base_url }}/path".
+// Shared by BuildTemplateData (send time) and the template compile/preview path
+// so both render identical values.
+func BuildWorkspaceTemplateVars(baseURL, websiteURL string) MapOfAny {
+	return MapOfAny{
+		"base_url":    strings.TrimRight(baseURL, "/"),
+		"website_url": strings.TrimRight(websiteURL, "/"),
+	}
 }

@@ -328,8 +328,9 @@ func TestNewInboundWebhookEventService(t *testing.T) {
 	workspaceRepo := mocks.NewMockWorkspaceRepository(ctrl)
 	contactRepo := mocks.NewMockContactRepository(ctrl)
 	messageHistoryRepo := mocks.NewMockMessageHistoryRepository(ctrl)
+	automationRepo := mocks.NewMockAutomationRepository(ctrl)
 
-	service := NewInboundWebhookEventService(repo, authService, log, workspaceRepo, messageHistoryRepo, contactRepo)
+	service := NewInboundWebhookEventService(repo, authService, log, workspaceRepo, messageHistoryRepo, contactRepo, automationRepo)
 
 	assert.NotNil(t, service)
 	assert.Equal(t, repo, service.repo)

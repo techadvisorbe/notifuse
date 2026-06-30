@@ -39,6 +39,9 @@ export interface ContactsSearch {
 
 export interface SignInSearch {
   email?: string
+  // OIDC failure flag (non-secret enum). The success one-time code arrives in the
+  // URL fragment (#oidc_code=…), which is NOT a search param, so it is not listed here.
+  oidc_error?: string
 }
 
 export interface AcceptInvitationSearch {
@@ -52,6 +55,11 @@ export interface BlogSearch {
 
 export interface FileManagerSearch {
   path?: string
+}
+
+export interface BroadcastsSearch {
+  status?: string
+  q?: string
 }
 
 // Create the root route
@@ -72,7 +80,8 @@ const signinRoute = createRoute({
   path: '/console/signin',
   component: SignInPage,
   validateSearch: (search: Record<string, unknown>): SignInSearch => ({
-    email: search.email as string | undefined
+    email: search.email as string | undefined,
+    oidc_error: typeof search.oidc_error === 'string' ? search.oidc_error : undefined
   })
 })
 
@@ -125,7 +134,19 @@ const workspaceIndexRoute = createRoute({
 const workspaceBroadcastsRoute = createRoute({
   getParentRoute: () => workspaceRoute,
   path: '/broadcasts',
-  component: BroadcastsPage
+  component: BroadcastsPage,
+  validateSearch: (search: Record<string, unknown>): BroadcastsSearch => {
+    // Repeated query keys (?status=a&status=b) parse to arrays; coerce to a
+    // single value, trim, and drop empties so the page always sees a clean
+    // string or undefined.
+    const normalize = (value: unknown): string | undefined => {
+      const single = Array.isArray(value) ? value[0] : value
+      if (typeof single !== 'string') return undefined
+      const trimmed = single.trim()
+      return trimmed === '' ? undefined : trimmed
+    }
+    return { status: normalize(search.status), q: normalize(search.q) }
+  }
 })
 
 const workspaceAutomationsRoute = createRoute({

@@ -135,6 +135,7 @@ func TestMessageHistoryRepository_Create(t *testing.T) {
 				message.UnsubscribedAt,
 				message.CreatedAt,
 				message.UpdatedAt,
+				message.SMTPMessageID,
 			).
 			WillReturnResult(sqlmock.NewResult(1, 1))
 
@@ -183,6 +184,7 @@ func TestMessageHistoryRepository_Create(t *testing.T) {
 				message.UnsubscribedAt,
 				message.CreatedAt,
 				message.UpdatedAt,
+				message.SMTPMessageID,
 			).
 			WillReturnError(errors.New("execution error"))
 

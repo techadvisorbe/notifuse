@@ -755,6 +755,10 @@ func TestMailgunService_SendEmail(t *testing.T) {
 				assert.Contains(t, formData, "to="+url.QueryEscape(to))
 				assert.Contains(t, formData, "subject="+url.QueryEscape(subject))
 				assert.Contains(t, formData, "html="+url.QueryEscape(content))
+				// h:Message-Id is the anchor for reply matching: the recipient-visible
+				// Message-ID must equal the value the worker stores as smtp_message_id, so a
+				// reply's In-Reply-To resolves. Removing it silently breaks stop-on-reply.
+				assert.Contains(t, formData, "h%3AMessage-Id="+url.QueryEscape(domain.BuildRFCMessageID("test-message-id", fromAddress)))
 
 				return resp, nil
 			})
@@ -994,6 +998,10 @@ func TestMailgunService_SendEmail(t *testing.T) {
 				// Check for attachment
 				assert.Contains(t, bodyStr, "filename=\"invoice.pdf\"")
 				assert.Contains(t, bodyStr, string(pdfContent))
+
+				// h:Message-Id must be set on the multipart path too (reply matching anchor).
+				assert.Contains(t, bodyStr, `name="h:Message-Id"`)
+				assert.Contains(t, bodyStr, domain.BuildRFCMessageID("test-message-id", fromAddress))
 
 				return resp, nil
 			})
@@ -1773,5 +1781,150 @@ func TestMailgunService_UnregisterWebhooks_Coexistence(t *testing.T) {
 		require.NoError(t, err)
 		assert.Empty(t, cap.deletes)
 		assert.Empty(t, cap.puts)
+	})
+}
+
+func TestMailgunService_EnsureInboundRoute(t *testing.T) {
+	ctx := context.Background()
+	const inboundURL = "https://api.notifuse.test/webhooks/email/inbound?workspace_id=ws1&integration_id=int1"
+	newProvider := func() *domain.EmailProvider {
+		return &domain.EmailProvider{Mailgun: &domain.MailgunSettings{Domain: "example.com", APIKey: "key", Region: "US"}}
+	}
+	ok := func(body string) *http.Response {
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body))}
+	}
+
+	t.Run("creates route when none forwards to the inbound URL", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		svc, httpClient := newMailgunTestService(ctrl)
+
+		var postURL string
+		var posted url.Values
+		httpClient.EXPECT().Do(gomock.Any()).DoAndReturn(func(req *http.Request) (*http.Response, error) {
+			switch req.Method {
+			case http.MethodGet:
+				// An existing route that forwards elsewhere — must not be treated as ours.
+				return ok(`{"total_count":1,"items":[{"id":"r1","actions":["forward(\"https://other/inbound\")","stop()"]}]}`), nil
+			case http.MethodPost:
+				postURL = req.URL.String()
+				b, _ := io.ReadAll(req.Body)
+				posted, _ = url.ParseQuery(string(b))
+				return ok(`{"message":"Route has been created","route":{}}`), nil
+			default:
+				return ok(``), nil
+			}
+		}).AnyTimes()
+
+		err := svc.EnsureInboundRoute(ctx, newProvider(), inboundURL)
+		require.NoError(t, err)
+		require.NotNil(t, posted, "a route should have been created")
+		assert.Contains(t, postURL, "/routes")
+		// Domain regex-escaped + anchored, matching any local part at the domain.
+		assert.Equal(t, `match_recipient("^.*@example\.com$")`, posted.Get("expression"))
+		assert.Equal(t, fmt.Sprintf("forward(%q)", inboundURL), posted["action"][0])
+		// Non-preemptive: no stop() so operator routes on the shared domain still fire,
+		// and a non-zero priority so a top-priority operator route precedes us.
+		assert.NotContains(t, posted["action"], "stop()", "route must not stop() the Mailgun route waterfall")
+		assert.Equal(t, "10", posted.Get("priority"))
+	})
+
+	t.Run("EU region targets the EU API base", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		svc, httpClient := newMailgunTestService(ctrl)
+
+		var gotHost string
+		httpClient.EXPECT().Do(gomock.Any()).DoAndReturn(func(req *http.Request) (*http.Response, error) {
+			gotHost = req.URL.Host
+			if req.Method == http.MethodGet {
+				return ok(`{"total_count":0,"items":[]}`), nil
+			}
+			return ok(`{"message":"Route has been created"}`), nil
+		}).AnyTimes()
+
+		eu := &domain.EmailProvider{Mailgun: &domain.MailgunSettings{Domain: "example.com", APIKey: "key", Region: "EU"}}
+		err := svc.EnsureInboundRoute(ctx, eu, inboundURL)
+		require.NoError(t, err)
+		assert.Equal(t, "api.eu.mailgun.net", gotHost)
+	})
+
+	t.Run("paginates routes and finds an existing route on a later page (no duplicate POST)", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		svc, httpClient := newMailgunTestService(ctrl)
+
+		// Build a first full page (mailgunRoutesPageSize routes that forward elsewhere)
+		// and a second page that contains OUR route — listRoutes must page to find it.
+		var firstPage strings.Builder
+		firstPage.WriteString(`{"total_count":1001,"items":[`)
+		for i := 0; i < mailgunRoutesPageSize; i++ {
+			if i > 0 {
+				firstPage.WriteString(",")
+			}
+			firstPage.WriteString(`{"id":"r","actions":["forward(\"https://other/x\")"]}`)
+		}
+		firstPage.WriteString(`]}`)
+		secondPage := fmt.Sprintf(`{"total_count":1001,"items":[{"id":"ours","actions":[%q]}]}`, fmt.Sprintf("forward(%q)", inboundURL))
+
+		gets, posts := 0, 0
+		httpClient.EXPECT().Do(gomock.Any()).DoAndReturn(func(req *http.Request) (*http.Response, error) {
+			if req.Method == http.MethodPost {
+				posts++
+				return ok(`{"message":"created"}`), nil
+			}
+			gets++
+			if gets == 1 {
+				return ok(firstPage.String()), nil
+			}
+			return ok(secondPage), nil
+		}).AnyTimes()
+
+		err := svc.EnsureInboundRoute(ctx, newProvider(), inboundURL)
+		require.NoError(t, err)
+		assert.GreaterOrEqual(t, gets, 2, "must request the second page")
+		assert.Equal(t, 0, posts, "existing route on page 2 must be found — no duplicate created")
+	})
+
+	t.Run("no-op when a route already forwards to the inbound URL", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		svc, httpClient := newMailgunTestService(ctrl)
+
+		posts := 0
+		listBody := fmt.Sprintf(`{"total_count":1,"items":[{"id":"r1","actions":[%q,"stop()"]}]}`, fmt.Sprintf("forward(%q)", inboundURL))
+		httpClient.EXPECT().Do(gomock.Any()).DoAndReturn(func(req *http.Request) (*http.Response, error) {
+			if req.Method == http.MethodPost {
+				posts++
+			}
+			if req.Method == http.MethodGet {
+				return ok(listBody), nil
+			}
+			return ok(``), nil
+		}).AnyTimes()
+
+		err := svc.EnsureInboundRoute(ctx, newProvider(), inboundURL)
+		require.NoError(t, err)
+		assert.Equal(t, 0, posts, "must not create a route when one already forwards to the inbound URL")
+	})
+
+	t.Run("invalid config errors", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		svc, _ := newMailgunTestService(ctrl)
+		err := svc.EnsureInboundRoute(ctx, &domain.EmailProvider{Mailgun: &domain.MailgunSettings{}}, inboundURL)
+		require.Error(t, err)
+	})
+
+	t.Run("routes list failure propagates", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		svc, httpClient := newMailgunTestService(ctrl)
+		httpClient.EXPECT().Do(gomock.Any()).DoAndReturn(func(_ *http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: http.StatusInternalServerError, Body: io.NopCloser(strings.NewReader(`error`))}, nil
+		}).AnyTimes()
+
+		err := svc.EnsureInboundRoute(ctx, newProvider(), inboundURL)
+		require.Error(t, err)
 	})
 }

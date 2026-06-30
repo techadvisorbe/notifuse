@@ -26,6 +26,9 @@ func TestBroadcastDataFeedEmailRendering(t *testing.T) {
 	defer testutil.CleanupTestEnvironment()
 
 	suite := testutil.NewIntegrationTestSuite(t, func(cfg *config.Config) testutil.AppInterface {
+		// Allow loopback test servers: these tests exercise the data-feed feature
+		// against httptest servers, which bind to 127.0.0.1.
+		cfg.Broadcast.AllowPrivateDataFeedHosts = true
 		return app.NewApp(cfg)
 	})
 	defer suite.Cleanup()
@@ -375,6 +378,9 @@ func TestRecipientFeedEmailRendering(t *testing.T) {
 	defer testutil.CleanupTestEnvironment()
 
 	suite := testutil.NewIntegrationTestSuite(t, func(cfg *config.Config) testutil.AppInterface {
+		// Allow loopback test servers: these tests exercise the data-feed feature
+		// against httptest servers, which bind to 127.0.0.1.
+		cfg.Broadcast.AllowPrivateDataFeedHosts = true
 		return app.NewApp(cfg)
 	})
 	defer suite.Cleanup()

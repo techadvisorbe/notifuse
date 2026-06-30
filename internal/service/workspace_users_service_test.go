@@ -66,11 +66,7 @@ func TestWorkspaceService_AddUserToWorkspace(t *testing.T) {
 		// Set up mock expectations
 		mockAuthSvc.EXPECT().
 			AuthenticateUserForWorkspace(ctx, workspaceID).
-			Return(ctx, &domain.User{ID: requesterID}, nil, nil)
-
-		mockRepo.EXPECT().
-			GetUserWorkspace(ctx, requesterID, workspaceID).
-			Return(&domain.UserWorkspace{
+			Return(ctx, &domain.User{ID: requesterID}, &domain.UserWorkspace{
 				UserID:      requesterID,
 				WorkspaceID: workspaceID,
 				Role:        "owner",
@@ -95,13 +91,12 @@ func TestWorkspaceService_AddUserToWorkspace(t *testing.T) {
 	})
 
 	t.Run("requester_not_found_in_workspace", func(t *testing.T) {
+		// Access (and the requester's membership) is now proven entirely by
+		// AuthenticateUserForWorkspace; a requester that is not a member of the
+		// workspace surfaces as an authentication error here.
 		mockAuthSvc.EXPECT().
 			AuthenticateUserForWorkspace(ctx, workspaceID).
-			Return(ctx, &domain.User{ID: requesterID}, nil, nil)
-
-		mockRepo.EXPECT().
-			GetUserWorkspace(ctx, requesterID, workspaceID).
-			Return(nil, fmt.Errorf("user workspace not found"))
+			Return(ctx, nil, nil, fmt.Errorf("user workspace not found"))
 
 		err := service.AddUserToWorkspace(ctx, workspaceID, userID, "member", domain.UserPermissions{})
 		require.Error(t, err)
@@ -111,11 +106,7 @@ func TestWorkspaceService_AddUserToWorkspace(t *testing.T) {
 	t.Run("requester_not_an_owner", func(t *testing.T) {
 		mockAuthSvc.EXPECT().
 			AuthenticateUserForWorkspace(ctx, workspaceID).
-			Return(ctx, &domain.User{ID: requesterID}, nil, nil)
-
-		mockRepo.EXPECT().
-			GetUserWorkspace(ctx, requesterID, workspaceID).
-			Return(&domain.UserWorkspace{
+			Return(ctx, &domain.User{ID: requesterID}, &domain.UserWorkspace{
 				UserID:      requesterID,
 				WorkspaceID: workspaceID,
 				Role:        "member",
@@ -129,11 +120,7 @@ func TestWorkspaceService_AddUserToWorkspace(t *testing.T) {
 	t.Run("invalid_role", func(t *testing.T) {
 		mockAuthSvc.EXPECT().
 			AuthenticateUserForWorkspace(ctx, workspaceID).
-			Return(ctx, &domain.User{ID: requesterID}, nil, nil)
-
-		mockRepo.EXPECT().
-			GetUserWorkspace(ctx, requesterID, workspaceID).
-			Return(&domain.UserWorkspace{
+			Return(ctx, &domain.User{ID: requesterID}, &domain.UserWorkspace{
 				UserID:      requesterID,
 				WorkspaceID: workspaceID,
 				Role:        "owner",
@@ -195,11 +182,7 @@ func TestWorkspaceService_RemoveUserFromWorkspace(t *testing.T) {
 		// Set up mock expectations
 		mockAuthSvc.EXPECT().
 			AuthenticateUserForWorkspace(ctx, workspaceID).
-			Return(ctx, &domain.User{ID: requesterID}, nil, nil)
-
-		mockRepo.EXPECT().
-			GetUserWorkspace(ctx, requesterID, workspaceID).
-			Return(&domain.UserWorkspace{
+			Return(ctx, &domain.User{ID: requesterID}, &domain.UserWorkspace{
 				UserID:      requesterID,
 				WorkspaceID: workspaceID,
 				Role:        "owner",
@@ -224,13 +207,11 @@ func TestWorkspaceService_RemoveUserFromWorkspace(t *testing.T) {
 	})
 
 	t.Run("requester_not_found_in_workspace", func(t *testing.T) {
+		// The requester's membership is now proven entirely by
+		// AuthenticateUserForWorkspace; a non-member surfaces as an auth error here.
 		mockAuthSvc.EXPECT().
 			AuthenticateUserForWorkspace(ctx, workspaceID).
-			Return(ctx, &domain.User{ID: requesterID}, nil, nil)
-
-		mockRepo.EXPECT().
-			GetUserWorkspace(ctx, requesterID, workspaceID).
-			Return(nil, fmt.Errorf("user is not a member of the workspace"))
+			Return(ctx, nil, nil, fmt.Errorf("user is not a member of the workspace"))
 
 		err := service.RemoveUserFromWorkspace(ctx, workspaceID, userID)
 		require.Error(t, err)
@@ -240,11 +221,7 @@ func TestWorkspaceService_RemoveUserFromWorkspace(t *testing.T) {
 	t.Run("requester_not_an_owner", func(t *testing.T) {
 		mockAuthSvc.EXPECT().
 			AuthenticateUserForWorkspace(ctx, workspaceID).
-			Return(ctx, &domain.User{ID: requesterID}, nil, nil)
-
-		mockRepo.EXPECT().
-			GetUserWorkspace(ctx, requesterID, workspaceID).
-			Return(&domain.UserWorkspace{
+			Return(ctx, &domain.User{ID: requesterID}, &domain.UserWorkspace{
 				UserID:      requesterID,
 				WorkspaceID: workspaceID,
 				Role:        "member",
@@ -258,11 +235,7 @@ func TestWorkspaceService_RemoveUserFromWorkspace(t *testing.T) {
 	t.Run("target_user_not_found", func(t *testing.T) {
 		mockAuthSvc.EXPECT().
 			AuthenticateUserForWorkspace(ctx, workspaceID).
-			Return(ctx, &domain.User{ID: requesterID}, nil, nil)
-
-		mockRepo.EXPECT().
-			GetUserWorkspace(ctx, requesterID, workspaceID).
-			Return(&domain.UserWorkspace{
+			Return(ctx, &domain.User{ID: requesterID}, &domain.UserWorkspace{
 				UserID:      requesterID,
 				WorkspaceID: workspaceID,
 				Role:        "owner",
@@ -280,11 +253,7 @@ func TestWorkspaceService_RemoveUserFromWorkspace(t *testing.T) {
 	t.Run("cannot_remove_owner", func(t *testing.T) {
 		mockAuthSvc.EXPECT().
 			AuthenticateUserForWorkspace(ctx, workspaceID).
-			Return(ctx, &domain.User{ID: requesterID}, nil, nil)
-
-		mockRepo.EXPECT().
-			GetUserWorkspace(ctx, requesterID, workspaceID).
-			Return(&domain.UserWorkspace{
+			Return(ctx, &domain.User{ID: requesterID}, &domain.UserWorkspace{
 				UserID:      requesterID,
 				WorkspaceID: workspaceID,
 				Role:        "owner",
@@ -298,11 +267,7 @@ func TestWorkspaceService_RemoveUserFromWorkspace(t *testing.T) {
 	t.Run("cannot remove self", func(t *testing.T) {
 		mockAuthSvc.EXPECT().
 			AuthenticateUserForWorkspace(ctx, workspaceID).
-			Return(ctx, &domain.User{ID: requesterID}, nil, nil)
-
-		mockRepo.EXPECT().
-			GetUserWorkspace(ctx, requesterID, workspaceID).
-			Return(&domain.UserWorkspace{
+			Return(ctx, &domain.User{ID: requesterID}, &domain.UserWorkspace{
 				UserID:      requesterID,
 				WorkspaceID: workspaceID,
 				Role:        "owner",
@@ -579,14 +544,6 @@ func TestWorkspaceService_GetWorkspaceMembersWithEmail(t *testing.T) {
 			Return(ctx, expectedUser, nil, nil)
 
 		mockRepo.EXPECT().
-			GetUserWorkspace(ctx, userID, workspaceID).
-			Return(&domain.UserWorkspace{
-				UserID:      userID,
-				WorkspaceID: workspaceID,
-				Role:        "owner",
-			}, nil)
-
-		mockRepo.EXPECT().
 			GetWorkspaceUsersWithEmail(ctx, workspaceID).
 			Return(expectedMembers, nil)
 
@@ -614,14 +571,6 @@ func TestWorkspaceService_GetWorkspaceMembersWithEmail(t *testing.T) {
 		mockAuthSvc.EXPECT().
 			AuthenticateUserForWorkspace(ctx, workspaceID).
 			Return(ctx, expectedUser, nil, nil)
-
-		mockRepo.EXPECT().
-			GetUserWorkspace(ctx, userID, workspaceID).
-			Return(&domain.UserWorkspace{
-				UserID:      userID,
-				WorkspaceID: workspaceID,
-				Role:        "owner",
-			}, nil)
 
 		mockRepo.EXPECT().
 			GetWorkspaceUsersWithEmail(ctx, workspaceID).
@@ -700,10 +649,6 @@ func TestWorkspaceService_InviteMember(t *testing.T) {
 				Name: "Test Workspace",
 			}, nil)
 
-		mockRepo.EXPECT().
-			IsUserWorkspaceMember(ctx, inviterID, workspaceID).
-			Return(true, nil)
-
 		mockUserSvc.EXPECT().
 			GetUserByID(ctx, inviterID).
 			Return(&domain.User{
@@ -774,10 +719,6 @@ func TestWorkspaceService_InviteMember(t *testing.T) {
 				ID:   workspaceID,
 				Name: "Test Workspace",
 			}, nil)
-
-		mockRepo.EXPECT().
-			IsUserWorkspaceMember(ctx, inviterID, workspaceID).
-			Return(true, nil)
 
 		mockUserSvc.EXPECT().
 			GetUserByID(ctx, inviterID).
@@ -852,26 +793,18 @@ func TestWorkspaceService_InviteMember(t *testing.T) {
 	})
 
 	t.Run("inviter not a member", func(t *testing.T) {
+		// The inviter's access (and membership) is now proven entirely by
+		// AuthenticateUserForWorkspace; a non-member inviter is rejected there with the
+		// real sentinel error, which InviteMember wraps as "failed to authenticate user".
 		mockAuthSvc.EXPECT().
 			AuthenticateUserForWorkspace(ctx, workspaceID).
-			Return(ctx, &domain.User{ID: inviterID}, nil, nil)
-
-		mockRepo.EXPECT().
-			GetByID(ctx, workspaceID).
-			Return(&domain.Workspace{
-				ID:   workspaceID,
-				Name: "Test Workspace",
-			}, nil)
-
-		mockRepo.EXPECT().
-			IsUserWorkspaceMember(ctx, inviterID, workspaceID).
-			Return(false, nil)
+			Return(ctx, nil, nil, domain.ErrUserNotInWorkspace)
 
 		invitation, token, err := service.InviteMember(ctx, workspaceID, email, domain.UserPermissions{})
 		require.Error(t, err)
 		assert.Nil(t, invitation)
 		assert.Empty(t, token)
-		assert.Contains(t, err.Error(), "inviter is not a member of the workspace")
+		assert.Contains(t, err.Error(), "failed to authenticate user")
 	})
 
 	t.Run("user already a member", func(t *testing.T) {
@@ -890,10 +823,6 @@ func TestWorkspaceService_InviteMember(t *testing.T) {
 				ID:   workspaceID,
 				Name: "Test Workspace",
 			}, nil)
-
-		mockRepo.EXPECT().
-			IsUserWorkspaceMember(ctx, inviterID, workspaceID).
-			Return(true, nil)
 
 		mockUserSvc.EXPECT().
 			GetUserByID(ctx, inviterID).
@@ -980,11 +909,7 @@ func TestWorkspaceService_CreateAPIKey(t *testing.T) {
 		// Set up mock expectations
 		mockAuthSvc.EXPECT().
 			AuthenticateUserForWorkspace(ctx, workspaceID).
-			Return(ctx, &domain.User{ID: userID}, nil, nil)
-
-		mockRepo.EXPECT().
-			GetUserWorkspace(ctx, userID, workspaceID).
-			Return(&domain.UserWorkspace{
+			Return(ctx, &domain.User{ID: userID}, &domain.UserWorkspace{
 				UserID:      userID,
 				WorkspaceID: workspaceID,
 				Role:        "owner",
@@ -1088,11 +1013,7 @@ func TestWorkspaceService_CreateAPIKey(t *testing.T) {
 
 		mockAuthSvc.EXPECT().
 			AuthenticateUserForWorkspace(ctx, workspaceID).
-			Return(ctx, &domain.User{ID: userID}, nil, nil)
-
-		mockRepo.EXPECT().
-			GetUserWorkspace(ctx, userID, workspaceID).
-			Return(&domain.UserWorkspace{
+			Return(ctx, &domain.User{ID: userID}, &domain.UserWorkspace{
 				UserID:      userID,
 				WorkspaceID: workspaceID,
 				Role:        "member", // Not an owner
@@ -1136,11 +1057,7 @@ func TestWorkspaceService_CreateAPIKey(t *testing.T) {
 
 		mockAuthSvc.EXPECT().
 			AuthenticateUserForWorkspace(ctx, workspaceID).
-			Return(ctx, &domain.User{ID: userID}, nil, nil)
-
-		mockRepo.EXPECT().
-			GetUserWorkspace(ctx, userID, workspaceID).
-			Return(&domain.UserWorkspace{
+			Return(ctx, &domain.User{ID: userID}, &domain.UserWorkspace{
 				UserID:      userID,
 				WorkspaceID: workspaceID,
 				Role:        "owner",
@@ -1188,11 +1105,7 @@ func TestWorkspaceService_CreateAPIKey(t *testing.T) {
 
 		mockAuthSvc.EXPECT().
 			AuthenticateUserForWorkspace(ctx, workspaceID).
-			Return(ctx, &domain.User{ID: userID}, nil, nil)
-
-		mockRepo.EXPECT().
-			GetUserWorkspace(ctx, userID, workspaceID).
-			Return(&domain.UserWorkspace{
+			Return(ctx, &domain.User{ID: userID}, &domain.UserWorkspace{
 				UserID:      userID,
 				WorkspaceID: workspaceID,
 				Role:        "owner",
@@ -1212,4 +1125,118 @@ func TestWorkspaceService_CreateAPIKey(t *testing.T) {
 		assert.Equal(t, "", email)
 		assert.Equal(t, "add to workspace failed", err.Error())
 	})
+}
+
+// TestWorkspaceService_GetWorkspaceMembersWithEmail_PlatformAdmins verifies that
+// ROOT_EMAIL platform admins are surfaced as virtual owner entries in the members
+// list when they are not already real members, are skipped when already present,
+// and are skipped when their user account is not provisioned yet.
+func TestWorkspaceService_GetWorkspaceMembersWithEmail_PlatformAdmins(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockRepo := mocks.NewMockWorkspaceRepository(ctrl)
+	mockUserRepo := mocks.NewMockUserRepository(ctrl)
+	mockLogger := pkgmocks.NewMockLogger(ctrl)
+	mockUserSvc := mocks.NewMockUserServiceInterface(ctrl)
+	mockAuthSvc := mocks.NewMockAuthService(ctrl)
+	mockMailer := pkgmocks.NewMockMailer(ctrl)
+	cfg := &config.Config{RootEmail: "root@example.com"}
+
+	service := NewWorkspaceService(
+		mockRepo, mockUserRepo, mocks.NewMockTaskRepository(ctrl), mockLogger,
+		mockUserSvc, mockAuthSvc, mockMailer, cfg,
+		mocks.NewMockContactService(ctrl), mocks.NewMockListService(ctrl),
+		mocks.NewMockContactListService(ctrl), mocks.NewMockTemplateService(ctrl),
+		mocks.NewMockWebhookRegistrationService(ctrl), "secret_key",
+		&SupabaseService{}, &DNSVerificationService{}, &BlogService{},
+	)
+
+	ctx := context.Background()
+	workspaceID := "ws1"
+	mockLogger.EXPECT().WithField(gomock.Any(), gomock.Any()).Return(mockLogger).AnyTimes()
+	mockLogger.EXPECT().Error(gomock.Any()).AnyTimes()
+	mockRepo.EXPECT().GetWorkspaceInvitations(ctx, workspaceID).Return([]*domain.WorkspaceInvitation{}, nil).AnyTimes()
+	mockAuthSvc.EXPECT().AuthenticateUserForWorkspace(ctx, workspaceID).
+		Return(ctx, &domain.User{ID: "req"}, &domain.UserWorkspace{Role: "owner"}, nil).AnyTimes()
+
+	t.Run("root not already a member is appended as a virtual owner", func(t *testing.T) {
+		realMembers := []*domain.UserWorkspaceWithEmail{
+			{UserWorkspace: domain.UserWorkspace{UserID: "u1", WorkspaceID: workspaceID, Role: "member"}, Email: "member@example.com"},
+		}
+		mockRepo.EXPECT().GetWorkspaceUsersWithEmail(ctx, workspaceID).Return(realMembers, nil)
+		mockUserSvc.EXPECT().GetUserByEmail(ctx, "root@example.com").
+			Return(&domain.User{ID: "root-id", Email: "root@example.com"}, nil)
+
+		members, err := service.GetWorkspaceMembersWithEmail(ctx, workspaceID)
+		require.NoError(t, err)
+		require.Len(t, members, 2)
+		virtual := members[len(members)-1]
+		assert.Equal(t, "root@example.com", virtual.Email)
+		assert.Equal(t, "owner", virtual.Role)
+		assert.Equal(t, "root-id", virtual.UserID)
+		assert.Equal(t, domain.FullPermissions, virtual.Permissions)
+	})
+
+	t.Run("root already a member is not duplicated", func(t *testing.T) {
+		realMembers := []*domain.UserWorkspaceWithEmail{
+			{UserWorkspace: domain.UserWorkspace{UserID: "root-id", WorkspaceID: workspaceID, Role: "owner"}, Email: "root@example.com"},
+		}
+		mockRepo.EXPECT().GetWorkspaceUsersWithEmail(ctx, workspaceID).Return(realMembers, nil)
+		// No GetUserByEmail expected — root is already present.
+
+		members, err := service.GetWorkspaceMembersWithEmail(ctx, workspaceID)
+		require.NoError(t, err)
+		require.Len(t, members, 1)
+	})
+
+	t.Run("root with no provisioned account is skipped", func(t *testing.T) {
+		realMembers := []*domain.UserWorkspaceWithEmail{
+			{UserWorkspace: domain.UserWorkspace{UserID: "u1", WorkspaceID: workspaceID, Role: "member"}, Email: "member@example.com"},
+		}
+		mockRepo.EXPECT().GetWorkspaceUsersWithEmail(ctx, workspaceID).Return(realMembers, nil)
+		mockUserSvc.EXPECT().GetUserByEmail(ctx, "root@example.com").
+			Return(nil, &domain.ErrUserNotFound{Message: "not found"})
+
+		members, err := service.GetWorkspaceMembersWithEmail(ctx, workspaceID)
+		require.NoError(t, err)
+		require.Len(t, members, 1)
+	})
+}
+
+// TestWorkspaceService_InviteMember_RejectsRootEmail verifies the defense-in-depth guard:
+// a configured ROOT_EMAIL cannot be invited (it already has god-mode access, and rejecting it
+// closes a theoretical path to provisioning a root identity via invitation acceptance).
+func TestWorkspaceService_InviteMember_RejectsRootEmail(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockRepo := mocks.NewMockWorkspaceRepository(ctrl)
+	mockLogger := pkgmocks.NewMockLogger(ctrl)
+	mockAuthSvc := mocks.NewMockAuthService(ctrl)
+	cfg := &config.Config{RootEmail: "root@example.com"}
+
+	service := NewWorkspaceService(
+		mockRepo, mocks.NewMockUserRepository(ctrl), mocks.NewMockTaskRepository(ctrl), mockLogger,
+		mocks.NewMockUserServiceInterface(ctrl), mockAuthSvc, pkgmocks.NewMockMailer(ctrl), cfg,
+		mocks.NewMockContactService(ctrl), mocks.NewMockListService(ctrl),
+		mocks.NewMockContactListService(ctrl), mocks.NewMockTemplateService(ctrl),
+		mocks.NewMockWebhookRegistrationService(ctrl), "secret_key",
+		&SupabaseService{}, &DNSVerificationService{}, &BlogService{},
+	)
+
+	ctx := context.Background()
+	workspaceID := "ws1"
+	mockLogger.EXPECT().WithField(gomock.Any(), gomock.Any()).Return(mockLogger).AnyTimes()
+	mockLogger.EXPECT().Error(gomock.Any()).AnyTimes()
+
+	// Requester passes the workspace auth gate as an owner.
+	mockAuthSvc.EXPECT().AuthenticateUserForWorkspace(ctx, workspaceID).
+		Return(ctx, &domain.User{ID: "req"}, &domain.UserWorkspace{Role: "owner"}, nil)
+
+	invitation, token, err := service.InviteMember(ctx, workspaceID, "root@example.com", domain.UserPermissions{})
+	require.Error(t, err)
+	assert.Nil(t, invitation)
+	assert.Empty(t, token)
+	assert.Contains(t, err.Error(), "platform admin")
 }

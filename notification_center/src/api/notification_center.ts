@@ -156,5 +156,5 @@ export interface UnsubscribeResponse {
 export async function unsubscribeOneClick(
   request: UnsubscribeFromListsRequest
 ): Promise<UnsubscribeResponse> {
-  return api.post<UnsubscribeResponse>('/unsubscribe-oneclick', request)
+  return api.post<UnsubscribeResponse>('/unsubscribe', request)
 }

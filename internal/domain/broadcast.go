@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"strings"
 	"time"
 )
 
@@ -30,6 +31,19 @@ const (
 	BroadcastStatusTestCompleted  BroadcastStatus = "test_completed"  // Test done, awaiting winner selection
 	BroadcastStatusWinnerSelected BroadcastStatus = "winner_selected" // Winner chosen, enqueueing to remaining
 )
+
+// IsValid reports whether s is one of the known broadcast statuses.
+func (s BroadcastStatus) IsValid() bool {
+	switch s {
+	case BroadcastStatusDraft, BroadcastStatusScheduled, BroadcastStatusProcessing,
+		BroadcastStatusPaused, BroadcastStatusProcessed, BroadcastStatusCancelled,
+		BroadcastStatusFailed, BroadcastStatusTesting, BroadcastStatusTestCompleted,
+		BroadcastStatusWinnerSelected:
+		return true
+	default:
+		return false
+	}
+}
 
 // TestWinnerMetric defines the metric used to determine the winning A/B test variation
 type TestWinnerMetric string
@@ -332,13 +346,7 @@ func (b *Broadcast) Validate() error {
 	}
 
 	// Validate status
-	switch b.Status {
-	case BroadcastStatusDraft, BroadcastStatusScheduled, BroadcastStatusProcessing,
-		BroadcastStatusPaused, BroadcastStatusProcessed, BroadcastStatusCancelled,
-		BroadcastStatusFailed, BroadcastStatusTesting, BroadcastStatusTestCompleted,
-		BroadcastStatusWinnerSelected:
-		// Valid status
-	default:
+	if !b.Status.IsValid() {
 		return fmt.Errorf("invalid broadcast status: %s", b.Status)
 	}
 
@@ -661,8 +669,15 @@ func (r *DeleteBroadcastRequest) Validate() error {
 
 // ListBroadcastsParams defines parameters for listing broadcasts with pagination
 type ListBroadcastsParams struct {
-	WorkspaceID   string
-	Status        BroadcastStatus
+	WorkspaceID string
+	// Status filters by a single status. Deprecated: prefer Statuses for
+	// multi-status filtering. Kept for backward compatibility.
+	Status BroadcastStatus
+	// Statuses filters broadcasts whose status is any of the provided values.
+	// When non-empty it takes precedence over Status.
+	Statuses []BroadcastStatus
+	// Search is a case-insensitive substring match on the broadcast name.
+	Search        string
 	Limit         int
 	Offset        int
 	WithTemplates bool // Whether to fetch and include template details for each variation
@@ -701,8 +716,14 @@ func (r *SendToIndividualRequest) Validate() error {
 
 // GetBroadcastsRequest is used to extract query parameters for listing broadcasts
 type GetBroadcastsRequest struct {
-	WorkspaceID   string `json:"workspace_id"`
-	Status        string `json:"status,omitempty"`
+	WorkspaceID string `json:"workspace_id"`
+	// Status holds the raw "status" query parameter. A single status keeps
+	// backward compatibility; a comma-separated list is parsed into Statuses.
+	Status string `json:"status,omitempty"`
+	// Statuses is the parsed list of statuses to filter by.
+	Statuses []string `json:"statuses,omitempty"`
+	// Search is a case-insensitive substring match on the broadcast name.
+	Search        string `json:"search,omitempty"`
 	Limit         int    `json:"limit,omitempty"`
 	Offset        int    `json:"offset,omitempty"`
 	WithTemplates bool   `json:"with_templates,omitempty"`
@@ -738,7 +759,34 @@ func (r *GetBroadcastsRequest) FromURLParams(values url.Values) error {
 		return fmt.Errorf("workspace_id is required")
 	}
 
-	r.Status = values.Get("status")
+	// Support filtering by one or more statuses (comma-separated). Each value is
+	// validated against the known statuses so a typo or degenerate value (e.g.
+	// "?status=,," or "?status=drafty") is rejected rather than silently
+	// returning an empty or unfiltered list.
+	if statusParam := values.Get("status"); statusParam != "" {
+		for _, s := range strings.Split(statusParam, ",") {
+			s = strings.TrimSpace(s)
+			if s == "" {
+				continue
+			}
+			if !BroadcastStatus(s).IsValid() {
+				return fmt.Errorf("invalid status: %s", s)
+			}
+			r.Statuses = append(r.Statuses, s)
+		}
+		if len(r.Statuses) == 0 {
+			return fmt.Errorf("invalid status parameter: %s", statusParam)
+		}
+	}
+
+	// Status retains the single-value form for backward compatibility; for a
+	// multi-status request it stays empty so it never holds a malformed,
+	// comma-joined value (Statuses carries the filter in that case).
+	if len(r.Statuses) == 1 {
+		r.Status = r.Statuses[0]
+	}
+
+	r.Search = strings.TrimSpace(values.Get("search"))
 
 	if limitStr := values.Get("limit"); limitStr != "" {
 		var err error
@@ -885,7 +933,9 @@ func (r *RefreshGlobalFeedRequest) Validate() error {
 		return fmt.Errorf("url is required")
 	}
 
-	// Basic URL format check (no SSRF protection needed for test endpoint)
+	// Basic URL format check. SSRF protection (blocking private/loopback/link-local
+	// targets and re-validating redirects) is enforced at fetch time by the data-feed
+	// HTTP client; see broadcast.NewDataFeedFetcher and pkg/safehttpclient.
 	parsedURL, err := url.Parse(r.URL)
 	if err != nil {
 		return fmt.Errorf("url: invalid URL: %s", err.Error())
@@ -946,7 +996,9 @@ func (r *TestRecipientFeedRequest) Validate() error {
 		return fmt.Errorf("url is required")
 	}
 
-	// Basic URL format check (no SSRF protection needed for test endpoint)
+	// Basic URL format check. SSRF protection (blocking private/loopback/link-local
+	// targets and re-validating redirects) is enforced at fetch time by the data-feed
+	// HTTP client; see broadcast.NewDataFeedFetcher and pkg/safehttpclient.
 	parsedURL, err := url.Parse(r.URL)
 	if err != nil {
 		return fmt.Errorf("url: invalid URL: %s", err.Error())

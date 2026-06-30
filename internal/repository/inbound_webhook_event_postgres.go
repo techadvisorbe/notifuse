@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -99,7 +100,9 @@ func (r *inboundWebhookEventRepository) StoreEvents(ctx context.Context, workspa
 		}
 
 		// Build and execute the SQL for this batch
-		batchSQL := baseSQL + strings.Join(placeholders[:len(currentBatch)], ",") + " ON CONFLICT (id) DO NOTHING"
+		// Target-less ON CONFLICT so any unique violation is a no-op: the PK (id)
+		// AND the reply dedup index (integration_id, message_id) for replayed replies.
+		batchSQL := baseSQL + strings.Join(placeholders[:len(currentBatch)], ",") + " ON CONFLICT DO NOTHING"
 		_, err = workspaceDB.ExecContext(ctx, batchSQL, args...)
 
 		if err != nil {
@@ -116,6 +119,38 @@ func (r *inboundWebhookEventRepository) StoreEvents(ctx context.Context, workspa
 // StoreEvent stores a single inbound webhook event in the database
 func (r *inboundWebhookEventRepository) StoreEvent(ctx context.Context, workspaceID string, event *domain.InboundWebhookEvent) error {
 	return r.StoreEvents(ctx, workspaceID, []*domain.InboundWebhookEvent{event})
+}
+
+// StoreReplyEvent inserts a single inbound reply event and reports whether it was newly
+// stored. The reply dedup index (integration_id, message_id WHERE type IN reply/auto_reply)
+// makes a provider retry of the same reply conflict; ON CONFLICT DO NOTHING ... RETURNING
+// then yields no row, which we surface as inserted=false so callers don't re-fire side
+// effects (e.g. exiting a journey twice).
+func (r *inboundWebhookEventRepository) StoreReplyEvent(ctx context.Context, workspaceID string, event *domain.InboundWebhookEvent) (bool, error) {
+	workspaceDB, err := r.workspaceRepo.GetConnection(ctx, workspaceID)
+	if err != nil {
+		return false, fmt.Errorf("failed to get workspace connection: %w", err)
+	}
+
+	const query = `
+		INSERT INTO inbound_webhook_events (
+			id, type, source, integration_id, recipient_email, message_id, timestamp, raw_payload, created_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		ON CONFLICT DO NOTHING
+		RETURNING id`
+
+	var id string
+	err = workspaceDB.QueryRowContext(ctx, query,
+		event.ID, event.Type, event.Source, event.IntegrationID, event.RecipientEmail,
+		event.MessageID, event.Timestamp, event.RawPayload, time.Now().UTC(),
+	).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil // deduplicated — an event with this Message-ID already exists
+	}
+	if err != nil {
+		return false, fmt.Errorf("failed to store reply event: %w", err)
+	}
+	return true, nil
 }
 
 // ListEvents retrieves all inbound webhook events for a workspace

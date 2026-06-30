@@ -73,6 +73,21 @@ func (mr *MockCacheMockRecorder) Get(key interface{}) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Get", reflect.TypeOf((*MockCache)(nil).Get), key)
 }
 
+// GetAndDelete mocks base method.
+func (m *MockCache) GetAndDelete(key string) (interface{}, bool) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetAndDelete", key)
+	ret0, _ := ret[0].(interface{})
+	ret1, _ := ret[1].(bool)
+	return ret0, ret1
+}
+
+// GetAndDelete indicates an expected call of GetAndDelete.
+func (mr *MockCacheMockRecorder) GetAndDelete(key interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetAndDelete", reflect.TypeOf((*MockCache)(nil).GetAndDelete), key)
+}
+
 // GetOrSet mocks base method.
 func (m *MockCache) GetOrSet(key string, ttl time.Duration, compute func() (interface{}, error)) (interface{}, error) {
 	m.ctrl.T.Helper()

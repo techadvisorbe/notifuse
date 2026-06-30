@@ -50,6 +50,20 @@ func (mr *MockInboundWebhookEventServiceInterfaceMockRecorder) ListEvents(arg0, 
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListEvents", reflect.TypeOf((*MockInboundWebhookEventServiceInterface)(nil).ListEvents), arg0, arg1, arg2)
 }
 
+// ProcessInboundReply mocks base method.
+func (m *MockInboundWebhookEventServiceInterface) ProcessInboundReply(arg0 context.Context, arg1, arg2 string, arg3 *domain.InboundRequest) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ProcessInboundReply", arg0, arg1, arg2, arg3)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// ProcessInboundReply indicates an expected call of ProcessInboundReply.
+func (mr *MockInboundWebhookEventServiceInterfaceMockRecorder) ProcessInboundReply(arg0, arg1, arg2, arg3 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ProcessInboundReply", reflect.TypeOf((*MockInboundWebhookEventServiceInterface)(nil).ProcessInboundReply), arg0, arg1, arg2, arg3)
+}
+
 // ProcessWebhook mocks base method.
 func (m *MockInboundWebhookEventServiceInterface) ProcessWebhook(arg0 context.Context, arg1, arg2 string, arg3 []byte) error {
 	m.ctrl.T.Helper()

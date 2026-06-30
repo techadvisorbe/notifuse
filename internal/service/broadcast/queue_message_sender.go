@@ -315,11 +315,11 @@ func (s *queueMessageSender) buildQueueEntry(
 	compileReq := notifuse_mjml.CompileTemplateRequest{
 		WorkspaceID:      workspaceID,
 		MessageID:        messageID,
-		VisualEditorTree: emailContent.VisualEditorTree,
 		TemplateData:     data,
 		TrackingSettings: trackingSettings,
 	}
-	compileReq.MjmlSource = emailContent.GetCodeModeMjmlSource()
+	// Wires the resolved variant's tree/source + its inbox-preview override.
+	emailContent.ApplyToCompileRequest(&compileReq, nil)
 	compiledTemplate, err := notifuse_mjml.CompileTemplate(compileReq)
 	if err != nil {
 		return nil, fmt.Errorf("failed to compile template: %w", err)

@@ -35,6 +35,11 @@ type TaskService struct {
 	// autoExecuteImmediate controls whether tasks are automatically executed when set to immediate
 	// This is mainly used to disable auto-execution during testing
 	autoExecuteImmediate bool
+	// directExecution controls how due tasks are executed by ExecutePendingTasks: when true,
+	// each task runs in-process instead of being dispatched over HTTP to /api/tasks.execute.
+	// Wired from TaskScheduler.Enabled — an instance running its own scheduler executes its
+	// own tasks directly (no self-call); see SetDirectExecution.
+	directExecution bool
 }
 
 // WithTransaction executes a function within a transaction
@@ -77,6 +82,25 @@ func (s *TaskService) IsAutoExecuteEnabled() bool {
 	s.lock.Lock()
 	defer s.lock.Unlock()
 	return s.autoExecuteImmediate
+}
+
+// SetDirectExecution controls how ExecutePendingTasks runs due tasks. When true, each task
+// is executed in-process; when false, it is dispatched over HTTP to {apiEndpoint}/api/tasks.execute.
+// The app wires this from TaskScheduler.Enabled: an instance that runs its own scheduler executes
+// its own tasks directly (avoiding a self-call through the public ingress), while a scale-out node
+// with the scheduler disabled keeps HTTP fan-out. The apiEndpoint=="" fallback to direct execution
+// is preserved independently of this flag.
+func (s *TaskService) SetDirectExecution(enabled bool) {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+	s.directExecution = enabled
+}
+
+// IsDirectExecution returns whether in-process (direct) task execution is enabled.
+func (s *TaskService) IsDirectExecution() bool {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+	return s.directExecution
 }
 
 // RegisterProcessor registers a task processor for a specific task type
@@ -249,9 +273,16 @@ func (s *TaskService) ExecutePendingTasks(ctx context.Context, maxTasks int) err
 	tracing.AddAttribute(ctx, "task_count", len(tasks))
 	s.logger.WithField("task_count", len(tasks)).Info("Retrieved batch of tasks to process")
 
-	if s.apiEndpoint == "" {
+	// Direct (in-process) execution is used when this instance runs its own scheduler
+	// (directExecution, wired from TaskScheduler.Enabled) or when no API endpoint is
+	// configured. Otherwise tasks are dispatched over HTTP for fan-out across replicas.
+	if s.directExecution || s.apiEndpoint == "" {
 		tracing.AddAttribute(ctx, "execution_mode", "direct")
-		s.logger.Warn("API endpoint not configured, falling back to direct execution")
+		if s.directExecution {
+			s.logger.Debug("Executing pending tasks in-process (direct execution mode)")
+		} else {
+			s.logger.Warn("API endpoint not configured, falling back to direct execution")
+		}
 		return s.executeTasksDirectly(ctx, tasks)
 	}
 

@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/textproto"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -89,6 +90,37 @@ func (c *smtpConnection) readMultilineResponse() (int, error) {
 	}
 }
 
+// readMultilineResponseWithLines is like readMultilineResponse but also returns
+// every text line of a multiline reply (the part after the status code/separator).
+// It is used to parse advertised ESMTP capabilities, in particular the AUTH
+// mechanisms a server supports.
+func (c *smtpConnection) readMultilineResponseWithLines() (int, []string, error) {
+	var lines []string
+	for {
+		line, err := c.reader.ReadString('\n')
+		if err != nil {
+			return 0, nil, err
+		}
+
+		if len(line) < 4 {
+			return 0, nil, fmt.Errorf("short response: %s", line)
+		}
+
+		code := 0
+		if _, err := fmt.Sscanf(line[:3], "%d", &code); err != nil {
+			return 0, nil, fmt.Errorf("invalid response code: %s", line)
+		}
+
+		lines = append(lines, strings.TrimSpace(line[4:]))
+
+		// If the 4th char is a space, it's the last line
+		if line[3] == ' ' {
+			return code, lines, nil
+		}
+		// If it's a dash, continue reading
+	}
+}
+
 func (c *smtpConnection) sendCommand(cmd string) (int, string, error) {
 	if _, err := fmt.Fprintf(c.conn, "%s\r\n", cmd); err != nil {
 		return 0, "", err
@@ -96,11 +128,11 @@ func (c *smtpConnection) sendCommand(cmd string) (int, string, error) {
 	return c.readResponse()
 }
 
-func (c *smtpConnection) sendCommandMultiline(cmd string) (int, error) {
+func (c *smtpConnection) sendCommandMultilineWithLines(cmd string) (int, []string, error) {
 	if _, err := fmt.Fprintf(c.conn, "%s\r\n", cmd); err != nil {
-		return 0, err
+		return 0, nil, err
 	}
-	return c.readMultilineResponse()
+	return c.readMultilineResponseWithLines()
 }
 
 func (c *smtpConnection) Close() error {
@@ -132,6 +164,82 @@ func sendRawEmail(host string, port int, username, password string, useTLS bool,
 		AuthType: "basic",
 	}
 	return sendRawEmailWithSettings(settings, from, to, msg, nil)
+}
+
+// parseAuthMechanisms extracts the SASL mechanisms advertised in an EHLO reply.
+// It handles both the standard "AUTH PLAIN LOGIN" form and the legacy "AUTH=LOGIN"
+// (Exchange) form, and is case-insensitive. The returned set contains uppercased
+// mechanism names. Lines that merely start with "AUTH" but are a different
+// capability (e.g. "AUTHORIZE") are ignored.
+func parseAuthMechanisms(ehloLines []string) map[string]bool {
+	mechs := map[string]bool{}
+	for _, line := range ehloLines {
+		upper := strings.ToUpper(strings.TrimSpace(line))
+		if !strings.HasPrefix(upper, "AUTH ") && !strings.HasPrefix(upper, "AUTH=") {
+			continue
+		}
+		rest := strings.TrimPrefix(upper, "AUTH")
+		for _, tok := range strings.FieldsFunc(rest, func(r rune) bool { return r == ' ' || r == '=' }) {
+			if tok != "" {
+				mechs[tok] = true
+			}
+		}
+	}
+	return mechs
+}
+
+// sortedKeys returns the keys of a set in deterministic (sorted) order, for
+// stable error messages.
+func sortedKeys(m map[string]bool) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// smtpAuthPlain performs SASL PLAIN authentication in a single command.
+func smtpAuthPlain(c *smtpConnection, username, password string) error {
+	authString := fmt.Sprintf("\x00%s\x00%s", username, password)
+	encoded := base64.StdEncoding.EncodeToString([]byte(authString))
+	code, _, err := c.sendCommand("AUTH PLAIN " + encoded)
+	if err != nil {
+		return fmt.Errorf("AUTH failed: %w", err)
+	}
+	if code != 235 {
+		return fmt.Errorf("authentication failed with code: %d", code)
+	}
+	return nil
+}
+
+// smtpAuthLogin performs the SASL LOGIN handshake. It is driven entirely by the
+// 334/235 status codes rather than decoding the server's base64 challenge prompts
+// (which are server-specific and may be localized). This is required for servers
+// that advertise only AUTH LOGIN, such as Azure Communication Services.
+func smtpAuthLogin(c *smtpConnection, username, password string) error {
+	code, _, err := c.sendCommand("AUTH LOGIN")
+	if err != nil {
+		return fmt.Errorf("AUTH LOGIN failed: %w", err)
+	}
+	if code != 334 {
+		return fmt.Errorf("authentication failed with code: %d", code)
+	}
+	code, _, err = c.sendCommand(base64.StdEncoding.EncodeToString([]byte(username)))
+	if err != nil {
+		return fmt.Errorf("AUTH LOGIN username failed: %w", err)
+	}
+	if code != 334 {
+		return fmt.Errorf("authentication failed (username) with code: %d", code)
+	}
+	code, _, err = c.sendCommand(base64.StdEncoding.EncodeToString([]byte(password)))
+	if err != nil {
+		return fmt.Errorf("AUTH LOGIN password failed: %w", err)
+	}
+	if code != 235 {
+		return fmt.Errorf("authentication failed with code: %d", code)
+	}
+	return nil
 }
 
 // sendRawEmailWithSettings sends an email using raw SMTP commands with full settings support.
@@ -168,13 +276,16 @@ func sendRawEmailWithSettings(settings *domain.SMTPSettings, from string, to []s
 	if hostname == "" {
 		hostname = settings.Host
 	}
-	code, err = smtpConn.sendCommandMultiline(fmt.Sprintf("EHLO %s", hostname))
+	code, ehloLines, err := smtpConn.sendCommandMultilineWithLines(fmt.Sprintf("EHLO %s", hostname))
 	if err != nil {
 		return fmt.Errorf("EHLO failed: %w", err)
 	}
 	if code != 250 {
 		return fmt.Errorf("EHLO rejected with code: %d", code)
 	}
+	// Advertised AUTH mechanisms. On STARTTLS connections this is replaced by the
+	// post-TLS EHLO below, since many servers only advertise AUTH after STARTTLS.
+	authMechs := parseAuthMechanisms(ehloLines)
 
 	// STARTTLS if enabled
 	if settings.UseTLS {
@@ -200,14 +311,18 @@ func sendRawEmailWithSettings(settings *domain.SMTPSettings, from string, to []s
 		smtpConn = newSMTPConnection(tlsConn)
 		defer smtpConn.Close()
 
-		// Send EHLO again after TLS
-		code, err = smtpConn.sendCommandMultiline(fmt.Sprintf("EHLO %s", hostname))
+		// Send EHLO again after TLS. Capabilities advertised here supersede the
+		// pre-TLS set: many servers (including Azure Communication Services) only
+		// advertise their AUTH mechanisms after STARTTLS.
+		var tlsEhloLines []string
+		code, tlsEhloLines, err = smtpConn.sendCommandMultilineWithLines(fmt.Sprintf("EHLO %s", hostname))
 		if err != nil {
 			return fmt.Errorf("EHLO after TLS failed: %w", err)
 		}
 		if code != 250 {
 			return fmt.Errorf("EHLO after TLS rejected with code: %d", code)
 		}
+		authMechs = parseAuthMechanisms(tlsEhloLines)
 	}
 
 	// Authentication
@@ -261,17 +376,25 @@ func sendRawEmailWithSettings(settings *domain.SMTPSettings, from string, to []s
 		}
 	authComplete:
 	} else {
-		// Basic authentication (default)
+		// Basic authentication (default). Negotiate the mechanism from the AUTH
+		// list the server advertised: prefer PLAIN, fall back to LOGIN for servers
+		// that only support LOGIN such as Azure Communication Services.
 		if settings.Username != "" && settings.Password != "" {
-			// Use AUTH PLAIN
-			authString := fmt.Sprintf("\x00%s\x00%s", settings.Username, settings.Password)
-			encoded := base64.StdEncoding.EncodeToString([]byte(authString))
-			code, _, err = smtpConn.sendCommand(fmt.Sprintf("AUTH PLAIN %s", encoded))
-			if err != nil {
-				return fmt.Errorf("AUTH failed: %w", err)
-			}
-			if code != 235 {
-				return fmt.Errorf("authentication failed with code: %d", code)
+			switch {
+			case authMechs["PLAIN"]:
+				if err := smtpAuthPlain(smtpConn, settings.Username, settings.Password); err != nil {
+					return err
+				}
+			case authMechs["LOGIN"]:
+				if err := smtpAuthLogin(smtpConn, settings.Username, settings.Password); err != nil {
+					return err
+				}
+			default:
+				// No PLAIN/LOGIN advertised (or no AUTH line at all). Do not
+				// blind-fire AUTH PLAIN: on a plaintext connection that would leak
+				// credentials, and otherwise it only reproduces the opaque error
+				// this negotiation exists to avoid. Fail with a diagnostic instead.
+				return fmt.Errorf("SMTP server advertised no supported AUTH mechanism (PLAIN/LOGIN); offered: [%s]", strings.Join(sortedKeys(authMechs), " "))
 			}
 		}
 	}

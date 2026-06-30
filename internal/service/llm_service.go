@@ -17,9 +17,18 @@ var modelPricing = map[string]struct {
 	InputPerMTok  float64
 	OutputPerMTok float64
 }{
-	"claude-opus-4-6":            {5.0, 25.0},
-	"claude-sonnet-4-6":          {3.0, 15.0},
-	"claude-haiku-4-5-20251001":  {1.0, 5.0},
+	"claude-opus-4-6":           {5.0, 25.0},
+	"claude-sonnet-4-6":         {3.0, 15.0},
+	"claude-haiku-4-5-20251001": {1.0, 5.0},
+	// Google Gemini (Gemini Developer API) - https://ai.google.dev/gemini-api/docs/pricing
+	// Pro models priced at the <=200k context tier.
+	"gemini-2.5-flash":       {0.30, 2.50},
+	"gemini-2.5-flash-lite":  {0.10, 0.40},
+	"gemini-2.5-pro":         {1.25, 10.0},
+	"gemini-3-flash-preview": {0.50, 3.0},
+	"gemini-3.5-flash":       {1.50, 9.0},
+	"gemini-3.1-flash-lite":  {0.25, 1.50},
+	"gemini-3.1-pro-preview": {2.0, 12.0},
 }
 
 // calculateCost calculates the cost in USD for a given model and token counts
@@ -123,6 +132,11 @@ func (s *LLMService) StreamChat(ctx context.Context, req *domain.LLMChatRequest,
 			return fmt.Errorf("OpenAI configuration is missing")
 		}
 		return s.streamChatOpenAI(ctx, req, integration.LLMProvider.OpenAI, firecrawlSettings, onEvent)
+	case domain.LLMProviderKindGemini:
+		if integration.LLMProvider.Gemini == nil {
+			return fmt.Errorf("Gemini configuration is missing")
+		}
+		return s.streamChatGemini(ctx, req, integration.LLMProvider.Gemini, firecrawlSettings, onEvent)
 	default:
 		return fmt.Errorf("unsupported LLM provider: %s", integration.LLMProvider.Kind)
 	}

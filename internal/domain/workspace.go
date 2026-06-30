@@ -308,6 +308,29 @@ func (bs *BlogSettings) GetFeedMaxItems() int {
 	return bs.FeedMaxItems
 }
 
+// Validate checks the bounded blog settings fields. The Get* accessors clamp the
+// page sizes on read, so this is light hygiene that also guards non-console API
+// callers against out-of-range values. URL/SEO fields are left lenient (the
+// console constrains them); the bounds can be tightened later.
+func (bs *BlogSettings) Validate() error {
+	if bs == nil {
+		return nil
+	}
+	if len(bs.Title) > 255 {
+		return fmt.Errorf("blog title exceeds maximum length of 255 characters")
+	}
+	if bs.HomePageSize != 0 && (bs.HomePageSize < 1 || bs.HomePageSize > 100) {
+		return fmt.Errorf("home_page_size must be between 1 and 100")
+	}
+	if bs.CategoryPageSize != 0 && (bs.CategoryPageSize < 1 || bs.CategoryPageSize > 100) {
+		return fmt.Errorf("category_page_size must be between 1 and 100")
+	}
+	if bs.FeedMaxItems != 0 && (bs.FeedMaxItems < 1 || bs.FeedMaxItems > 20) {
+		return fmt.Errorf("feed_max_items must be between 1 and 20")
+	}
+	return nil
+}
+
 // Value implements the driver.Valuer interface for database serialization
 func (b BlogSettings) Value() (driver.Value, error) {
 	return json.Marshal(b)
@@ -445,6 +468,20 @@ func (ws *WorkspaceSettings) Validate(passphrase string) error {
 	}
 
 	return nil
+}
+
+// ResolveEndpoint returns the base endpoint used for tracking links, the
+// notification center, and template URL composition: the configured Custom
+// Endpoint URL when set, otherwise the provided default API endpoint.
+//
+// Note: this falls back to the API endpoint. The blog/public-site origin uses a
+// different fallback (Custom Endpoint URL → Website URL); do not use this method
+// for blog URL composition.
+func (ws *WorkspaceSettings) ResolveEndpoint(apiEndpoint string) string {
+	if ws.CustomEndpointURL != nil && *ws.CustomEndpointURL != "" {
+		return *ws.CustomEndpointURL
+	}
+	return apiEndpoint
 }
 
 // Value implements the driver.Valuer interface for database serialization
@@ -954,6 +991,11 @@ type WorkspaceRepository interface {
 	WithWorkspaceTransaction(ctx context.Context, workspaceID string, fn func(*sql.Tx) error) error
 }
 
+// ErrUserNotInWorkspace is returned (errors.Is-able) when a user has no membership
+// row for a workspace. Callers (e.g. the platform-admin override in AuthService) use
+// errors.Is to distinguish a plain "not a member" from a real database failure.
+var ErrUserNotInWorkspace = errors.New("user is not a member of the workspace")
+
 // ErrUnauthorized is returned when a user is not authorized to perform an action
 type ErrUnauthorized struct {
 	Message string
@@ -1019,6 +1061,12 @@ type WorkspaceServiceInterface interface {
 
 	// Permission management
 	SetUserPermissions(ctx context.Context, workspaceID, userID string, permissions UserPermissions) error
+
+	// Custom field management
+	SetCustomFieldLabels(ctx context.Context, workspaceID string, labels map[string]string) error
+
+	// Blog management
+	SetBlogSettings(ctx context.Context, workspaceID string, enabled bool, settings *BlogSettings) error
 }
 
 // Request/Response types
@@ -1251,6 +1299,67 @@ func (r *DeleteWorkspaceRequest) Validate() error {
 	}
 
 	return nil
+}
+
+// SetCustomFieldLabelsRequest defines the request structure for setting custom field labels
+type SetCustomFieldLabelsRequest struct {
+	WorkspaceID       string            `json:"workspace_id"`
+	CustomFieldLabels map[string]string `json:"custom_field_labels"`
+}
+
+// Validate validates the set custom field labels request and returns the
+// sanitized workspace ID and labels. An empty/nil label map is valid and
+// clears all custom field labels.
+func (r *SetCustomFieldLabelsRequest) Validate() (workspaceID string, labels map[string]string, err error) {
+	if r.WorkspaceID == "" {
+		return "", nil, fmt.Errorf("invalid set custom field labels request: workspace_id is required")
+	}
+	if !govalidator.IsAlphanumeric(r.WorkspaceID) {
+		return "", nil, fmt.Errorf("invalid set custom field labels request: workspace_id must be alphanumeric")
+	}
+	if len(r.WorkspaceID) > 32 {
+		return "", nil, fmt.Errorf("invalid set custom field labels request: workspace_id length must be between 1 and 32")
+	}
+
+	// Reuse the canonical label validation
+	settings := &WorkspaceSettings{CustomFieldLabels: r.CustomFieldLabels}
+	if err := settings.ValidateCustomFieldLabels(); err != nil {
+		return "", nil, err
+	}
+
+	return r.WorkspaceID, r.CustomFieldLabels, nil
+}
+
+// SetBlogSettingsRequest defines the request structure for setting blog settings
+// (the enable flag plus title/SEO/pagination/feed config) via the dedicated,
+// blog:write gated endpoint.
+type SetBlogSettingsRequest struct {
+	WorkspaceID  string        `json:"workspace_id"`
+	BlogEnabled  bool          `json:"blog_enabled"`
+	BlogSettings *BlogSettings `json:"blog_settings"`
+}
+
+// Validate validates the set blog settings request and returns the sanitized
+// workspace ID, the enabled flag, and the (possibly nil) blog settings. A nil
+// BlogSettings is valid and clears the stored blog configuration.
+func (r *SetBlogSettingsRequest) Validate() (workspaceID string, enabled bool, settings *BlogSettings, err error) {
+	if r.WorkspaceID == "" {
+		return "", false, nil, fmt.Errorf("invalid set blog settings request: workspace_id is required")
+	}
+	if !govalidator.IsAlphanumeric(r.WorkspaceID) {
+		return "", false, nil, fmt.Errorf("invalid set blog settings request: workspace_id must be alphanumeric")
+	}
+	if len(r.WorkspaceID) > 32 {
+		return "", false, nil, fmt.Errorf("invalid set blog settings request: workspace_id length must be between 1 and 32")
+	}
+
+	if r.BlogSettings != nil {
+		if err := r.BlogSettings.Validate(); err != nil {
+			return "", false, nil, err
+		}
+	}
+
+	return r.WorkspaceID, r.BlogEnabled, r.BlogSettings, nil
 }
 
 type InviteMemberRequest struct {

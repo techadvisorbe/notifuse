@@ -129,6 +129,49 @@ func NewIntegrationTestSuiteWithLiveScheduler(t *testing.T, appFactory func(*con
 	return suite
 }
 
+// NewIntegrationTestSuiteWithDirectScheduler creates an integration test suite that
+// drives the real TaskScheduler ticker with the internal scheduler ENABLED (so
+// directExecution=true) and an unreachable APIEndpoint. Use this to verify the
+// production Cloud path: tasks must execute in-process, never via HTTP self-dispatch.
+// All other helpers (factory, APIClient) work identically to the live-scheduler suite.
+func NewIntegrationTestSuiteWithDirectScheduler(t *testing.T, appFactory func(*config.Config) AppInterface) *IntegrationTestSuite {
+	if os.Getenv("INTEGRATION_TESTS") != "true" {
+		t.Skip("Skipping integration test. Set INTEGRATION_TESTS=true to run.")
+	}
+
+	suite := &IntegrationTestSuite{T: t}
+
+	suite.DBManager = NewDatabaseManager()
+	require.NoError(t, suite.DBManager.Setup(), "Failed to setup test database")
+	require.NoError(t, suite.DBManager.WaitForDatabase(30), "Database not ready")
+
+	suite.ServerManager = NewServerManagerWithLiveScheduler(appFactory, suite.DBManager)
+	require.NoError(t, suite.ServerManager.StartLiveDirect(context.Background()),
+		"Failed to start direct-scheduler test server")
+
+	suite.APIClient = NewAPIClient(suite.ServerManager.GetURL())
+
+	app := suite.ServerManager.GetApp()
+	suite.DataFactory = NewTestDataFactory(
+		suite.DBManager.GetDB(),
+		app.GetUserRepository(),
+		app.GetWorkspaceRepository(),
+		app.GetContactRepository(),
+		app.GetListRepository(),
+		app.GetTemplateRepository(),
+		app.GetBroadcastRepository(),
+		app.GetMessageHistoryRepository(),
+		app.GetContactListRepository(),
+		app.GetTransactionalNotificationRepository(),
+	)
+
+	require.NoError(t, suite.DBManager.SeedTestData(), "Failed to seed test data")
+	suite.APIClient.SetWorkspaceID("test-workspace-id")
+	suite.Config = suite.ServerManager.GetApp().GetConfig()
+
+	return suite
+}
+
 // FindAvailablePort finds an available TCP port for testing
 func FindAvailablePort(t *testing.T) int {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")

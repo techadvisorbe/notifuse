@@ -176,6 +176,11 @@ func (dm *DatabaseManager) SeedTestData() error {
 		{"550e8400-e29b-41d4-a716-446655440013", "non-member@example.com", "Non Member"},
 		{"550e8400-e29b-41d4-a716-446655440014", "template-tester@example.com", "Template Tester"},
 		{"550e8400-e29b-41d4-a716-446655440015", "template-integrator@example.com", "Template Integrator"},
+		{"550e8400-e29b-41d4-a716-446655440016", "blog-manager@example.com", "Blog Manager"},
+		{"550e8400-e29b-41d4-a716-446655440017", "blog-reader@example.com", "Blog Reader"},
+		{"550e8400-e29b-41d4-a716-446655440018", "blog-contacts@example.com", "Blog Contacts Member"},
+		{"550e8400-e29b-41d4-a716-446655440019", "blog-stranger@example.com", "Blog Stranger"},
+		{"550e8400-e29b-41d4-a716-446655440020", "blog-soleexisting@example.com", "Blog Sole Writer Member"},
 	}
 
 	testUserQuery := `
@@ -309,7 +314,7 @@ func (dm *DatabaseManager) runMigrations() error {
 	testLogger := logger.NewLoggerWithLevel("info")
 
 	// Initialize system tables
-	if err := database.InitializeDatabase(dm.db, "test@example.com"); err != nil {
+	if err := database.InitializeDatabase(dm.db, []string{"test@example.com"}); err != nil {
 		return fmt.Errorf("failed to initialize system database: %w", err)
 	}
 

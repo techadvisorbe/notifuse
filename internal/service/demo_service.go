@@ -146,13 +146,15 @@ func NewDemoService(
 
 // VerifyRootEmailHMAC verifies the HMAC of the root email
 func (s *DemoService) VerifyRootEmailHMAC(providedHMAC string) bool {
-	if s.config.RootEmail == "" {
+	// Demo mode is single-root; use the primary configured root email.
+	rootEmail := s.config.PrimaryRootEmail()
+	if rootEmail == "" {
 		s.logger.Error("Root email not configured")
 		return false
 	}
 
 	// Use the domain function to verify HMAC with constant-time comparison
-	return domain.VerifyEmailHMAC(s.config.RootEmail, providedHMAC, s.config.Security.SecretKey)
+	return domain.VerifyEmailHMAC(rootEmail, providedHMAC, s.config.Security.SecretKey)
 }
 
 // ResetDemo deletes all existing workspaces and tasks, then creates a new demo workspace
@@ -204,13 +206,14 @@ func (s *DemoService) deleteAllWorkspaces(ctx context.Context) error {
 func (s *DemoService) createDemoWorkspace(ctx context.Context) error {
 	s.logger.Info("Creating demo workspace")
 
-	// Get the root user to create the workspace
-	s.logger.WithField("root_email", s.config.RootEmail).Info("Looking up root user for demo workspace creation")
+	// Get the root user to create the workspace (demo mode is single-root)
+	rootEmail := s.config.PrimaryRootEmail()
+	s.logger.WithField("root_email", rootEmail).Info("Looking up root user for demo workspace creation")
 
-	rootUser, err := s.userService.GetUserByEmail(ctx, s.config.RootEmail)
+	rootUser, err := s.userService.GetUserByEmail(ctx, rootEmail)
 	if err != nil {
-		s.logger.WithField("root_email", s.config.RootEmail).WithField("error", err.Error()).Error("Failed to get root user")
-		return fmt.Errorf("failed to get root user with email '%s': %w", s.config.RootEmail, err)
+		s.logger.WithField("root_email", rootEmail).WithField("error", err.Error()).Error("Failed to get root user")
+		return fmt.Errorf("failed to get root user with email '%s': %w", rootEmail, err)
 	}
 
 	s.logger.WithField("root_user_id", rootUser.ID).WithField("root_user_type", rootUser.Type).Info("Found root user for demo workspace creation")

@@ -171,12 +171,12 @@ func (r *MessageHistoryRepository) Create(ctx context.Context, workspaceID strin
 			id, external_id, contact_email, broadcast_id, automation_id, transactional_notification_id, list_id, template_id, template_version,
 			channel, status_info, message_data, channel_options, attachments, sent_at, delivered_at,
 			failed_at, opened_at, clicked_at, bounced_at, complained_at,
-			unsubscribed_at, created_at, updated_at
+			unsubscribed_at, created_at, updated_at, smtp_message_id
 		) VALUES (
 			$1, $2, $3, $4, $5, $6, $7, $8, $9,
 			$10, LEFT($11, 255), $12, $13, $14, $15, $16,
 			$17, $18, $19, $20, $21,
-			$22, $23, $24
+			$22, $23, $24, $25
 		)
 	`
 
@@ -207,6 +207,7 @@ func (r *MessageHistoryRepository) Create(ctx context.Context, workspaceID strin
 		message.UnsubscribedAt,
 		message.CreatedAt,
 		message.UpdatedAt,
+		message.SMTPMessageID,
 	)
 
 	if err != nil {
@@ -242,17 +243,18 @@ func (r *MessageHistoryRepository) Upsert(ctx context.Context, workspaceID strin
 			id, external_id, contact_email, broadcast_id, automation_id, transactional_notification_id, list_id, template_id, template_version,
 			channel, status_info, message_data, channel_options, attachments, sent_at, delivered_at,
 			failed_at, opened_at, clicked_at, bounced_at, complained_at,
-			unsubscribed_at, created_at, updated_at
+			unsubscribed_at, created_at, updated_at, smtp_message_id
 		) VALUES (
 			$1, $2, $3, $4, $5, $6, $7, $8, $9,
 			$10, LEFT($11, 255), $12, $13, $14, $15, $16,
 			$17, $18, $19, $20, $21,
-			$22, $23, $24
+			$22, $23, $24, $25
 		)
 		ON CONFLICT (id) DO UPDATE SET
 			failed_at = EXCLUDED.failed_at,
 			status_info = EXCLUDED.status_info,
-			updated_at = EXCLUDED.updated_at
+			updated_at = EXCLUDED.updated_at,
+			smtp_message_id = COALESCE(EXCLUDED.smtp_message_id, message_history.smtp_message_id)
 	`
 
 	_, err = workspaceDB.ExecContext(
@@ -282,6 +284,7 @@ func (r *MessageHistoryRepository) Upsert(ctx context.Context, workspaceID strin
 		message.UnsubscribedAt,
 		message.CreatedAt,
 		message.UpdatedAt,
+		message.SMTPMessageID,
 	)
 
 	if err != nil {
@@ -425,6 +428,31 @@ func (r *MessageHistoryRepository) GetByExternalID(ctx context.Context, workspac
 	message.MessageData = decryptedMessageData
 
 	return &message, nil
+}
+
+// GetBySMTPMessageID looks up a send by its recipient-visible RFC Message-ID, used
+// to match an inbound reply's In-Reply-To back to the originating send/journey.
+// Returns (nil, nil) when there is no match. Only id, contact_email and
+// automation_id are populated (no message_data, so no decryption is needed).
+func (r *MessageHistoryRepository) GetBySMTPMessageID(ctx context.Context, workspaceID string, smtpMessageID string) (*domain.MessageHistory, error) {
+	workspaceDB, err := r.workspaceRepo.GetConnection(ctx, workspaceID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get workspace connection: %w", err)
+	}
+
+	query := `SELECT id, contact_email, automation_id FROM message_history
+		WHERE smtp_message_id = $1 ORDER BY created_at DESC LIMIT 1`
+
+	message := &domain.MessageHistory{SMTPMessageID: &smtpMessageID}
+	err = workspaceDB.QueryRowContext(ctx, query, smtpMessageID).
+		Scan(&message.ID, &message.ContactEmail, &message.AutomationID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil // no stored send with this Message-ID → caller treats the reply as unmatched
+		}
+		return nil, fmt.Errorf("failed to get message history by smtp_message_id: %w", err)
+	}
+	return message, nil
 }
 
 // GetByContact retrieves message history for a specific contact

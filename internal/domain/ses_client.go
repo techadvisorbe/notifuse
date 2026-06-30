@@ -16,6 +16,16 @@ type SESWebhookClient interface {
 	CreateConfigurationSetEventDestinationWithContext(ctx aws.Context, input *ses.CreateConfigurationSetEventDestinationInput, opts ...request.Option) (*ses.CreateConfigurationSetEventDestinationOutput, error)
 	UpdateConfigurationSetEventDestinationWithContext(ctx aws.Context, input *ses.UpdateConfigurationSetEventDestinationInput, opts ...request.Option) (*ses.UpdateConfigurationSetEventDestinationOutput, error)
 	DeleteConfigurationSetEventDestinationWithContext(ctx aws.Context, input *ses.DeleteConfigurationSetEventDestinationInput, opts ...request.Option) (*ses.DeleteConfigurationSetEventDestinationOutput, error)
+
+	// Inbound (stop-on-reply) receipt-rule management. SES delivers inbound mail via a
+	// receipt rule in the single active rule set per region, so provisioning must inspect the
+	// active set and insert into it rather than blindly activate a new one.
+	DescribeActiveReceiptRuleSetWithContext(ctx aws.Context, input *ses.DescribeActiveReceiptRuleSetInput, opts ...request.Option) (*ses.DescribeActiveReceiptRuleSetOutput, error)
+	CreateReceiptRuleSetWithContext(ctx aws.Context, input *ses.CreateReceiptRuleSetInput, opts ...request.Option) (*ses.CreateReceiptRuleSetOutput, error)
+	SetActiveReceiptRuleSetWithContext(ctx aws.Context, input *ses.SetActiveReceiptRuleSetInput, opts ...request.Option) (*ses.SetActiveReceiptRuleSetOutput, error)
+	CreateReceiptRuleWithContext(ctx aws.Context, input *ses.CreateReceiptRuleInput, opts ...request.Option) (*ses.CreateReceiptRuleOutput, error)
+	DeleteReceiptRuleWithContext(ctx aws.Context, input *ses.DeleteReceiptRuleInput, opts ...request.Option) (*ses.DeleteReceiptRuleOutput, error)
+	ListIdentitiesWithContext(ctx aws.Context, input *ses.ListIdentitiesInput, opts ...request.Option) (*ses.ListIdentitiesOutput, error)
 }
 
 // SNSWebhookClient defines the interface for interacting with AWS SNS service
@@ -24,4 +34,7 @@ type SNSWebhookClient interface {
 	DeleteTopicWithContext(ctx aws.Context, input *sns.DeleteTopicInput, opts ...request.Option) (*sns.DeleteTopicOutput, error)
 	SubscribeWithContext(ctx aws.Context, input *sns.SubscribeInput, opts ...request.Option) (*sns.SubscribeOutput, error)
 	GetTopicAttributesWithContext(ctx aws.Context, input *sns.GetTopicAttributesInput, opts ...request.Option) (*sns.GetTopicAttributesOutput, error)
+	// SetTopicAttributesWithContext lets the inbound topic enforce SignatureVersion 2 and grant
+	// SES permission to publish (topic access policy).
+	SetTopicAttributesWithContext(ctx aws.Context, input *sns.SetTopicAttributesInput, opts ...request.Option) (*sns.SetTopicAttributesOutput, error)
 }

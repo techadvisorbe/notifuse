@@ -8,6 +8,7 @@ type LLMProviderKind string
 const (
 	LLMProviderKindAnthropic LLMProviderKind = "anthropic"
 	LLMProviderKindOpenAI    LLMProviderKind = "openai"
+	LLMProviderKindGemini    LLMProviderKind = "gemini"
 )
 
 // LLMProvider contains configuration for an LLM service provider
@@ -15,6 +16,7 @@ type LLMProvider struct {
 	Kind      LLMProviderKind    `json:"kind"`
 	Anthropic *AnthropicSettings `json:"anthropic,omitempty"`
 	OpenAI    *OpenAISettings    `json:"openai,omitempty"`
+	Gemini    *GeminiSettings    `json:"gemini,omitempty"`
 }
 
 // Validate validates the LLM provider settings
@@ -34,6 +36,11 @@ func (l *LLMProvider) Validate(passphrase string) error {
 			return fmt.Errorf("OpenAI settings required when LLM provider kind is openai")
 		}
 		return l.OpenAI.Validate(passphrase)
+	case LLMProviderKindGemini:
+		if l.Gemini == nil {
+			return fmt.Errorf("Gemini settings required when LLM provider kind is gemini")
+		}
+		return l.Gemini.Validate(passphrase)
 	default:
 		return fmt.Errorf("invalid LLM provider kind: %s", l.Kind)
 	}
@@ -55,6 +62,13 @@ func (l *LLMProvider) EncryptSecretKeys(passphrase string) error {
 		l.OpenAI.APIKey = ""
 	}
 
+	if l.Kind == LLMProviderKindGemini && l.Gemini != nil && l.Gemini.APIKey != "" {
+		if err := l.Gemini.EncryptAPIKey(passphrase); err != nil {
+			return err
+		}
+		l.Gemini.APIKey = ""
+	}
+
 	return nil
 }
 
@@ -68,6 +82,12 @@ func (l *LLMProvider) DecryptSecretKeys(passphrase string) error {
 
 	if l.Kind == LLMProviderKindOpenAI && l.OpenAI != nil && l.OpenAI.EncryptedAPIKey != "" {
 		if err := l.OpenAI.DecryptAPIKey(passphrase); err != nil {
+			return err
+		}
+	}
+
+	if l.Kind == LLMProviderKindGemini && l.Gemini != nil && l.Gemini.EncryptedAPIKey != "" {
+		if err := l.Gemini.DecryptAPIKey(passphrase); err != nil {
 			return err
 		}
 	}

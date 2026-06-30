@@ -67,20 +67,34 @@ const TemplateSelectorInput: React.FC<TemplateSelectorInputProps> = ({
     enabled: !!workspaceId
   })
 
-  // Fetch selected template details if we only have the ID
+  // Keep the displayed template in sync with the controlled `value` prop.
+  // The same component instance can be reused while `value` changes — e.g. switching
+  // between email nodes in the automation editor — so we must re-resolve the template
+  // whenever `value` no longer matches what we're showing, not just on first load.
   useEffect(() => {
-    if (value && workspaceId && !selectedTemplate) {
-      // Fetch template details using the value (template ID)
-      templatesApi
-        .get({ workspace_id: workspaceId, id: value })
-        .then((response) => {
-          if (response.template) {
-            setSelectedTemplate(response.template)
-          }
-        })
-        .catch((error) => {
-          console.error('Failed to fetch template details:', error)
-        })
+    // Value cleared → clear the displayed template
+    if (!value) {
+      if (selectedTemplate) setSelectedTemplate(null)
+      return
+    }
+    // Already showing the right template
+    if (selectedTemplate?.id === value) return
+    if (!workspaceId) return
+
+    // Guard against out-of-order responses when `value` changes rapidly
+    let cancelled = false
+    templatesApi
+      .get({ workspace_id: workspaceId, id: value })
+      .then((response) => {
+        if (!cancelled && response.template) {
+          setSelectedTemplate(response.template)
+        }
+      })
+      .catch((error) => {
+        console.error('Failed to fetch template details:', error)
+      })
+    return () => {
+      cancelled = true
     }
   }, [value, workspaceId, selectedTemplate])
 

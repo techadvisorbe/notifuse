@@ -22,6 +22,14 @@ type Cache interface {
 	// Delete removes a specific key from the cache
 	Delete(key string)
 
+	// GetAndDelete atomically retrieves a value and removes it from the cache.
+	// Returns the value and true if a live (non-expired) entry was found, nil and
+	// false otherwise. The read-and-delete is a single critical section, giving
+	// true single-use semantics: under concurrent callers exactly one observes the
+	// value. Used for one-time codes (e.g. OIDC exchange) where replay must be
+	// impossible.
+	GetAndDelete(key string) (interface{}, bool)
+
 	// Clear removes all items from the cache
 	Clear()
 
@@ -140,6 +148,26 @@ func (c *InMemoryCache) Delete(key string) {
 	defer c.mu.Unlock()
 
 	delete(c.items, key)
+}
+
+// GetAndDelete atomically retrieves a value and removes it from the cache under a
+// single write-lock critical section. Returns (value, true) only for a live entry;
+// an expired entry is pruned and reported as not found. Exactly one concurrent
+// caller can observe a given key's value (single-use).
+func (c *InMemoryCache) GetAndDelete(key string) (interface{}, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	item, found := c.items[key]
+	if !found {
+		return nil, false
+	}
+	// Always remove the entry once observed, even if expired.
+	delete(c.items, key)
+	if item.isExpired() {
+		return nil, false
+	}
+	return item.value, true
 }
 
 // Clear removes all items from the cache

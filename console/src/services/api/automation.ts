@@ -1,6 +1,52 @@
 import { api } from './client'
 import { analyticsService } from './analytics'
 import { TreeNode } from './segment'
+import type { EmailProviderKind } from './workspace'
+
+// Email provider kinds that can ingest inbound replies (used to gate the automation
+// "Exit on reply" feature). Keep in sync with the backend: a provider belongs here once
+// it has a reply parser + a matchable stored Message-ID (and route registration).
+// More ESPs will be added as their inbound support ships.
+export const INBOUND_REPLY_PROVIDER_KINDS: EmailProviderKind[] = ['mailgun', 'ses']
+
+// AWS regions where Amazon SES supports inbound email RECEIVING (receipt rules). SES inbound
+// only works in these; in a sending-only region stop-on-reply can't be provisioned. Mirror of
+// the backend sesReceivingRegions allowlist (internal/service/ses_service.go) — keep in sync.
+export const SES_RECEIVING_REGIONS: ReadonlySet<string> = new Set([
+  'us-east-1',
+  'us-east-2',
+  'us-west-1',
+  'us-west-2',
+  'af-south-1',
+  'ap-southeast-3',
+  'ap-south-1',
+  'ap-northeast-3',
+  'ap-northeast-2',
+  'ap-southeast-1',
+  'ap-southeast-2',
+  'ap-northeast-1',
+  'ca-central-1',
+  'eu-central-1',
+  'eu-west-1',
+  'eu-west-2',
+  'eu-south-1',
+  'eu-west-3',
+  'eu-north-1',
+  'il-central-1',
+  'me-south-1',
+  'sa-east-1'
+])
+
+// supportsInboundReplies reports whether an integration can ingest inbound replies (gating the
+// automation "Exit on reply" feature). SES additionally requires a receiving-capable region.
+export function supportsInboundReplies(provider: {
+  kind: EmailProviderKind
+  ses?: { region?: string }
+}): boolean {
+  if (!INBOUND_REPLY_PROVIDER_KINDS.includes(provider.kind)) return false
+  if (provider.kind === 'ses') return SES_RECEIVING_REGIONS.has(provider.ses?.region || '')
+  return true
+}
 
 // Automation status types
 export type AutomationStatus = 'draft' | 'live' | 'paused'
@@ -180,6 +226,7 @@ export interface Automation {
   name: string
   status: AutomationStatus
   list_id: string
+  exit_on_reply?: boolean // Stop the journey when the contact replies (requires inbound reply setup at the ESP)
   trigger?: TimelineTriggerConfig
   trigger_sql?: string
   root_node_id: string

@@ -4,10 +4,41 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/Notifuse/notifuse/internal/domain"
 )
+
+// broadcastListColumns is the ordered column list selected when listing
+// broadcasts. The order must stay in sync with scanBroadcast.
+const broadcastListColumns = `id,
+			workspace_id,
+			name,
+			status,
+			audience,
+			schedule,
+			test_settings,
+			utm_parameters,
+			metadata,
+			winning_template,
+			test_sent_at,
+			winner_sent_at,
+			enqueued_count,
+			created_at,
+			updated_at,
+			started_at,
+			completed_at,
+			cancelled_at,
+			paused_at,
+			pause_reason,
+			data_feed`
+
+// escapeLikePattern escapes the characters that carry special meaning in a SQL
+// LIKE/ILIKE pattern so a user-provided search term is matched literally.
+func escapeLikePattern(s string) string {
+	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(s)
+}
 
 // broadcastRepository implements domain.BroadcastRepository for PostgreSQL
 type broadcastRepository struct {
@@ -338,97 +369,52 @@ func (r *broadcastRepository) UpdateBroadcastStatusTx(ctx context.Context, tx *s
 
 // ListBroadcastsTx retrieves a list of broadcasts within a transaction
 func (r *broadcastRepository) ListBroadcastsTx(ctx context.Context, tx *sql.Tx, params domain.ListBroadcastsParams) (*domain.BroadcastListResponse, error) {
-	// First count total records that match the criteria
-	var countQuery string
-	var countArgs []interface{}
+	// Build the WHERE clause dynamically from the provided filters so status
+	// and name search can be combined in any arrangement.
+	conditions := []string{"workspace_id = $1"}
+	args := []interface{}{params.WorkspaceID}
+	argIdx := 2
 
-	if params.Status != "" {
-		countQuery = `
-			SELECT COUNT(*)
-			FROM broadcasts
-			WHERE workspace_id = $1 AND status = $2
-		`
-		countArgs = []interface{}{params.WorkspaceID, params.Status}
-	} else {
-		countQuery = `
-			SELECT COUNT(*)
-			FROM broadcasts
-			WHERE workspace_id = $1
-		`
-		countArgs = []interface{}{params.WorkspaceID}
+	// Status filter: prefer the multi-status list, falling back to the single
+	// Status field for backward compatibility.
+	if len(params.Statuses) > 0 {
+		placeholders := make([]string, len(params.Statuses))
+		for i, status := range params.Statuses {
+			placeholders[i] = fmt.Sprintf("$%d", argIdx)
+			args = append(args, status)
+			argIdx++
+		}
+		conditions = append(conditions, fmt.Sprintf("status IN (%s)", strings.Join(placeholders, ", ")))
+	} else if params.Status != "" {
+		conditions = append(conditions, fmt.Sprintf("status = $%d", argIdx))
+		args = append(args, params.Status)
+		argIdx++
 	}
 
+	// Search filter: case-insensitive substring match on the broadcast name.
+	if params.Search != "" {
+		conditions = append(conditions, fmt.Sprintf("name ILIKE $%d", argIdx))
+		args = append(args, "%"+escapeLikePattern(params.Search)+"%")
+		argIdx++
+	}
+
+	whereClause := strings.Join(conditions, " AND ")
+
+	// First count total records that match the criteria
+	countQuery := "SELECT COUNT(*) FROM broadcasts WHERE " + whereClause
+
 	var totalCount int
-	err := tx.QueryRowContext(ctx, countQuery, countArgs...).Scan(&totalCount)
+	err := tx.QueryRowContext(ctx, countQuery, args...).Scan(&totalCount)
 	if err != nil {
 		return nil, fmt.Errorf("failed to count broadcasts: %w", err)
 	}
 
-	// Then query paginated data
-	var dataQuery string
-	var dataArgs []interface{}
-
-	if params.Status != "" {
-		dataQuery = `
-			SELECT
-				id,
-				workspace_id,
-				name,
-				status,
-				audience,
-				schedule,
-				test_settings,
-				utm_parameters,
-				metadata,
-				winning_template,
-				test_sent_at,
-				winner_sent_at,
-				enqueued_count,
-				created_at,
-				updated_at,
-				started_at,
-				completed_at,
-				cancelled_at,
-				paused_at,
-				pause_reason,
-				data_feed
-			FROM broadcasts
-			WHERE workspace_id = $1 AND status = $2
-			ORDER BY created_at DESC
-			LIMIT $3 OFFSET $4
-		`
-		dataArgs = []interface{}{params.WorkspaceID, params.Status, params.Limit, params.Offset}
-	} else {
-		dataQuery = `
-			SELECT
-				id,
-				workspace_id,
-				name,
-				status,
-				audience,
-				schedule,
-				test_settings,
-				utm_parameters,
-				metadata,
-				winning_template,
-				test_sent_at,
-				winner_sent_at,
-				enqueued_count,
-				created_at,
-				updated_at,
-				started_at,
-				completed_at,
-				cancelled_at,
-				paused_at,
-				pause_reason,
-				data_feed
-			FROM broadcasts
-			WHERE workspace_id = $1
-			ORDER BY created_at DESC
-			LIMIT $2 OFFSET $3
-		`
-		dataArgs = []interface{}{params.WorkspaceID, params.Limit, params.Offset}
-	}
+	// Then query paginated data using the same filters plus pagination.
+	dataQuery := fmt.Sprintf(
+		"SELECT %s FROM broadcasts WHERE %s ORDER BY created_at DESC LIMIT $%d OFFSET $%d",
+		broadcastListColumns, whereClause, argIdx, argIdx+1,
+	)
+	dataArgs := append(append([]interface{}{}, args...), params.Limit, params.Offset)
 
 	rows, err := tx.QueryContext(ctx, dataQuery, dataArgs...)
 	if err != nil {

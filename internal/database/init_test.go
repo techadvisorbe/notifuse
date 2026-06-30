@@ -7,6 +7,9 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/Notifuse/notifuse/internal/database/schema"
+	"github.com/Notifuse/notifuse/internal/domain"
 )
 
 func TestCleanDatabase(t *testing.T) {
@@ -72,7 +75,7 @@ func TestInitializeDatabase(t *testing.T) {
 	t.Run("Nil database connection panics", func(t *testing.T) {
 		// The function doesn't check for nil, so it will panic
 		assert.Panics(t, func() {
-			_ = InitializeDatabase(nil, "test@example.com")
+			_ = InitializeDatabase(nil, []string{"test@example.com"})
 		})
 	})
 
@@ -85,7 +88,7 @@ func TestInitializeDatabase(t *testing.T) {
 		// Mock the first table creation to fail
 		mock.ExpectExec(".+").WillReturnError(sql.ErrConnDone)
 
-		err = InitializeDatabase(db, "test@example.com")
+		err = InitializeDatabase(db, []string{"test@example.com"})
 
 		// Should get an error
 		assert.Error(t, err)
@@ -193,7 +196,7 @@ func TestInitializeDatabase_Comprehensive(t *testing.T) {
 		}
 
 		// Test with empty email - no user creation queries expected
-		err = InitializeDatabase(db, "")
+		err = InitializeDatabase(db, nil)
 		assert.NoError(t, err)
 	})
 
@@ -205,9 +208,81 @@ func TestInitializeDatabase_Comprehensive(t *testing.T) {
 		// Mock first SQL statement to fail
 		mock.ExpectExec(".+").WillReturnError(sql.ErrConnDone)
 
-		err = InitializeDatabase(db, "")
+		err = InitializeDatabase(db, nil)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to create table")
+	})
+}
+
+func TestInitializeDatabase_MultipleRootEmails(t *testing.T) {
+	// Number of table + migration statements run before any root user creation.
+	schemaStatements := len(schema.TableDefinitions) + len(schema.GetMigrationStatements())
+
+	expectSchema := func(mock sqlmock.Sqlmock) {
+		for i := 0; i < schemaStatements; i++ {
+			mock.ExpectExec(".+").WillReturnResult(sqlmock.NewResult(0, 0))
+		}
+	}
+
+	t.Run("creates a user row for each listed root that doesn't exist", func(t *testing.T) {
+		db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+		require.NoError(t, err)
+		defer func() { _ = db.Close() }()
+
+		expectSchema(mock)
+
+		emails := []string{"alice@example.com", "bob@example.com"}
+		for _, email := range emails {
+			mock.ExpectQuery("SELECT EXISTS").
+				WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+			mock.ExpectExec("INSERT INTO users").
+				WithArgs(sqlmock.AnyArg(), email, "Root User", domain.UserTypeUser, sqlmock.AnyArg(), sqlmock.AnyArg()).
+				WillReturnResult(sqlmock.NewResult(1, 1))
+		}
+
+		err = InitializeDatabase(db, emails)
+		assert.NoError(t, err)
+		assert.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("idempotent - skips INSERT when root already exists", func(t *testing.T) {
+		db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+		require.NoError(t, err)
+		defer func() { _ = db.Close() }()
+
+		expectSchema(mock)
+
+		// First root exists (no INSERT), second is new (INSERT expected).
+		mock.ExpectQuery("SELECT EXISTS").
+			WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+		mock.ExpectQuery("SELECT EXISTS").
+			WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+		mock.ExpectExec("INSERT INTO users").
+			WithArgs(sqlmock.AnyArg(), "bob@example.com", "Root User", domain.UserTypeUser, sqlmock.AnyArg(), sqlmock.AnyArg()).
+			WillReturnResult(sqlmock.NewResult(1, 1))
+
+		err = InitializeDatabase(db, []string{"alice@example.com", "bob@example.com"})
+		assert.NoError(t, err)
+		assert.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("skips empty entries in the list", func(t *testing.T) {
+		db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+		require.NoError(t, err)
+		defer func() { _ = db.Close() }()
+
+		expectSchema(mock)
+
+		// Only the non-empty entry triggers an existence check + insert.
+		mock.ExpectQuery("SELECT EXISTS").
+			WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+		mock.ExpectExec("INSERT INTO users").
+			WithArgs(sqlmock.AnyArg(), "alice@example.com", "Root User", domain.UserTypeUser, sqlmock.AnyArg(), sqlmock.AnyArg()).
+			WillReturnResult(sqlmock.NewResult(1, 1))
+
+		err = InitializeDatabase(db, []string{"", "alice@example.com"})
+		assert.NoError(t, err)
+		assert.NoError(t, mock.ExpectationsWereMet())
 	})
 }
 

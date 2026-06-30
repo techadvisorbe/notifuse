@@ -19,18 +19,28 @@ var privateNetworks []*net.IPNet
 
 func init() {
 	cidrs := []string{
-		"127.0.0.0/8",    // loopback
-		"10.0.0.0/8",     // private class A
-		"172.16.0.0/12",  // private class B
-		"192.168.0.0/16", // private class C
-		"169.254.0.0/16", // link-local
-		"0.0.0.0/8",      // unspecified
-		"100.64.0.0/10",  // carrier-grade NAT (RFC 6598)
-		"::1/128",        // IPv6 loopback
-		"fc00::/7",       // IPv6 unique local
-		"fe80::/10",      // IPv6 link-local
-		"::/128",         // IPv6 unspecified
-		"ff00::/8",       // IPv6 multicast
+		"127.0.0.0/8",     // loopback
+		"10.0.0.0/8",      // private class A
+		"172.16.0.0/12",   // private class B
+		"192.168.0.0/16",  // private class C
+		"169.254.0.0/16",  // link-local (includes cloud metadata 169.254.169.254)
+		"0.0.0.0/8",       // "this host on this network" (RFC 1122)
+		"100.64.0.0/10",   // carrier-grade NAT (RFC 6598)
+		"192.0.0.0/24",    // IETF protocol assignments (RFC 6890)
+		"192.0.2.0/24",    // TEST-NET-1 documentation (RFC 5737)
+		"198.18.0.0/15",   // benchmarking (RFC 2544)
+		"198.51.100.0/24", // TEST-NET-2 documentation (RFC 5737)
+		"203.0.113.0/24",  // TEST-NET-3 documentation (RFC 5737)
+		"224.0.0.0/4",     // IPv4 multicast
+		"240.0.0.0/4",     // reserved + broadcast 255.255.255.255 (RFC 1112)
+		"::1/128",         // IPv6 loopback
+		"fc00::/7",        // IPv6 unique local
+		"fe80::/10",       // IPv6 link-local
+		"::/128",          // IPv6 unspecified
+		"ff00::/8",        // IPv6 multicast
+		"2001:db8::/32",   // IPv6 documentation (RFC 3849)
+		"2002::/16",       // 6to4 — can embed a private IPv4 (RFC 3056; deprecated by RFC 7526)
+		"64:ff9b::/96",    // NAT64 well-known prefix — can embed a private IPv4 (RFC 6052)
 	}
 	for _, cidr := range cidrs {
 		_, network, _ := net.ParseCIDR(cidr)

@@ -1,10 +1,11 @@
-import { Button, Popover } from 'antd'
+import { Button, Popover, Select } from 'antd'
 import { CloseOutlined } from '@ant-design/icons'
 import { Sparkles, User } from 'lucide-react'
 import { Bubble, Sender } from '@ant-design/x'
 import { XMarkdown } from '@ant-design/x-markdown'
 import '@ant-design/x-markdown/dist/x-markdown.css'
 import { useLingui } from '@lingui/react/macro'
+import { getLLMProviderIcon } from '../integrations/LLMProviders'
 import type { AIAssistantChatProps } from './types'
 
 export function AIAssistantChat({
@@ -18,6 +19,8 @@ export function AIAssistantChat({
   costs,
   inputContainerRef,
   llmIntegration,
+  llmIntegrations,
+  setSelectedLLMIntegrationId,
   handleCancel,
   handleSend,
   bubbleItems,
@@ -175,12 +178,35 @@ export function AIAssistantChat({
               <span style={{ color: config.iconColor }}>{config.icon}</span>
               <span style={{ fontWeight: 500 }}>{config.title}</span>
             </div>
-            <Button
-              type="text"
-              size="small"
-              icon={<CloseOutlined />}
-              onClick={() => setOpen(false)}
-            />
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+              {/* Provider picker, only when more than one LLM integration is configured */}
+              {llmIntegrations.length > 1 && (
+                <Select
+                  size="small"
+                  variant="borderless"
+                  value={llmIntegration?.id}
+                  onChange={(id) => setSelectedLLMIntegrationId(id)}
+                  disabled={isStreaming}
+                  popupMatchSelectWidth={false}
+                  style={{ maxWidth: 180 }}
+                  options={llmIntegrations.map((i) => ({
+                    value: i.id,
+                    label: (
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                        {getLLMProviderIcon(i.llm_provider?.kind || '', 12)}
+                        <span>{i.name}</span>
+                      </span>
+                    )
+                  }))}
+                />
+              )}
+              <Button
+                type="text"
+                size="small"
+                icon={<CloseOutlined />}
+                onClick={() => setOpen(false)}
+              />
+            </div>
           </div>
 
           {/* Messages area */}

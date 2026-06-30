@@ -1768,6 +1768,24 @@ func TestBuildTemplateData(t *testing.T) {
 		assert.Contains(t, notificationCenterURL, "wid=ws-123")
 		assert.NotContains(t, notificationCenterURL, "action=") // Should not contain action parameter
 		assert.NotContains(t, notificationCenterURL, "lid=")    // Should not contain list ID
+
+		// Check one-click unsubscribe URL (RFC 8058). This is the URL placed in the
+		// List-Unsubscribe header and POSTed by mail clients. It MUST carry email_hmac:
+		// the public /unsubscribe-oneclick endpoint has no bearer token, so the service
+		// authenticates the request by verifying this HMAC against the workspace secret
+		// key. Without it the unsubscribe is rejected (see ListService.UnsubscribeFromLists).
+		oneclickURL, ok := data["oneclick_unsubscribe_url"].(string)
+		assert.True(t, ok)
+		assert.Contains(t, oneclickURL, "https://api.example.com/unsubscribe-oneclick")
+		parsedOneclick, parseErr := url.Parse(oneclickURL)
+		assert.NoError(t, parseErr)
+		oneclickQuery := parsedOneclick.Query()
+		assert.Equal(t, "test@example.com", oneclickQuery.Get("email"))
+		assert.Equal(t, "list-789", oneclickQuery.Get("lids"))
+		assert.Equal(t, "ws-123", oneclickQuery.Get("wid"))
+		assert.Equal(t, "msg-456", oneclickQuery.Get("mid"))
+		assert.Equal(t, ComputeEmailHMAC("test@example.com", workspaceSecretKey), oneclickQuery.Get("email_hmac"),
+			"one-click URL must include a valid email_hmac or the unsubscribe will be rejected by the service")
 	})
 
 	t.Run("with minimal data", func(t *testing.T) {
@@ -2455,6 +2473,85 @@ func TestTemplate_ResolveWebContent(t *testing.T) {
 		tmpl := &Template{Web: nil}
 		result := tmpl.ResolveWebContent("fr", "en")
 		assert.Nil(t, result)
+	})
+}
+
+func TestResolveSubjectPreviewOverride(t *testing.T) {
+	explicit := "explicit override"
+	empty := ""
+	contentPreview := "content preview"
+	content := &EmailTemplate{SubjectPreview: &contentPreview}
+
+	t.Run("explicit override wins", func(t *testing.T) {
+		got := ResolveSubjectPreviewOverride(&explicit, content)
+		assert.NotNil(t, got)
+		assert.Equal(t, "explicit override", *got)
+	})
+
+	t.Run("nil explicit falls back to resolved content", func(t *testing.T) {
+		got := ResolveSubjectPreviewOverride(nil, content)
+		assert.NotNil(t, got)
+		assert.Equal(t, "content preview", *got)
+	})
+
+	t.Run("empty explicit falls back to resolved content", func(t *testing.T) {
+		got := ResolveSubjectPreviewOverride(&empty, content)
+		assert.NotNil(t, got)
+		assert.Equal(t, "content preview", *got)
+	})
+
+	t.Run("nil content yields nil", func(t *testing.T) {
+		assert.Nil(t, ResolveSubjectPreviewOverride(nil, nil))
+	})
+
+	t.Run("content with nil preview yields nil", func(t *testing.T) {
+		assert.Nil(t, ResolveSubjectPreviewOverride(nil, &EmailTemplate{}))
+	})
+}
+
+func TestEmailTemplate_ApplyToCompileRequest(t *testing.T) {
+	preview := "variant preview"
+
+	t.Run("visual mode sets tree and preview override, leaves mjml source nil", func(t *testing.T) {
+		tree := createValidMJMLBlock()
+		e := &EmailTemplate{
+			EditorMode:       EditorModeVisual,
+			VisualEditorTree: tree,
+			SubjectPreview:   &preview,
+		}
+		var req CompileTemplateRequest
+		e.ApplyToCompileRequest(&req, nil)
+
+		assert.Equal(t, tree, req.VisualEditorTree)
+		assert.Nil(t, req.MjmlSource)
+		assert.NotNil(t, req.SubjectPreviewOverride)
+		assert.Equal(t, "variant preview", *req.SubjectPreviewOverride)
+	})
+
+	t.Run("code mode sets mjml source from the variant", func(t *testing.T) {
+		src := "<mjml></mjml>"
+		e := &EmailTemplate{
+			EditorMode:     EditorModeCode,
+			MjmlSource:     &src,
+			SubjectPreview: &preview,
+		}
+		var req CompileTemplateRequest
+		e.ApplyToCompileRequest(&req, nil)
+
+		assert.NotNil(t, req.MjmlSource)
+		assert.Equal(t, "<mjml></mjml>", *req.MjmlSource)
+		assert.NotNil(t, req.SubjectPreviewOverride)
+		assert.Equal(t, "variant preview", *req.SubjectPreviewOverride)
+	})
+
+	t.Run("explicit override takes precedence over variant preview", func(t *testing.T) {
+		explicit := "explicit override"
+		e := &EmailTemplate{SubjectPreview: &preview}
+		var req CompileTemplateRequest
+		e.ApplyToCompileRequest(&req, &explicit)
+
+		assert.NotNil(t, req.SubjectPreviewOverride)
+		assert.Equal(t, "explicit override", *req.SubjectPreviewOverride)
 	})
 }
 

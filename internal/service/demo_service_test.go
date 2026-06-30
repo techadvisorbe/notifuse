@@ -35,6 +35,18 @@ func TestDemoService_VerifyRootEmailHMAC(t *testing.T) {
 		assert.True(t, svc.VerifyRootEmailHMAC(valid))
 		assert.False(t, svc.VerifyRootEmailHMAC(valid+"x"))
 	})
+
+	t.Run("uses the primary email when ROOT_EMAIL is a list", func(t *testing.T) {
+		secret := "supersecretkey"
+		cfg := &config.Config{RootEmail: "primary@example.com,second@example.com", Security: config.SecurityConfig{SecretKey: secret}}
+		svc := &DemoService{logger: logger.NewLoggerWithLevel("disabled"), config: cfg}
+
+		// HMAC over the primary (first) email is accepted.
+		assert.True(t, svc.VerifyRootEmailHMAC(domain.ComputeEmailHMAC("primary@example.com", secret)))
+		// HMAC over a non-primary root, or over the raw list string, is rejected.
+		assert.False(t, svc.VerifyRootEmailHMAC(domain.ComputeEmailHMAC("second@example.com", secret)))
+		assert.False(t, svc.VerifyRootEmailHMAC(domain.ComputeEmailHMAC("primary@example.com,second@example.com", secret)))
+	})
 }
 
 func TestDemoService_DeleteAllWorkspaces(t *testing.T) {

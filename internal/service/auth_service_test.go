@@ -824,3 +824,124 @@ func TestAuthService_InvalidateSecretCache(t *testing.T) {
 	// Since secretLoaded is private, we test behavior indirectly.
 	require.NotNil(t, service)
 }
+
+// TestAuthService_AuthenticateUserForWorkspace_PlatformAdmin covers the ROOT_EMAIL
+// platform-admin override: a configured root email gets synthesized owner access to a
+// workspace even without a membership row, while non-root users and real errors are
+// unaffected.
+func TestAuthService_AuthenticateUserForWorkspace_PlatformAdmin(t *testing.T) {
+	const (
+		userID      = "rootuser"
+		sessionID   = "rootsession"
+		workspaceID = "workspace123"
+		rootEmail   = "root@example.com"
+	)
+
+	// buildService wires an AuthService whose IsRootEmail recognises rootEmail.
+	buildService := func(t *testing.T) (*mocks.MockAuthRepository, *mocks.MockWorkspaceRepository, *AuthService) {
+		ctrl := gomock.NewController(t)
+		mockAuthRepo := mocks.NewMockAuthRepository(ctrl)
+		mockWorkspaceRepo := mocks.NewMockWorkspaceRepository(ctrl)
+		mockLogger := pkgmocks.NewMockLogger(ctrl)
+		svc := NewAuthService(AuthServiceConfig{
+			Repository:          mockAuthRepo,
+			WorkspaceRepository: mockWorkspaceRepo,
+			GetSecret:           func() ([]byte, error) { return []byte("test-jwt-secret-key-1234567890123456"), nil },
+			Logger:              mockLogger,
+			IsRootEmail:         func(email string) bool { return email == rootEmail },
+		})
+		return mockAuthRepo, mockWorkspaceRepo, svc
+	}
+
+	// authedCtx builds a user-type session context and primes the auth repo to resolve `email`.
+	authedCtx := func(mockAuthRepo *mocks.MockAuthRepository, email string) context.Context {
+		ctx := context.WithValue(
+			context.WithValue(
+				context.WithValue(context.Background(), domain.UserIDKey, userID),
+				domain.SessionIDKey, sessionID,
+			),
+			domain.UserTypeKey, string(domain.UserTypeUser),
+		)
+		expiresAt := time.Now().Add(1 * time.Hour)
+		mockAuthRepo.EXPECT().GetSessionByID(ctx, sessionID, userID).Return(&expiresAt, nil)
+		mockAuthRepo.EXPECT().GetUserByID(ctx, userID).Return(&domain.User{ID: userID, Email: email}, nil)
+		return ctx
+	}
+
+	t.Run("root email with no membership gets synthesized owner", func(t *testing.T) {
+		mockAuthRepo, mockWorkspaceRepo, svc := buildService(t)
+		ctx := authedCtx(mockAuthRepo, rootEmail)
+		mockWorkspaceRepo.EXPECT().GetByID(ctx, workspaceID).Return(&domain.Workspace{ID: workspaceID}, nil)
+		mockWorkspaceRepo.EXPECT().GetUserWorkspace(ctx, userID, workspaceID).Return(nil, domain.ErrUserNotInWorkspace)
+
+		_, user, uw, err := svc.AuthenticateUserForWorkspace(ctx, workspaceID)
+		require.NoError(t, err)
+		require.NotNil(t, user)
+		require.NotNil(t, uw)
+		require.Equal(t, "owner", uw.Role)
+		require.Equal(t, domain.FullPermissions, uw.Permissions)
+		require.Equal(t, workspaceID, uw.WorkspaceID)
+	})
+
+	t.Run("root email cannot access a non-existent workspace", func(t *testing.T) {
+		mockAuthRepo, mockWorkspaceRepo, svc := buildService(t)
+		ctx := authedCtx(mockAuthRepo, rootEmail)
+		// GetByID fails first; the override must NOT fire, and GetUserWorkspace is never called.
+		mockWorkspaceRepo.EXPECT().GetByID(ctx, workspaceID).Return(nil, &domain.ErrWorkspaceNotFound{WorkspaceID: workspaceID})
+
+		_, _, uw, err := svc.AuthenticateUserForWorkspace(ctx, workspaceID)
+		require.Error(t, err)
+		require.Nil(t, uw)
+	})
+
+	t.Run("non-root non-member is still denied", func(t *testing.T) {
+		mockAuthRepo, mockWorkspaceRepo, svc := buildService(t)
+		ctx := authedCtx(mockAuthRepo, "member@example.com")
+		mockWorkspaceRepo.EXPECT().GetByID(ctx, workspaceID).Return(&domain.Workspace{ID: workspaceID}, nil)
+		mockWorkspaceRepo.EXPECT().GetUserWorkspace(ctx, userID, workspaceID).Return(nil, domain.ErrUserNotInWorkspace)
+
+		_, _, uw, err := svc.AuthenticateUserForWorkspace(ctx, workspaceID)
+		require.Error(t, err)
+		require.ErrorIs(t, err, domain.ErrUserNotInWorkspace)
+		require.Nil(t, uw)
+	})
+
+	t.Run("root email does not mask a real DB error", func(t *testing.T) {
+		mockAuthRepo, mockWorkspaceRepo, svc := buildService(t)
+		ctx := authedCtx(mockAuthRepo, rootEmail)
+		dbErr := errors.New("database connection lost")
+		mockWorkspaceRepo.EXPECT().GetByID(ctx, workspaceID).Return(&domain.Workspace{ID: workspaceID}, nil)
+		mockWorkspaceRepo.EXPECT().GetUserWorkspace(ctx, userID, workspaceID).Return(nil, dbErr)
+
+		_, _, uw, err := svc.AuthenticateUserForWorkspace(ctx, workspaceID)
+		require.Error(t, err)
+		require.ErrorIs(t, err, dbErr)
+		require.Nil(t, uw)
+	})
+
+	t.Run("root email holding a non-owner row is elevated to owner", func(t *testing.T) {
+		mockAuthRepo, mockWorkspaceRepo, svc := buildService(t)
+		ctx := authedCtx(mockAuthRepo, rootEmail)
+		mockWorkspaceRepo.EXPECT().GetByID(ctx, workspaceID).Return(&domain.Workspace{ID: workspaceID}, nil)
+		mockWorkspaceRepo.EXPECT().GetUserWorkspace(ctx, userID, workspaceID).
+			Return(&domain.UserWorkspace{UserID: userID, WorkspaceID: workspaceID, Role: "member"}, nil)
+
+		_, _, uw, err := svc.AuthenticateUserForWorkspace(ctx, workspaceID)
+		require.NoError(t, err)
+		require.NotNil(t, uw)
+		require.Equal(t, "owner", uw.Role)
+		require.Equal(t, domain.FullPermissions, uw.Permissions)
+	})
+
+	t.Run("non-root member keeps their role", func(t *testing.T) {
+		mockAuthRepo, mockWorkspaceRepo, svc := buildService(t)
+		ctx := authedCtx(mockAuthRepo, "member@example.com")
+		mockWorkspaceRepo.EXPECT().GetByID(ctx, workspaceID).Return(&domain.Workspace{ID: workspaceID}, nil)
+		mockWorkspaceRepo.EXPECT().GetUserWorkspace(ctx, userID, workspaceID).
+			Return(&domain.UserWorkspace{UserID: userID, WorkspaceID: workspaceID, Role: "member"}, nil)
+
+		_, _, uw, err := svc.AuthenticateUserForWorkspace(ctx, workspaceID)
+		require.NoError(t, err)
+		require.Equal(t, "member", uw.Role)
+	})
+}

@@ -96,7 +96,63 @@ func (s *WebhookRegistrationService) RegisterWebhooks(
 	}
 
 	// Delegate to provider implementation with the provider configuration
-	return provider.RegisterWebhooks(ctx, workspaceID, config.IntegrationID, baseURL, config.EventTypes, emailProvider)
+	status, err := provider.RegisterWebhooks(ctx, workspaceID, config.IntegrationID, baseURL, config.EventTypes, emailProvider)
+	if err != nil {
+		return nil, err
+	}
+
+	// For providers whose inbound (reply) mail arrives via a provider-side route rather
+	// than an event webhook (e.g. Mailgun Routes), also register that route so
+	// stop-on-reply works without manual ESP setup. Providers that don't support this
+	// simply don't implement the interface, so this step is skipped for them.
+	//
+	// Inbound provisioning is BEST-EFFORT relative to the primary registration: it uses a
+	// different (often broader) permission surface, so on failure we log and still return the
+	// already-succeeded delivery/bounce/complaint status rather than reporting the whole
+	// "Register Webhooks" action as failed. GetWebhookStatus surfaces inbound_registered=false.
+	if registrar, ok := provider.(domain.InboundRouteRegistrar); ok {
+		inboundURL := domain.GenerateInboundWebhookURL(baseURL, workspaceID, config.IntegrationID)
+		if err := registrar.EnsureInboundRoute(ctx, emailProvider, inboundURL); err != nil {
+			s.logger.WithField("workspace_id", workspaceID).
+				WithField("integration_id", config.IntegrationID).
+				WithField("provider", string(emailProvider.Kind)).
+				Warn("Inbound reply route registration failed; stop-on-reply unavailable until resolved: " + err.Error())
+		} else if emailProvider.Kind == domain.EmailProviderKindSES &&
+			emailProvider.SES != nil && emailProvider.SES.InboundTopicARN != "" {
+			// Persist the provisioned SNS topic ARN so the inbound parser can bind to it
+			// (the authentication check that a message came from OUR topic). Best-effort:
+			// a persistence failure leaves inbound unauthenticated-and-rejected, not open.
+			if err := s.persistSESInboundTopicARN(ctx, workspaceID, config.IntegrationID, emailProvider.SES.InboundTopicARN); err != nil {
+				s.logger.WithField("workspace_id", workspaceID).
+					WithField("integration_id", config.IntegrationID).
+					Warn("Failed to persist SES inbound topic ARN; inbound replies will be rejected until re-registered: " + err.Error())
+			}
+		}
+	}
+
+	return status, nil
+}
+
+// persistSESInboundTopicARN saves the provisioned inbound SNS topic ARN onto the integration's
+// SES settings so the inbound parser can bind to it. Re-saving the workspace round-trips the
+// integration secrets through BeforeSave/AfterLoad encryption (same pattern as UpdateIntegration).
+func (s *WebhookRegistrationService) persistSESInboundTopicARN(ctx context.Context, workspaceID, integrationID, arn string) error {
+	if arn == "" {
+		return nil
+	}
+	workspace, err := s.workspaceRepo.GetByID(ctx, workspaceID)
+	if err != nil {
+		return fmt.Errorf("failed to load workspace: %w", err)
+	}
+	integration := workspace.GetIntegrationByID(integrationID)
+	if integration == nil || integration.EmailProvider.SES == nil {
+		return fmt.Errorf("SES integration %s not found", integrationID)
+	}
+	if integration.EmailProvider.SES.InboundTopicARN == arn {
+		return nil // already persisted
+	}
+	integration.EmailProvider.SES.InboundTopicARN = arn // GetIntegrationByID returns a slice pointer
+	return s.workspaceRepo.Update(ctx, workspace)
 }
 
 // GetWebhookStatus gets the status of webhooks for an email provider

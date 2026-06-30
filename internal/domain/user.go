@@ -89,8 +89,13 @@ type UserRepository interface {
 	// CreateUser creates a new user in the database
 	CreateUser(ctx context.Context, user *User) error
 
-	// GetUserByEmail retrieves a user by their email address
+	// GetUserByEmail retrieves a user by their email address (exact match)
 	GetUserByEmail(ctx context.Context, email string) (*User, error)
+
+	// GetUserByEmailInsensitive retrieves a user by case-insensitive email match
+	// (lower(email)=lower($1)). Used by the OIDC bridge so a mixed-case invited
+	// user is matched regardless of the casing asserted by the IdP.
+	GetUserByEmailInsensitive(ctx context.Context, email string) (*User, error)
 
 	// GetUserByID retrieves a user by their ID
 	GetUserByID(ctx context.Context, id string) (*User, error)

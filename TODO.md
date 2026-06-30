@@ -12,8 +12,6 @@
 
 - send newsletter to all contacts+previous customers
 - post supabase on twitter and facebook
-- page vs mailerlite
-- page vs mautic
 
 - https://docs.dify.ai/en/develop-plugin/getting-started/getting-started-dify-plugin
 - n8N

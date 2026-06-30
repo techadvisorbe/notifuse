@@ -1254,6 +1254,132 @@ func TestTaskService_ExecutePendingTasks(t *testing.T) {
 	})
 }
 
+// TestTaskService_ExecutePendingTasks_ExecutionMode verifies the execution-mode
+// branch in ExecutePendingTasks: direct (in-process) vs HTTP dispatch. The
+// decisive signal is an httptest server with a request counter — direct mode
+// must never touch it, even when an API endpoint is configured.
+func TestTaskService_ExecutePendingTasks_ExecutionMode(t *testing.T) {
+	makeTask := func() *domain.Task {
+		return &domain.Task{
+			ID:          "task1",
+			WorkspaceID: "workspace1",
+			Type:        "send_broadcast",
+			Status:      domain.TaskStatusPending,
+			MaxRuntime:  60,
+		}
+	}
+
+	newLogger := func(ctrl *gomock.Controller) *pkgmocks.MockLogger {
+		l := pkgmocks.NewMockLogger(ctrl)
+		l.EXPECT().WithField(gomock.Any(), gomock.Any()).Return(l).AnyTimes()
+		l.EXPECT().WithFields(gomock.Any()).Return(l).AnyTimes()
+		l.EXPECT().Info(gomock.Any()).AnyTimes()
+		l.EXPECT().Warn(gomock.Any()).AnyTimes()
+		l.EXPECT().Debug(gomock.Any()).AnyTimes()
+		l.EXPECT().Error(gomock.Any()).AnyTimes()
+		return l
+	}
+
+	t.Run("direct execution bypasses HTTP even when API endpoint is set", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		var httpHits int32
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			atomic.AddInt32(&httpHits, 1)
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer server.Close()
+
+		repo := mocks.NewMockTaskRepository(ctrl)
+		settingRepo := mocks.NewMockSettingRepository(ctrl)
+
+		// API endpoint IS set, but direct execution must take precedence.
+		svc := NewTaskService(repo, settingRepo, newLogger(ctrl), nil, server.URL)
+		svc.SetAutoExecuteImmediate(false)
+		svc.SetDirectExecution(true)
+		assert.True(t, svc.IsDirectExecution())
+
+		settingRepo.EXPECT().SetLastCronRun(gomock.Any()).Return(nil)
+		repo.EXPECT().GetNextBatch(gomock.Any(), 5).Return([]*domain.Task{makeTask()}, nil)
+		// Direct path runs ExecuteTask in-process (no processor registered → it fails
+		// gracefully, but crucially never makes an HTTP call).
+		repo.EXPECT().WithTransaction(gomock.Any(), gomock.Any()).
+			DoAndReturn(func(ctx context.Context, fn func(*sql.Tx) error) error { return fn(nil) }).AnyTimes()
+		repo.EXPECT().GetTx(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(makeTask(), nil).AnyTimes()
+		repo.EXPECT().MarkAsRunningTx(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		repo.EXPECT().MarkAsFailed(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+
+		err := svc.ExecutePendingTasks(context.Background(), 5)
+		assert.NoError(t, err)
+
+		time.Sleep(100 * time.Millisecond) // allow any (erroneous) dispatch goroutine to fire
+		assert.Equal(t, int32(0), atomic.LoadInt32(&httpHits),
+			"direct mode must not call the HTTP /api/tasks.execute endpoint")
+	})
+
+	t.Run("http execution dispatches to the API endpoint when direct is off", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		hit := make(chan struct{}, 4)
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			select {
+			case hit <- struct{}{}:
+			default:
+			}
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer server.Close()
+
+		repo := mocks.NewMockTaskRepository(ctrl)
+		settingRepo := mocks.NewMockSettingRepository(ctrl)
+
+		// directExecution defaults to false; API endpoint set → HTTP dispatch.
+		svc := NewTaskService(repo, settingRepo, newLogger(ctrl), nil, server.URL)
+		svc.SetAutoExecuteImmediate(false)
+		assert.False(t, svc.IsDirectExecution())
+
+		settingRepo.EXPECT().SetLastCronRun(gomock.Any()).Return(nil)
+		repo.EXPECT().GetNextBatch(gomock.Any(), 5).Return([]*domain.Task{makeTask()}, nil)
+		// No direct-execution mocks: if it wrongly took the direct branch it would
+		// call WithTransaction and gomock would fail on the unexpected call.
+
+		err := svc.ExecutePendingTasks(context.Background(), 5)
+		assert.NoError(t, err)
+
+		select {
+		case <-hit:
+			// success: the dispatch reached the HTTP endpoint
+		case <-time.After(2 * time.Second):
+			t.Fatal("expected HTTP dispatch to /api/tasks.execute, but the endpoint was never hit")
+		}
+	})
+
+	t.Run("falls back to direct execution when API endpoint is empty", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		repo := mocks.NewMockTaskRepository(ctrl)
+		settingRepo := mocks.NewMockSettingRepository(ctrl)
+
+		svc := NewTaskService(repo, settingRepo, newLogger(ctrl), nil, "") // empty endpoint
+		svc.SetAutoExecuteImmediate(false)
+		assert.False(t, svc.IsDirectExecution(), "flag itself is false; fallback is driven by empty endpoint")
+
+		settingRepo.EXPECT().SetLastCronRun(gomock.Any()).Return(nil)
+		repo.EXPECT().GetNextBatch(gomock.Any(), 5).Return([]*domain.Task{makeTask()}, nil)
+		repo.EXPECT().WithTransaction(gomock.Any(), gomock.Any()).
+			DoAndReturn(func(ctx context.Context, fn func(*sql.Tx) error) error { return fn(nil) }).AnyTimes()
+		repo.EXPECT().GetTx(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(makeTask(), nil).AnyTimes()
+		repo.EXPECT().MarkAsRunningTx(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		repo.EXPECT().MarkAsFailed(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+
+		err := svc.ExecutePendingTasks(context.Background(), 5)
+		assert.NoError(t, err)
+	})
+}
+
 func TestTaskService_HandleBroadcastResumed(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()

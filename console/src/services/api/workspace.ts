@@ -156,7 +156,7 @@ export interface SendGridSettings {
 export type IntegrationType = 'email' | 'sms' | 'whatsapp' | 'supabase' | 'llm' | 'firecrawl'
 
 // LLM Provider types
-export type LLMProviderKind = 'anthropic' | 'openai'
+export type LLMProviderKind = 'anthropic' | 'openai' | 'gemini'
 
 export interface AnthropicSettings {
   api_key?: string
@@ -171,10 +171,17 @@ export interface OpenAISettings {
   base_url?: string
 }
 
+export interface GeminiSettings {
+  api_key?: string
+  encrypted_api_key?: string
+  model: string
+}
+
 export interface LLMProvider {
   kind: LLMProviderKind
   anthropic?: AnthropicSettings
   openai?: OpenAISettings
+  gemini?: GeminiSettings
 }
 
 // Firecrawl settings for web scraping and search
@@ -379,6 +386,27 @@ export interface SetUserPermissionsResponse {
   message: string
 }
 
+export interface SetCustomFieldLabelsRequest {
+  workspace_id: string
+  custom_field_labels: Record<string, string>
+}
+
+export interface SetCustomFieldLabelsResponse {
+  status: string
+  message: string
+}
+
+export interface SetBlogSettingsRequest {
+  workspace_id: string
+  blog_enabled: boolean
+  blog_settings?: BlogSettings
+}
+
+export interface SetBlogSettingsResponse {
+  status: string
+  message: string
+}
+
 // Invitation types
 export interface WorkspaceInvitation {
   id: string
@@ -479,5 +507,11 @@ export const workspaceService = {
     api.post<DeleteInvitationResponse>('/api/workspaces.deleteInvitation', data),
 
   setUserPermissions: (data: SetUserPermissionsRequest) =>
-    api.post<SetUserPermissionsResponse>('/api/workspaces.setUserPermissions', data)
+    api.post<SetUserPermissionsResponse>('/api/workspaces.setUserPermissions', data),
+
+  setCustomFieldLabels: (data: SetCustomFieldLabelsRequest) =>
+    api.post<SetCustomFieldLabelsResponse>('/api/workspaces.setCustomFieldLabels', data),
+
+  setBlogSettings: (data: SetBlogSettingsRequest) =>
+    api.post<SetBlogSettingsResponse>('/api/workspaces.setBlogSettings', data)
 }

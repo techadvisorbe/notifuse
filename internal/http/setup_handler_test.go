@@ -104,6 +104,10 @@ func (m *mockUserRepository) GetUserByEmail(ctx context.Context, email string) (
 	return nil, nil
 }
 
+func (m *mockUserRepository) GetUserByEmailInsensitive(ctx context.Context, email string) (*domain.User, error) {
+	return nil, nil
+}
+
 func (m *mockUserRepository) UpdateUserLanguage(ctx context.Context, userID string, language string) error {
 	return nil
 }

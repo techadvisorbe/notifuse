@@ -3,11 +3,23 @@ package domain
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"time"
 
 	"github.com/asaskevich/govalidator"
+)
+
+// Permanent (client/config) errors for inbound reply processing. The HTTP handler maps
+// these to 4xx so the provider stops retrying, instead of 5xx (which triggers retries).
+var (
+	ErrInboundIntegrationNotFound = errors.New("inbound: integration not found")
+	ErrInboundProviderUnsupported = errors.New("inbound: provider does not support inbound replies")
+	// ErrInboundControlMessage signals that a ReplyParser handled a provider control
+	// message (e.g. an SNS subscription confirmation) rather than a real reply. The caller
+	// acknowledges with 200 and ingests nothing.
+	ErrInboundControlMessage = errors.New("inbound: provider control message (no reply)")
 )
 
 //go:generate mockgen -destination mocks/mock_inbound_webhook_event_repository.go -package mocks github.com/Notifuse/notifuse/internal/domain InboundWebhookEventRepository
@@ -25,6 +37,17 @@ const (
 
 	// EmailEventComplaint indicates a complaint was filed for the email
 	EmailEventComplaint EmailEventType = "complaint"
+
+	// EmailEventReply indicates the contact replied to an email we sent. Unlike the
+	// other (outbound-tracking) event types, a reply is an inbound message: the
+	// contact is the SENDER. It is surfaced on the contact timeline as kind
+	// "email.replied" so automations can stop a sequence on reply.
+	EmailEventReply EmailEventType = "reply"
+
+	// EmailEventAutoReply indicates an inbound auto-responder / out-of-office reply.
+	// Recorded for visibility (timeline kind "email.auto_reply") but never exits a
+	// journey.
+	EmailEventAutoReply EmailEventType = "auto_reply"
 
 	// EmailEventAuthEmail indicates a Supabase auth email webhook
 	EmailEventAuthEmail EmailEventType = "auth_email"
@@ -199,6 +222,8 @@ func (p *InboundWebhookEventListParams) Validate() error {
 			string(EmailEventDelivered),
 			string(EmailEventBounce),
 			string(EmailEventComplaint),
+			string(EmailEventReply),
+			string(EmailEventAutoReply),
 		}
 		if !govalidator.IsIn(string(p.EventType), validEventTypes...) {
 			return fmt.Errorf("invalid event type: %s", p.EventType)
@@ -232,6 +257,12 @@ type InboundWebhookEventServiceInterface interface {
 	// ProcessWebhook processes a webhook event from an email provider
 	ProcessWebhook(ctx context.Context, workspaceID, integrationID string, rawPayload []byte) error
 
+	// ProcessInboundReply ingests an inbound reply forwarded by a provider's inbound
+	// parsing feature: it verifies the provider signature, parses + classifies the
+	// message, matches it to a contact/journey, records the event, and exits the
+	// contact's exit_on_reply journeys on a genuine reply.
+	ProcessInboundReply(ctx context.Context, workspaceID, integrationID string, req *InboundRequest) error
+
 	// ListEvents retrieves all inbound webhook events for a workspace
 	ListEvents(ctx context.Context, workspaceID string, params InboundWebhookEventListParams) (*InboundWebhookEventListResult, error)
 }
@@ -240,6 +271,11 @@ type InboundWebhookEventServiceInterface interface {
 type InboundWebhookEventRepository interface {
 	// StoreEvents stores an inbound webhook event in the database
 	StoreEvents(ctx context.Context, workspaceID string, events []*InboundWebhookEvent) error
+
+	// StoreReplyEvent inserts a single inbound reply event, deduplicating on the reply's
+	// Message-ID. Returns inserted=false when an event with the same Message-ID already
+	// exists (a provider retry), so the caller can avoid re-firing side effects.
+	StoreReplyEvent(ctx context.Context, workspaceID string, event *InboundWebhookEvent) (inserted bool, err error)
 
 	// ListEvents retrieves all inbound webhook events for a workspace
 	ListEvents(ctx context.Context, workspaceID string, params InboundWebhookEventListParams) (*InboundWebhookEventListResult, error)

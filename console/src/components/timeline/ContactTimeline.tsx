@@ -12,7 +12,9 @@ import {
   faArrowRightFromBracket,
   faBolt,
   faPlay,
-  faFlagCheckered
+  faFlagCheckered,
+  faReply,
+  faRobot
 } from '@fortawesome/free-solid-svg-icons'
 import { faUser, faFolderOpen, faPaperPlane, faEye } from '@fortawesome/free-regular-svg-icons'
 import {
@@ -145,6 +147,10 @@ export function ContactTimeline({
           return faTriangleExclamation
         } else if (eventType === 'delivered') {
           return faCheck
+        } else if (eventType === 'reply') {
+          return faReply
+        } else if (eventType === 'auto_reply') {
+          return faRobot
         }
         return faBolt
       }
@@ -573,6 +579,8 @@ export function ContactTimeline({
           delivered: t`Delivered`,
           bounce: t`Bounce`,
           complaint: t`Complaint`,
+          reply: t`Replied`,
+          auto_reply: t`Auto-reply`,
           auth_email: t`Auth Email`,
           before_user_created: t`User Created`
         }

@@ -15,6 +15,8 @@ export const getLLMProviderName = (kind: string): string => {
       return 'Anthropic'
     case 'openai':
       return 'OpenAI'
+    case 'gemini':
+      return 'Google Gemini'
     default:
       return kind
   }
@@ -63,6 +65,25 @@ export const llmProviders: LLMProviderInfo[] = [
         <img
           src="/console/openai.png"
           alt="OpenAI"
+          style={{ height, maxWidth, objectFit: 'contain', display: 'inline-block' }}
+          className={className}
+        />
+      )
+    }
+  },
+  {
+    type: 'llm',
+    kind: 'gemini',
+    name: 'Google Gemini',
+    defaultModel: 'gemini-3.1-pro-preview',
+    getIcon: (className = '', size: 'small' | 'large' | number = 'small') => {
+      const height = typeof size === 'number' ? size : size === 'small' ? 12 : 18
+      // Wide wordmark logo (the spark + "Gemini"); constrain width like the other providers
+      const maxWidth = height * 5
+      return (
+        <img
+          src="/console/gemini.svg"
+          alt="Google Gemini"
           style={{ height, maxWidth, objectFit: 'contain', display: 'inline-block' }}
           className={className}
         />

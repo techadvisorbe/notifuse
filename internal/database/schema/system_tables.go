@@ -86,6 +86,18 @@ var TableDefinitions = []string{
 	`CREATE INDEX IF NOT EXISTS idx_tasks_created_at ON tasks (created_at)`,
 	`CREATE INDEX IF NOT EXISTS idx_tasks_broadcast_id ON tasks (broadcast_id)`,
 	`CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_workspace_broadcast_id ON tasks (workspace_id, broadcast_id) WHERE broadcast_id IS NOT NULL`,
+	// V34: OIDC / SSO — federated_identities keyed by the durable (idp_issuer, idp_sub) pair.
+	// FK to users(id) is added separately in MigrationStatements (no inline REFERENCES, per house style above).
+	`CREATE TABLE IF NOT EXISTS federated_identities (
+		id          UUID PRIMARY KEY,
+		user_id     UUID NOT NULL,
+		idp_issuer  VARCHAR(255) NOT NULL,
+		idp_sub     VARCHAR(255) NOT NULL,
+		created_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		UNIQUE (idp_issuer, idp_sub),
+		UNIQUE (user_id, idp_issuer)
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_federated_identities_user_id ON federated_identities (user_id)`,
 }
 
 // MigrationStatements contains SQL statements to be run after table creation
@@ -118,6 +130,21 @@ var MigrationStatements = []string{
 	`ALTER TABLE tasks ADD COLUMN IF NOT EXISTS integration_id VARCHAR(36)`,
 	`CREATE INDEX IF NOT EXISTS idx_tasks_integration_id ON tasks (integration_id) WHERE integration_id IS NOT NULL`,
 	`CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_workspace_integration_active ON tasks (workspace_id, integration_id) WHERE integration_id IS NOT NULL AND status NOT IN ('completed', 'failed')`,
+	// V34: functional index backing the case-insensitive OIDC email bridge (GetUserByEmailInsensitive).
+	`CREATE INDEX IF NOT EXISTS idx_users_lower_email ON users (lower(email))`,
+	// V34: federated_identities -> users FK with ON DELETE CASCADE (added separately to keep CREATE TABLE REFERENCES-free).
+	`DO $$
+	BEGIN
+		IF NOT EXISTS (
+			SELECT 1 FROM pg_constraint
+			WHERE conname = 'federated_identities_user_id_fkey'
+			AND conrelid = 'federated_identities'::regclass
+		) THEN
+			ALTER TABLE federated_identities
+				ADD CONSTRAINT federated_identities_user_id_fkey
+				FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE;
+		END IF;
+	END $$`,
 }
 
 // GetMigrationStatements returns migration statements for database schema setup
@@ -135,4 +162,5 @@ var TableNames = []string{
 	"broadcasts",
 	"tasks",
 	"settings",
+	"federated_identities",
 }

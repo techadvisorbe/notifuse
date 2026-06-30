@@ -273,6 +273,7 @@ func TestAutomationScheduler_ProcessBatchOnInterval(t *testing.T) {
 	mockAutomationRepo.EXPECT().CreateNodeExecution(gomock.Any(), "ws1", gomock.Any()).Return(nil).AnyTimes()
 	mockAutomationRepo.EXPECT().GetNodeExecutions(gomock.Any(), "ws1", gomock.Any()).Return([]*domain.NodeExecution{}, nil).AnyTimes()
 	mockAutomationRepo.EXPECT().UpdateContactAutomation(gomock.Any(), "ws1", gomock.Any()).Return(nil).AnyTimes()
+	mockAutomationRepo.EXPECT().UpdateContactAutomationIfActive(gomock.Any(), "ws1", gomock.Any()).Return(true, nil).AnyTimes()
 	mockAutomationRepo.EXPECT().UpdateNodeExecution(gomock.Any(), "ws1", gomock.Any()).Return(nil).AnyTimes()
 	mockAutomationRepo.EXPECT().IncrementAutomationStat(gomock.Any(), "ws1", "auto1", "completed").Return(nil).AnyTimes()
 	mockTimelineRepo.EXPECT().Create(gomock.Any(), "ws1", gomock.Any()).Return(nil).AnyTimes()

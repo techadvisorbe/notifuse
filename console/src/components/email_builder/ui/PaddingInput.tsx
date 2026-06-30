@@ -24,10 +24,13 @@ interface MjmlPaddingProps {
 type PaddingInputProps = IndividualPaddingProps | MjmlPaddingProps
 
 const isIndividualPadding = (props: PaddingInputProps): props is IndividualPaddingProps => {
-  return (
-    typeof (props as IndividualPaddingProps).value === 'object' ||
-    (props as IndividualPaddingProps).value === undefined
-  )
+  // Detect mode from the value's runtime type. When `value` is undefined (e.g. an
+  // mj-button whose inner-padding hasn't been set yet) fall back to `defaultValue`
+  // so shorthand callers — which always pass a string defaultValue — stay in
+  // shorthand mode and emit a string. Emitting an object here is what produced the
+  // `map[bottom:0px top:0px]` CSS that Gmail rejects (issue #369).
+  const probe = props.value !== undefined ? props.value : props.defaultValue
+  return typeof probe === 'object' || probe === undefined
 }
 
 /**

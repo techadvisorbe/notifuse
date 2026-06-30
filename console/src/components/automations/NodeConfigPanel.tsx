@@ -152,7 +152,11 @@ export const NodeConfigPanel: React.FC<NodeConfigPanelProps> = ({
           </button>
         )}
       </div>
-      <div className="p-3 overflow-y-auto flex-1">{renderConfigForm()}</div>
+      {/* key by node id so switching between same-type nodes remounts the form
+          and resets any internal form state (defense-in-depth for stale config) */}
+      <div key={selectedNode.id} className="p-3 overflow-y-auto flex-1">
+        {renderConfigForm()}
+      </div>
     </div>
   )
 }

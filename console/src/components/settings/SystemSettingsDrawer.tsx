@@ -14,7 +14,8 @@ import {
   Modal,
   Tooltip,
   Space,
-  Spin
+  Spin,
+  Select
 } from 'antd'
 import {
   SettingOutlined,
@@ -23,6 +24,7 @@ import {
 } from '@ant-design/icons'
 import { useLingui } from '@lingui/react/macro'
 import { settingsApi } from '../../services/api/settings'
+import { parseRootEmails } from '../../services/api/auth'
 import type { SystemSettingsData } from '../../types/settings'
 
 const { Text, Title } = Typography
@@ -64,8 +66,28 @@ export function SystemSettingsDrawer() {
   }, [open, fetchSettings])
 
   const bridgeEnabled = Form.useWatch('smtp_bridge_enabled', form)
+  const oidcEnabled = Form.useWatch('oidc_enabled', form)
+  const oidcAutoCreate = Form.useWatch('oidc_auto_create_users', form)
 
   const isOverridden = (field: string) => envOverrides[field] === true
+
+  // Validates the root_email field, which may hold one or more emails. The form
+  // store value is a comma-joined string (post-normalize), but accept an array
+  // too in case validation runs before normalize.
+  const validateRootEmails = (_rule: unknown, value: unknown): Promise<void> => {
+    const emails = Array.isArray(value)
+      ? value.map((email) => String(email).trim()).filter(Boolean)
+      : parseRootEmails(typeof value === 'string' ? value : '')
+    if (emails.length === 0) {
+      return Promise.reject(new Error(t`At least one root email is required`))
+    }
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+    const invalid = emails.filter((email) => !emailRegex.test(email))
+    if (invalid.length > 0) {
+      return Promise.reject(new Error(t`Invalid email: ${invalid.join(', ')}`))
+    }
+    return Promise.resolve()
+  }
 
   const renderEnvHint = (field: string) => {
     if (!isOverridden(field)) return null
@@ -231,13 +253,23 @@ export function SystemSettingsDrawer() {
                 <Form.Item
                   label={t`Root Email`}
                   name="root_email"
-                  rules={[
-                    { required: true, message: t`Required` },
-                    { type: 'email', message: t`Invalid email` }
-                  ]}
+                  // Store value stays a comma-joined string; the tags Select edits
+                  // it as a list. Decode string -> string[] for the control and
+                  // encode string[] -> string back into the form store.
+                  getValueProps={(value) => ({ value: parseRootEmails(value) })}
+                  normalize={(value) =>
+                    Array.isArray(value) ? value.join(',') : value ?? ''
+                  }
+                  rules={[{ validator: validateRootEmails }]}
                   help={renderEnvHint('root_email')}
                 >
-                  <Input disabled={isOverridden('root_email')} />
+                  <Select
+                    mode="tags"
+                    open={false}
+                    tokenSeparators={[',', ';', ' ']}
+                    disabled={isOverridden('root_email')}
+                    placeholder="admin@example.com"
+                  />
                 </Form.Item>
               </Col>
               <Col span={12}>
@@ -494,6 +526,130 @@ export function SystemSettingsDrawer() {
                     disabled={isOverridden('smtp_bridge_tls_key_base64')}
                     rows={3}
                     placeholder={t`Base64 encoded TLS private key`}
+                    allowClear
+                  />
+                </Form.Item>
+              </Col>
+            </Row>
+
+            <Divider />
+
+            {/* SSO (OIDC) */}
+            <Title level={5}>{t`SSO (OpenID Connect)`}</Title>
+            <Row gutter={16}>
+              <Col span={6}>
+                <Form.Item
+                  label={t`Enabled`}
+                  name="oidc_enabled"
+                  valuePropName="checked"
+                  help={renderEnvHint('oidc_enabled')}
+                >
+                  <Switch disabled={isOverridden('oidc_enabled')} />
+                </Form.Item>
+              </Col>
+              <Col span={18}>
+                <Form.Item
+                  label={t`Issuer URL`}
+                  name="oidc_issuer_url"
+                  rules={[
+                    { required: !!oidcEnabled, message: t`Required when SSO is enabled` },
+                    { type: 'url', message: t`Must be a valid https URL` }
+                  ]}
+                  help={renderEnvHint('oidc_issuer_url')}
+                >
+                  <Input
+                    disabled={isOverridden('oidc_issuer_url')}
+                    placeholder="https://accounts.google.com"
+                    allowClear
+                  />
+                </Form.Item>
+              </Col>
+            </Row>
+            <Row gutter={16}>
+              <Col span={12}>
+                <Form.Item
+                  label={t`Client ID`}
+                  name="oidc_client_id"
+                  rules={[{ required: !!oidcEnabled, message: t`Required when SSO is enabled` }]}
+                  help={renderEnvHint('oidc_client_id')}
+                >
+                  <Input disabled={isOverridden('oidc_client_id')} allowClear />
+                </Form.Item>
+              </Col>
+              <Col span={12}>
+                <Form.Item
+                  label={t`Client Secret`}
+                  name="oidc_client_secret"
+                  rules={[{ required: !!oidcEnabled, message: t`Required when SSO is enabled` }]}
+                  help={renderEnvHint('oidc_client_secret')}
+                >
+                  <Input.Password
+                    disabled={isOverridden('oidc_client_secret')}
+                    autoComplete="new-password"
+                  />
+                </Form.Item>
+              </Col>
+            </Row>
+            <Row gutter={16}>
+              <Col span={12}>
+                <Form.Item
+                  label={t`Button Label`}
+                  name="oidc_button_label"
+                  help={renderEnvHint('oidc_button_label')}
+                >
+                  <Input
+                    disabled={isOverridden('oidc_button_label')}
+                    placeholder={t`Sign in with SSO`}
+                    allowClear
+                  />
+                </Form.Item>
+              </Col>
+              <Col span={12}>
+                <Form.Item
+                  label={t`Scopes`}
+                  name="oidc_scopes"
+                  help={renderEnvHint('oidc_scopes')}
+                >
+                  <Input
+                    disabled={isOverridden('oidc_scopes')}
+                    placeholder="openid email profile"
+                    allowClear
+                  />
+                </Form.Item>
+              </Col>
+            </Row>
+            <Row gutter={16}>
+              <Col span={6}>
+                <Form.Item
+                  label={t`Auto-create users`}
+                  name="oidc_auto_create_users"
+                  valuePropName="checked"
+                  help={renderEnvHint('oidc_auto_create_users')}
+                >
+                  <Switch disabled={isOverridden('oidc_auto_create_users')} />
+                </Form.Item>
+              </Col>
+              <Col span={18}>
+                <Form.Item
+                  label={t`Allowed email domains`}
+                  name="oidc_allowed_domains"
+                  rules={[
+                    {
+                      required: !!oidcAutoCreate,
+                      message: t`Required when auto-create is enabled`
+                    }
+                  ]}
+                  help={
+                    renderEnvHint('oidc_allowed_domains') || (
+                      <Text type="secondary" style={{ fontSize: 11 }}>
+                        {t`Comma-separated. Only these domains may auto-create accounts.`}
+                      </Text>
+                    )
+                  }
+                >
+                  <Input
+                    disabled={isOverridden('oidc_allowed_domains')}
+                    placeholder="example.com, sub.example.com"
                     allowClear
                   />
                 </Form.Item>

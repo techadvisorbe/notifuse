@@ -43,11 +43,49 @@ func TestNewRootHandler(t *testing.T) {
 		nil, // workspaceRepo
 		nil, // blogService
 		nil, // cache
+		false, // oidcEnabled
+		"",    // oidcButtonLabel
 	)
 
 	// Assert fields are set correctly
 	assert.Equal(t, "console_test", handler.consoleDir)
 	assert.Equal(t, "notification_center_test", handler.notificationCenterDir)
+}
+
+func TestServeConfigJS_OIDC(t *testing.T) {
+	isInstalled := true
+	newHandler := func(enabled bool, label string) *RootHandler {
+		return NewRootHandler(
+			"console_test", "notification_center_test", logger.NewLogger(),
+			"https://api.example.com", "1.0", "root@example.com", &isInstalled,
+			false, "", 0, "off",
+			nil, nil, nil,
+			enabled, label,
+		)
+	}
+
+	t.Run("enabled exposes flag + label, never secrets", func(t *testing.T) {
+		h := newHandler(true, "Sign in with Google")
+		rec := httptest.NewRecorder()
+		h.serveConfigJS(rec, httptest.NewRequest("GET", "/config.js", nil))
+		body := rec.Body.String()
+		assert.Contains(t, body, "window.OIDC_ENABLED = true;")
+		assert.Contains(t, body, `window.OIDC_BUTTON_LABEL = "Sign in with Google";`)
+		// Defense: no provider secrets ever reach the browser.
+		assert.NotContains(t, body, "client_id")
+		assert.NotContains(t, body, "client_secret")
+		assert.NotContains(t, body, "issuer")
+	})
+
+	t.Run("disabled emits false", func(t *testing.T) {
+		h := newHandler(false, "")
+		rec := httptest.NewRecorder()
+		h.serveConfigJS(rec, httptest.NewRequest("GET", "/config.js", nil))
+		body := rec.Body.String()
+		assert.Contains(t, body, "window.OIDC_ENABLED = false;")
+		// Empty label falls back to the default so the SPA never renders a blank button.
+		assert.Contains(t, body, `window.OIDC_BUTTON_LABEL = "Sign in with SSO";`)
+	})
 }
 
 func TestRootHandler_Handle(t *testing.T) {
@@ -69,6 +107,8 @@ func TestRootHandler_Handle(t *testing.T) {
 		nil, // workspaceRepo
 		nil, // blogService
 		nil, // cache
+		false, // oidcEnabled
+		"",    // oidcButtonLabel
 	)
 
 	// Create a test request
@@ -111,6 +151,8 @@ func TestRootHandler_RegisterRoutes(t *testing.T) {
 		nil, // workspaceRepo
 		nil, // blogService
 		nil, // cache
+		false, // oidcEnabled
+		"",    // oidcButtonLabel
 	)
 	mux := http.NewServeMux()
 
@@ -159,6 +201,8 @@ func TestRootHandler_RegisterRoutesWithNotificationCenter(t *testing.T) {
 		nil, // workspaceRepo
 		nil, // blogService
 		nil, // cache
+		false, // oidcEnabled
+		"",    // oidcButtonLabel
 	)
 
 	mux := http.NewServeMux()
@@ -200,6 +244,8 @@ func TestRootHandler_ServeConfigJS(t *testing.T) {
 		nil, // workspaceRepo
 		nil, // blogService
 		nil, // cache
+		false, // oidcEnabled
+		"",    // oidcButtonLabel
 	)
 
 	// Create a request to /config.js
@@ -256,6 +302,8 @@ func TestRootHandler_Handle_ConfigJS(t *testing.T) {
 		nil, // workspaceRepo
 		nil, // blogService
 		nil, // cache
+		false, // oidcEnabled
+		"",    // oidcButtonLabel
 	)
 
 	// Create a request to /config.js
@@ -315,6 +363,8 @@ func TestRootHandler_ServeNotificationCenter(t *testing.T) {
 		nil, // workspaceRepo
 		nil, // blogService
 		nil, // cache
+		false, // oidcEnabled
+		"",    // oidcButtonLabel
 	)
 
 	t.Run("ServeExactPath", func(t *testing.T) {
@@ -392,6 +442,8 @@ func TestRootHandler_ServeConsole(t *testing.T) {
 		nil, // workspaceRepo
 		nil, // blogService
 		nil, // cache
+		false, // oidcEnabled
+		"",    // oidcButtonLabel
 	)
 
 	t.Run("ServeExactPath", func(t *testing.T) {
@@ -485,6 +537,8 @@ func TestRootHandler_Handle_Comprehensive(t *testing.T) {
 		nil, // workspaceRepo
 		nil, // blogService
 		nil, // cache
+		false, // oidcEnabled
+		"",    // oidcButtonLabel
 	)
 
 	t.Run("NotFoundAPIPath", func(t *testing.T) {
@@ -603,6 +657,8 @@ func TestRootHandler_CacheIntegration(t *testing.T) {
 			nil, // workspaceRepo
 			nil, // blogService
 			nil, // cache - nil is allowed
+			false, // oidcEnabled
+			"",    // oidcButtonLabel
 		)
 
 		// Verify handler is created successfully
@@ -670,6 +726,8 @@ func setupBlogHandlerTest(t *testing.T) (*mocks.MockBlogService, *pkgmocks.MockL
 		nil, // workspaceRepo
 		mockBlogService,
 		testCache,
+		false, // oidcEnabled
+		"",    // oidcButtonLabel
 	)
 
 	return mockBlogService, mockLogger, testCache, workspace, handler

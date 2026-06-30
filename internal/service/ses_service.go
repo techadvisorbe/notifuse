@@ -4,11 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"mime"
 	"mime/multipart"
 	"mime/quotedprintable"
 	"net/textproto"
+	"net/url"
 	"strings"
 	"unicode"
 
@@ -29,6 +32,25 @@ var (
 	ErrInvalidSNSDestination = fmt.Errorf("SNS destination and Topic ARN are required")
 	ErrInvalidSESConfig      = fmt.Errorf("SES configuration is missing or invalid")
 )
+
+// sesReceivingRegions is the set of AWS regions where SES supports inbound email receiving
+// (receipt rules), taken from the AWS General Reference "Email Receiving endpoints" table.
+// SES exposes no API to query this, so it is a static allowlist — revisit when AWS adds
+// regions. Notably excludes GovCloud, ap-south-2, ap-southeast-5, ca-west-1, eu-central-2,
+// and me-central-1, which support sending but NOT receiving.
+var sesReceivingRegions = map[string]bool{
+	"us-east-1": true, "us-east-2": true, "us-west-1": true, "us-west-2": true,
+	"af-south-1": true, "ap-southeast-3": true, "ap-south-1": true, "ap-northeast-3": true,
+	"ap-northeast-2": true, "ap-southeast-1": true, "ap-southeast-2": true, "ap-northeast-1": true,
+	"ca-central-1": true, "eu-central-1": true, "eu-west-1": true, "eu-west-2": true,
+	"eu-south-1": true, "eu-west-3": true, "eu-north-1": true, "il-central-1": true,
+	"me-south-1": true, "sa-east-1": true,
+}
+
+// sesInboundRuleSetName is the dedicated receipt rule set Notifuse creates and activates ONLY
+// when the account has no active rule set. When one is already active, our rule is inserted
+// into it instead, so an existing WorkMail / customer setup is never silently deactivated.
+const sesInboundRuleSetName = "notifuse-inbound"
 
 // isASCII checks if a string contains only ASCII characters
 func isASCII(s string) bool {
@@ -603,14 +625,19 @@ func (s *SESService) GetWebhookStatus(
 		return nil, ErrInvalidSESConfig
 	}
 
+	// Whether the stop-on-reply inbound receipt rule is registered (independent of the
+	// bounce/complaint event webhook below).
+	inboundRegistered := s.isInboundRegistered(ctx, *providerConfig.SES, integrationID)
+
 	// Create webhook status response
 	status := &domain.WebhookRegistrationStatus{
 		EmailProviderKind: domain.EmailProviderKindSES,
 		IsRegistered:      false,
 		Endpoints:         []domain.WebhookEndpointStatus{},
 		ProviderDetails: map[string]interface{}{
-			"integration_id": integrationID,
-			"workspace_id":   workspaceID,
+			"integration_id":     integrationID,
+			"workspace_id":       workspaceID,
+			"inbound_registered": inboundRegistered,
 		},
 	}
 
@@ -673,9 +700,10 @@ func (s *SESService) GetWebhookStatus(
 		IsRegistered:      true,
 		Endpoints:         activeEndpoints,
 		ProviderDetails: map[string]interface{}{
-			"configuration_set": configSetName,
-			"integration_id":    integrationID,
-			"workspace_id":      workspaceID,
+			"configuration_set":  configSetName,
+			"integration_id":     integrationID,
+			"workspace_id":       workspaceID,
+			"inbound_registered": inboundRegistered,
 		},
 	}
 
@@ -694,6 +722,10 @@ func (s *SESService) UnregisterWebhooks(
 		providerConfig.SES.AccessKey == "" || providerConfig.SES.SecretKey == "" {
 		return ErrInvalidSESConfig
 	}
+
+	// Best-effort: remove the stop-on-reply inbound receipt rule (independent of the
+	// bounce/complaint event destinations cleaned up below).
+	s.unregisterInboundRoute(ctx, *providerConfig.SES, integrationID)
 
 	// Configuration set and destination naming pattern
 	configSetName := fmt.Sprintf("notifuse-%s", integrationID)
@@ -766,6 +798,304 @@ func (s *SESService) UnregisterWebhooks(
 	}
 
 	return nil
+}
+
+// EnsureInboundRoute implements domain.InboundRouteRegistrar for SES: it idempotently
+// provisions the inbound path for stop-on-reply — an SNS topic (HTTPS-subscribed to
+// inboundURL, SignatureVersion 2, with a policy letting SES publish) plus a receipt rule
+// with an SNS action. The receipt rule is added INTO the active rule set when one exists
+// (never deactivating a customer's setup); a dedicated notifuse set is created + activated
+// only when no rule set is active. DNS MX records pointing the domain at
+// inbound-smtp.<region>.amazonaws.com remain the operator's responsibility (no SES API).
+func (s *SESService) EnsureInboundRoute(ctx context.Context, providerConfig *domain.EmailProvider, inboundURL string) error {
+	if providerConfig == nil || providerConfig.SES == nil ||
+		providerConfig.SES.AccessKey == "" || providerConfig.SES.SecretKey == "" {
+		return ErrInvalidSESConfig
+	}
+	config := *providerConfig.SES
+
+	// SES email receiving exists only in a subset of regions. This is a permanent, expected
+	// condition (e.g. a sending-only region), NOT a provisioning failure — soft-skip so the
+	// delivery/bounce/complaint event-webhook registration still succeeds. The console shows
+	// inbound as unregistered, and stop-on-reply just isn't available in this region.
+	if !sesReceivingRegions[config.Region] {
+		s.logger.WithField("region", config.Region).
+			Warn("SES email receiving is not supported in this region; skipping inbound reply route")
+		return nil
+	}
+
+	_, integrationID := inboundIDsFromURL(inboundURL)
+	if integrationID == "" {
+		return fmt.Errorf("inbound URL is missing integration_id: %q", inboundURL)
+	}
+	ruleName := "notifuse-inbound-" + integrationID
+	topicName := "notifuse-ses-inbound-" + integrationID
+
+	sesClient, snsClient, err := s.getClients(config)
+	if err != nil {
+		return err
+	}
+
+	// 1. Inbound SNS topic (kept separate from the bounce/complaint event topic).
+	createTopic, err := snsClient.CreateTopicWithContext(ctx, &sns.CreateTopicInput{Name: aws.String(topicName)})
+	if err != nil {
+		return fmt.Errorf("failed to create inbound SNS topic: %w", err)
+	}
+	topicARN := aws.StringValue(createTopic.TopicArn)
+	// Record the provisioned ARN on the settings so the caller can persist it; the inbound
+	// parser binds to this exact ARN to authenticate that a message came from OUR topic.
+	providerConfig.SES.InboundTopicARN = topicARN
+
+	// Grant SES permission to publish to the topic — without this, the receipt rule's SNS
+	// action fails validation. Scoped to this account via AWS:SourceAccount. Fail closed if the
+	// account can't be parsed from the ARN: an unconditioned publish grant would let any SES
+	// account publish to our topic.
+	accountID := accountIDFromARN(topicARN)
+	if accountID == "" {
+		return fmt.Errorf("could not parse AWS account from topic ARN %q", topicARN)
+	}
+	policy, err := sesPublishTopicPolicy(topicARN, accountID)
+	if err != nil {
+		return err
+	}
+	if _, err := snsClient.SetTopicAttributesWithContext(ctx, &sns.SetTopicAttributesInput{
+		TopicArn:       aws.String(topicARN),
+		AttributeName:  aws.String("Policy"),
+		AttributeValue: aws.String(policy),
+	}); err != nil {
+		return fmt.Errorf("failed to set inbound SNS topic policy: %w", err)
+	}
+	// Force SignatureVersion 2 (SHA-256) so notifications are signed with the stronger algorithm.
+	if _, err := snsClient.SetTopicAttributesWithContext(ctx, &sns.SetTopicAttributesInput{
+		TopicArn:       aws.String(topicARN),
+		AttributeName:  aws.String("SignatureVersion"),
+		AttributeValue: aws.String("2"),
+	}); err != nil {
+		return fmt.Errorf("failed to set inbound SNS topic signature version: %w", err)
+	}
+	// Subscribe the inbound endpoint. SNS dedups by protocol+endpoint, so this is idempotent;
+	// the parser confirms the subscription (signature-verified) on the first delivery.
+	if _, err := snsClient.SubscribeWithContext(ctx, &sns.SubscribeInput{
+		Protocol: aws.String("https"),
+		TopicArn: aws.String(topicARN),
+		Endpoint: aws.String(inboundURL),
+	}); err != nil {
+		return fmt.Errorf("failed to subscribe inbound endpoint: %w", err)
+	}
+
+	// 2. Receipt rule. Check idempotency FIRST (cheap, no identity listing), then build the
+	// rule only when we actually need to create it.
+	active, err := sesClient.DescribeActiveReceiptRuleSetWithContext(ctx, &ses.DescribeActiveReceiptRuleSetInput{})
+	if err != nil {
+		return fmt.Errorf("failed to describe active receipt rule set: %w", err)
+	}
+
+	if active != nil && active.Metadata != nil && active.Metadata.Name != nil {
+		ruleSetName := aws.StringValue(active.Metadata.Name)
+		// Idempotent: our rule is already present in the active set — nothing to do.
+		for _, r := range active.Rules {
+			if r != nil && aws.StringValue(r.Name) == ruleName {
+				return nil
+			}
+		}
+		rule, err := s.buildInboundReceiptRule(ctx, sesClient, ruleName, topicARN)
+		if err != nil {
+			return err
+		}
+		if _, err := sesClient.CreateReceiptRuleWithContext(ctx, &ses.CreateReceiptRuleInput{
+			RuleSetName: aws.String(ruleSetName),
+			Rule:        rule,
+		}); err != nil && !isAWSErrCode(err, ses.ErrCodeAlreadyExistsException) {
+			return fmt.Errorf("failed to create inbound receipt rule: %w", err)
+		}
+		return nil
+	}
+
+	// No active rule set: create a dedicated notifuse set, add our rule, and activate it.
+	// Safe here precisely because nothing else is active to deactivate.
+	rule, err := s.buildInboundReceiptRule(ctx, sesClient, ruleName, topicARN)
+	if err != nil {
+		return err
+	}
+	if _, err := sesClient.CreateReceiptRuleSetWithContext(ctx, &ses.CreateReceiptRuleSetInput{
+		RuleSetName: aws.String(sesInboundRuleSetName),
+	}); err != nil && !isAWSErrCode(err, ses.ErrCodeAlreadyExistsException) {
+		return fmt.Errorf("failed to create inbound receipt rule set: %w", err)
+	}
+	if _, err := sesClient.CreateReceiptRuleWithContext(ctx, &ses.CreateReceiptRuleInput{
+		RuleSetName: aws.String(sesInboundRuleSetName),
+		Rule:        rule,
+	}); err != nil && !isAWSErrCode(err, ses.ErrCodeAlreadyExistsException) {
+		return fmt.Errorf("failed to create inbound receipt rule: %w", err)
+	}
+	if _, err := sesClient.SetActiveReceiptRuleSetWithContext(ctx, &ses.SetActiveReceiptRuleSetInput{
+		RuleSetName: aws.String(sesInboundRuleSetName),
+	}); err != nil {
+		return fmt.Errorf("failed to activate inbound receipt rule set: %w", err)
+	}
+	return nil
+}
+
+// buildInboundReceiptRule constructs the SES receipt rule that forwards inbound replies to our
+// SNS topic, scoped to this account's verified identities. FAILS CLOSED on empty/error: an
+// empty Recipients set means "match ALL recipients", which — inserted into the customer's
+// active rule set — would forward a copy of every inbound email in the account (incl. unrelated
+// WorkMail traffic) to our topic. The action has no Stop, so it coexists with other rules.
+func (s *SESService) buildInboundReceiptRule(ctx context.Context, sesClient domain.SESWebhookClient, ruleName, topicARN string) (*ses.ReceiptRule, error) {
+	recipients, err := s.inboundRecipients(ctx, sesClient)
+	if err != nil {
+		return nil, fmt.Errorf("failed to determine inbound recipients: %w", err)
+	}
+	if len(recipients) == 0 {
+		return nil, fmt.Errorf("no verified SES identities found; refusing to provision an account-wide inbound receipt rule")
+	}
+	return &ses.ReceiptRule{
+		Name:        aws.String(ruleName),
+		Enabled:     aws.Bool(true),
+		Recipients:  aws.StringSlice(recipients),
+		ScanEnabled: aws.Bool(false),
+		TlsPolicy:   aws.String(ses.TlsPolicyOptional),
+		Actions: []*ses.ReceiptAction{{
+			SNSAction: &ses.SNSAction{
+				TopicArn: aws.String(topicARN),
+				Encoding: aws.String(ses.SNSActionEncodingBase64),
+			},
+		}},
+	}, nil
+}
+
+// inboundRecipients lists the account's verified identities — BOTH domain identities and
+// email-address identities — to scope the receipt rule so it forwards only mail addressed to
+// our own senders. Email-address-only senders (a verified address whose domain isn't a domain
+// identity) would otherwise never match. Returns an error (not nil) on failure so the caller
+// can fail closed rather than provision a match-all rule.
+func (s *SESService) inboundRecipients(ctx context.Context, sesClient domain.SESWebhookClient) ([]string, error) {
+	var recipients []string
+	for _, idType := range []string{ses.IdentityTypeDomain, ses.IdentityTypeEmailAddress} {
+		out, err := sesClient.ListIdentitiesWithContext(ctx, &ses.ListIdentitiesInput{
+			IdentityType: aws.String(idType),
+			MaxItems:     aws.Int64(100),
+		})
+		if err != nil {
+			return nil, fmt.Errorf("failed to list SES %s identities: %w", idType, err)
+		}
+		for _, id := range out.Identities {
+			if v := aws.StringValue(id); v != "" {
+				recipients = append(recipients, v)
+			}
+		}
+	}
+	return recipients, nil
+}
+
+// inboundIDsFromURL extracts workspace_id and integration_id from a GenerateInboundWebhookURL.
+func inboundIDsFromURL(inboundURL string) (workspaceID, integrationID string) {
+	u, err := url.Parse(inboundURL)
+	if err != nil {
+		return "", ""
+	}
+	q := u.Query()
+	return q.Get("workspace_id"), q.Get("integration_id")
+}
+
+// accountIDFromARN returns the account-id segment of an ARN
+// (arn:partition:service:region:ACCOUNT:resource), or "" if it can't be parsed.
+func accountIDFromARN(arn string) string {
+	parts := strings.Split(arn, ":")
+	if len(parts) < 5 {
+		return ""
+	}
+	return parts[4]
+}
+
+// sesPublishTopicPolicy builds an SNS access policy granting the SES service permission to
+// publish to the topic, restricted to this AWS account (AWS:SourceAccount). Required for a
+// receipt rule's SNS action to deliver inbound mail.
+func sesPublishTopicPolicy(topicARN, accountID string) (string, error) {
+	statement := map[string]interface{}{
+		"Sid":       "AllowSESPublish",
+		"Effect":    "Allow",
+		"Principal": map[string]string{"Service": "ses.amazonaws.com"},
+		"Action":    "SNS:Publish",
+		"Resource":  topicARN,
+	}
+	if accountID != "" {
+		statement["Condition"] = map[string]interface{}{
+			"StringEquals": map[string]string{"AWS:SourceAccount": accountID},
+		}
+	}
+	policy := map[string]interface{}{
+		"Version":   "2012-10-17",
+		"Statement": []interface{}{statement},
+	}
+	b, err := json.Marshal(policy)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal SNS topic policy: %w", err)
+	}
+	return string(b), nil
+}
+
+// isAWSErrCode reports whether err is an awserr.Error with the given code.
+func isAWSErrCode(err error, code string) bool {
+	var aerr awserr.Error
+	if errors.As(err, &aerr) {
+		return aerr.Code() == code
+	}
+	return false
+}
+
+// unregisterInboundRoute best-effort removes the stop-on-reply receipt rule for an
+// integration from the active rule set. It deletes ONLY our own rule — never the rule set
+// (other rules may depend on it) and never the SNS topic (left inert for cheap
+// re-registration; SES won't publish to it without the rule).
+func (s *SESService) unregisterInboundRoute(ctx context.Context, config domain.AmazonSESSettings, integrationID string) {
+	if !sesReceivingRegions[config.Region] {
+		return
+	}
+	sesClient, _, err := s.getClients(config)
+	if err != nil {
+		return
+	}
+	ruleName := "notifuse-inbound-" + integrationID
+	active, err := sesClient.DescribeActiveReceiptRuleSetWithContext(ctx, &ses.DescribeActiveReceiptRuleSetInput{})
+	if err != nil || active == nil || active.Metadata == nil {
+		return
+	}
+	for _, r := range active.Rules {
+		if r != nil && aws.StringValue(r.Name) == ruleName {
+			if _, err := sesClient.DeleteReceiptRuleWithContext(ctx, &ses.DeleteReceiptRuleInput{
+				RuleSetName: active.Metadata.Name,
+				RuleName:    aws.String(ruleName),
+			}); err != nil {
+				s.logger.WithField("rule_name", ruleName).
+					Error(fmt.Sprintf("Failed to delete SES inbound receipt rule: %v", err))
+			}
+			return
+		}
+	}
+}
+
+// isInboundRegistered reports whether the stop-on-reply receipt rule for an integration is
+// present in the active rule set. Best-effort: returns false on any error or unsupported region.
+func (s *SESService) isInboundRegistered(ctx context.Context, config domain.AmazonSESSettings, integrationID string) bool {
+	if !sesReceivingRegions[config.Region] {
+		return false
+	}
+	sesClient, _, err := s.getClients(config)
+	if err != nil {
+		return false
+	}
+	ruleName := "notifuse-inbound-" + integrationID
+	active, err := sesClient.DescribeActiveReceiptRuleSetWithContext(ctx, &ses.DescribeActiveReceiptRuleSetInput{})
+	if err != nil || active == nil || active.Metadata == nil {
+		return false
+	}
+	for _, r := range active.Rules {
+		if r != nil && aws.StringValue(r.Name) == ruleName {
+			return true
+		}
+	}
+	return false
 }
 
 // SendEmail sends an email using AWS SES
@@ -906,15 +1236,28 @@ func (s *SESService) SendEmail(ctx context.Context, request domain.SendEmailProv
 	}
 
 	// Send the email
-	_, err = sesEmailClient.SendEmailWithContext(ctx, input)
+	out, err := sesEmailClient.SendEmailWithContext(ctx, input)
 	if err != nil {
 		if aerr, ok := err.(awserr.Error); ok {
 			return fmt.Errorf("SES error: %s", aerr.Error())
 		}
 		return fmt.Errorf("failed to send email: %w", err)
 	}
+	// SES overwrites the Message-ID; capture the returned one for stop-on-reply matching.
+	captureSESMessageID(request, out.MessageId)
 
 	return nil
+}
+
+// captureSESMessageID writes the SES-returned MessageId into request.CapturedMessageID when
+// the caller provided that pointer, so the worker can store the recipient-visible RFC
+// Message-ID (domain.SESStoredMessageID) for stop-on-reply matching. SES overwrites any
+// Message-ID we set, so the returned value is the only way to know what the recipient — and
+// their reply's In-Reply-To — will carry. No-op when the field is nil (non-capturing callers).
+func captureSESMessageID(request domain.SendEmailProviderRequest, messageID *string) {
+	if request.CapturedMessageID != nil && messageID != nil {
+		*request.CapturedMessageID = aws.StringValue(messageID)
+	}
 }
 
 // sendRawEmail sends email using SendRawEmail for attachments or custom headers
@@ -1101,13 +1444,15 @@ func (s *SESService) sendRawEmail(ctx context.Context, sesClient domain.SESClien
 	}
 
 	// Send the raw email
-	_, err = sesClient.SendRawEmailWithContext(ctx, rawInput)
+	out, err := sesClient.SendRawEmailWithContext(ctx, rawInput)
 	if err != nil {
 		if aerr, ok := err.(awserr.Error); ok {
 			return fmt.Errorf("SES error: %s", aerr.Error())
 		}
 		return fmt.Errorf("failed to send raw email: %w", err)
 	}
+	// SES overwrites the Message-ID; capture the returned one for stop-on-reply matching.
+	captureSESMessageID(request, out.MessageId)
 
 	return nil
 }

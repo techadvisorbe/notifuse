@@ -57,6 +57,8 @@ func (h *WorkspaceHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("/api/workspaces.removeMember", requireAuth(http.HandlerFunc(h.handleRemoveMember)))
 	mux.Handle("/api/workspaces.deleteInvitation", requireAuth(http.HandlerFunc(h.handleDeleteInvitation)))
 	mux.Handle("/api/workspaces.setUserPermissions", requireAuth(http.HandlerFunc(h.handleSetUserPermissions)))
+	mux.Handle("/api/workspaces.setCustomFieldLabels", requireAuth(http.HandlerFunc(h.handleSetCustomFieldLabels)))
+	mux.Handle("/api/workspaces.setBlogSettings", requireAuth(http.HandlerFunc(h.handleSetBlogSettings)))
 
 	// Public invitation routes (no authentication required)
 	mux.Handle("/api/workspaces.verifyInvitationToken", http.HandlerFunc(h.handleVerifyInvitationToken))
@@ -83,6 +85,30 @@ func (h *WorkspaceHandler) handleList(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, workspaces)
 }
 
+// writeWorkspaceServiceError maps common workspace-service errors to HTTP status codes,
+// writing the response and returning true when it handled the error. Authorization denials
+// (not a member / not an owner) map to 403 Forbidden rather than a generic 500, and missing
+// workspaces map to 404. It unwraps via errors.As/errors.Is, so it works even when the service
+// wraps these (e.g. "failed to authenticate user: %w"). Returns false for unrecognized errors
+// so callers can apply their own handling (e.g. a method-specific 500).
+func writeWorkspaceServiceError(w http.ResponseWriter, err error) bool {
+	var notFound *domain.ErrWorkspaceNotFound
+	if errors.As(err, &notFound) {
+		WriteJSONError(w, "Workspace not found", http.StatusNotFound)
+		return true
+	}
+	var unauthorized *domain.ErrUnauthorized
+	if errors.As(err, &unauthorized) {
+		WriteJSONError(w, unauthorized.Message, http.StatusForbidden)
+		return true
+	}
+	if errors.Is(err, domain.ErrUserNotInWorkspace) {
+		WriteJSONError(w, "You do not have access to this workspace", http.StatusForbidden)
+		return true
+	}
+	return false
+}
+
 func (h *WorkspaceHandler) handleGet(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		WriteJSONError(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -98,10 +124,7 @@ func (h *WorkspaceHandler) handleGet(w http.ResponseWriter, r *http.Request) {
 
 	workspace, err := h.workspaceService.GetWorkspace(r.Context(), workspaceID)
 	if err != nil {
-		// Check if it's a workspace not found error (using errors.As to handle wrapped errors)
-		var workspaceNotFoundErr *domain.ErrWorkspaceNotFound
-		if errors.As(err, &workspaceNotFoundErr) {
-			WriteJSONError(w, "Workspace not found", http.StatusNotFound)
+		if writeWorkspaceServiceError(w, err) {
 			return
 		}
 		WriteJSONError(w, "Failed to get workspace", http.StatusInternalServerError)
@@ -195,10 +218,7 @@ func (h *WorkspaceHandler) handleUpdate(w http.ResponseWriter, r *http.Request) 
 		req.Settings,
 	)
 	if err != nil {
-		// Check if it's a workspace not found error (using errors.As to handle wrapped errors)
-		var workspaceNotFoundErr *domain.ErrWorkspaceNotFound
-		if errors.As(err, &workspaceNotFoundErr) {
-			WriteJSONError(w, "Workspace not found", http.StatusNotFound)
+		if writeWorkspaceServiceError(w, err) {
 			return
 		}
 		// Check if it's a validation error (e.g., DNS verification failed)
@@ -237,10 +257,7 @@ func (h *WorkspaceHandler) handleDelete(w http.ResponseWriter, r *http.Request) 
 
 	err := h.workspaceService.DeleteWorkspace(r.Context(), req.ID)
 	if err != nil {
-		// Check if it's a workspace not found error (using errors.As to handle wrapped errors)
-		var workspaceNotFoundErr *domain.ErrWorkspaceNotFound
-		if errors.As(err, &workspaceNotFoundErr) {
-			WriteJSONError(w, "Workspace not found", http.StatusNotFound)
+		if writeWorkspaceServiceError(w, err) {
 			return
 		}
 		WriteJSONError(w, "Failed to delete workspace", http.StatusInternalServerError)
@@ -267,10 +284,7 @@ func (h *WorkspaceHandler) handleMembers(w http.ResponseWriter, r *http.Request)
 	// Use the new method that includes emails
 	members, err := h.workspaceService.GetWorkspaceMembersWithEmail(r.Context(), workspaceID)
 	if err != nil {
-		// Check if it's a workspace not found error (using errors.As to handle wrapped errors)
-		var workspaceNotFoundErr *domain.ErrWorkspaceNotFound
-		if errors.As(err, &workspaceNotFoundErr) {
-			WriteJSONError(w, "Workspace not found", http.StatusNotFound)
+		if writeWorkspaceServiceError(w, err) {
 			return
 		}
 		WriteJSONError(w, "Failed to get workspace members", http.StatusInternalServerError)
@@ -375,6 +389,86 @@ func (h *WorkspaceHandler) handleSetUserPermissions(w http.ResponseWriter, r *ht
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"status":  "success",
 		"message": "User permissions updated successfully",
+	})
+}
+
+func (h *WorkspaceHandler) handleSetCustomFieldLabels(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		WriteJSONError(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req domain.SetCustomFieldLabelsRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		WriteJSONError(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	workspaceID, labels, err := req.Validate()
+	if err != nil {
+		WriteJSONError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if err := h.workspaceService.SetCustomFieldLabels(r.Context(), workspaceID, labels); err != nil {
+		if _, ok := err.(*domain.PermissionError); ok {
+			WriteJSONError(w, err.Error(), http.StatusForbidden)
+			return
+		}
+		if _, ok := err.(*domain.ErrUnauthorized); ok {
+			WriteJSONError(w, err.Error(), http.StatusForbidden)
+			return
+		}
+		h.logger.WithField("workspace_id", workspaceID).WithField("error", err.Error()).Error("Failed to set custom field labels")
+		WriteJSONError(w, "Failed to set custom field labels", http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"status":  "success",
+		"message": "Custom field labels updated successfully",
+	})
+}
+
+// handleSetBlogSettings handles the request to set workspace blog settings (the
+// enable flag plus title/SEO/pagination/feed config) via the dedicated, blog:write
+// gated endpoint. Unlike workspaces.update (owner-only), this lets a member with
+// blog:write manage blog configuration.
+func (h *WorkspaceHandler) handleSetBlogSettings(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		WriteJSONError(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req domain.SetBlogSettingsRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		WriteJSONError(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	workspaceID, enabled, settings, err := req.Validate()
+	if err != nil {
+		WriteJSONError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if err := h.workspaceService.SetBlogSettings(r.Context(), workspaceID, enabled, settings); err != nil {
+		if _, ok := err.(*domain.PermissionError); ok {
+			WriteJSONError(w, err.Error(), http.StatusForbidden)
+			return
+		}
+		if _, ok := err.(*domain.ErrUnauthorized); ok {
+			WriteJSONError(w, err.Error(), http.StatusForbidden)
+			return
+		}
+		h.logger.WithField("workspace_id", workspaceID).WithField("error", err.Error()).Error("Failed to set blog settings")
+		WriteJSONError(w, "Failed to set blog settings", http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"status":  "success",
+		"message": "Blog settings updated successfully",
 	})
 }
 

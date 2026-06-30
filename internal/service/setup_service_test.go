@@ -7,6 +7,7 @@ import (
 	"github.com/Notifuse/notifuse/internal/service"
 	"github.com/Notifuse/notifuse/pkg/logger"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestSetupService_ValidateSetupConfig(t *testing.T) {
@@ -198,6 +199,52 @@ func TestSetupService_TestSMTPConnection(t *testing.T) {
 
 	// Note: Actual SMTP connection test would require a real SMTP server or more complex mocking
 	// For coverage purposes, we test the validation logic
+}
+
+func TestSetupService_OIDC_StatusAndValidation(t *testing.T) {
+	newSvc := func(env *service.EnvironmentConfig) *service.SetupService {
+		return service.NewSetupService(&service.SettingService{}, &service.UserService{}, nil, &mockLogger{}, "k", nil, env)
+	}
+
+	t.Run("env-configured locks the wizard out", func(t *testing.T) {
+		svc := newSvc(&service.EnvironmentConfig{OIDCClientID: "x"})
+		assert.True(t, svc.GetConfigurationStatus().OIDCConfigured)
+		assert.True(t, svc.GetEnvOverrides()["oidc_client_id"])
+	})
+
+	t.Run("not configured when no oidc env", func(t *testing.T) {
+		svc := newSvc(&service.EnvironmentConfig{})
+		assert.False(t, svc.GetConfigurationStatus().OIDCConfigured)
+	})
+
+	t.Run("wizard-enabled OIDC requires issuer/client/secret", func(t *testing.T) {
+		svc := newSvc(&service.EnvironmentConfig{})
+		err := svc.ValidateSetupConfig(&service.SetupConfig{
+			RootEmail: "a@b.com", SMTPHost: "h", SMTPFromEmail: "f@b.com",
+			OIDCEnabled: true, // missing issuer/client/secret
+		})
+		require.Error(t, err)
+	})
+
+	t.Run("wizard auto-create requires allowlist", func(t *testing.T) {
+		svc := newSvc(&service.EnvironmentConfig{})
+		err := svc.ValidateSetupConfig(&service.SetupConfig{
+			RootEmail: "a@b.com", SMTPHost: "h", SMTPFromEmail: "f@b.com",
+			OIDCEnabled: true, OIDCIssuerURL: "https://i", OIDCClientID: "c", OIDCClientSecret: "s",
+			OIDCAutoCreateUsers: true, // missing allowed domains
+		})
+		require.Error(t, err)
+	})
+
+	t.Run("valid wizard OIDC passes", func(t *testing.T) {
+		svc := newSvc(&service.EnvironmentConfig{})
+		err := svc.ValidateSetupConfig(&service.SetupConfig{
+			RootEmail: "a@b.com", SMTPHost: "h", SMTPFromEmail: "f@b.com",
+			OIDCEnabled: true, OIDCIssuerURL: "https://i", OIDCClientID: "c", OIDCClientSecret: "s",
+			OIDCAutoCreateUsers: true, OIDCAllowedDomains: "corp.com",
+		})
+		require.NoError(t, err)
+	})
 }
 
 func TestSetupService_GetEnvOverrides(t *testing.T) {

@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useCallback, useMemo, useRef, useEffect } from 'react'
+import React, { useState, useCallback, useMemo, useRef, useEffect } from 'react'
 import { v4 as uuidv4 } from 'uuid'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { App } from 'antd'
@@ -19,62 +19,15 @@ import {
   buildTriggerConfig,
   findRootNodeId,
   validateFlow,
-  type AutomationNodeData,
-  type ValidationError
+  type AutomationNodeData
 } from '../utils/flowConverter'
 import { useUndoRedo, type HistoryEntry } from '../hooks/useUndoRedo'
 import { layoutNodes } from '../utils/layoutNodes'
-
-// Canvas state interface - managed by useAutomationCanvas hook
-export interface CanvasState {
-  nodes: Node<AutomationNodeData>[]
-  edges: Edge[]
-  setNodes: React.Dispatch<React.SetStateAction<Node<AutomationNodeData>[]>>
-  setEdges: React.Dispatch<React.SetStateAction<Edge[]>>
-}
-
-// Context type
-export interface AutomationContextType {
-  // Core data
-  workspace: Workspace
-  automation: Automation | null
-  isEditing: boolean
-  lists: List[]
-  segments: Segment[]
-  templates: Template[]
-
-  // Form state
-  name: string
-  setName: (name: string) => void
-  listId: string | undefined
-  setListId: (id: string | undefined) => void
-
-  // Canvas state (shared with hook)
-  canvasState: CanvasState
-
-  // Save state
-  hasUnsavedChanges: boolean
-  markAsChanged: () => void
-  isSaving: boolean
-  lastError: Error | null
-
-  // Initial selection
-  initialSelectedNodeId: string | undefined
-
-  // Undo/Redo
-  canUndo: boolean
-  canRedo: boolean
-  undo: () => void
-  redo: () => void
-  pushHistory: () => void
-
-  // Operations
-  save: () => Promise<void>
-  validate: () => ValidationError[]
-  reset: () => void
-}
-
-const AutomationContext = createContext<AutomationContextType | null>(null)
+import {
+  AutomationContext,
+  type AutomationContextType,
+  type CanvasState
+} from './automationContextValue'
 
 // Provider props
 interface AutomationProviderProps {
@@ -106,6 +59,7 @@ export function AutomationProvider({
   // Form state
   const [name, setName] = useState(automation?.name || '')
   const [listId, setListId] = useState<string | undefined>(automation?.list_id)
+  const [exitOnReply, setExitOnReply] = useState<boolean>(automation?.exit_on_reply || false)
 
   // Canvas state
   const [nodes, setNodes] = useState<Node<AutomationNodeData>[]>([])
@@ -140,6 +94,7 @@ export function AutomationProvider({
       setEdges(flowEdges)
       setName(automation.name)
       setListId(automation.list_id)
+      setExitOnReply(automation.exit_on_reply || false)
     } else {
       // New automation - start with trigger only
       const { nodes: initialNodes, edges: initialEdges } = createInitialFlow()
@@ -159,6 +114,11 @@ export function AutomationProvider({
   // Wrapped setters that mark as changed
   const setNameWithChange = useCallback((newName: string) => {
     setName(newName)
+    setHasUnsavedChanges(true)
+  }, [])
+
+  const setExitOnReplyWithChange = useCallback((v: boolean) => {
+    setExitOnReply(v)
     setHasUnsavedChanges(true)
   }, [])
 
@@ -347,6 +307,7 @@ export function AutomationProvider({
         name: name.trim(),
         status: automation?.status || 'draft',
         list_id: listId || '',
+        exit_on_reply: exitOnReply,
         trigger: triggerConfig,
         root_node_id: rootNodeId,
         nodes: automationNodes,
@@ -370,7 +331,7 @@ export function AutomationProvider({
     } finally {
       setIsSaving(false)
     }
-  }, [name, listId, nodes, edges, automation, workspace.id, isEditing, validate, createMutation, updateMutation, message, t])
+  }, [name, listId, exitOnReply, nodes, edges, automation, workspace.id, isEditing, validate, createMutation, updateMutation, message, t])
 
   // Reset state
   const reset = useCallback(() => {
@@ -378,6 +339,7 @@ export function AutomationProvider({
     setEdges([])
     setName('')
     setListId(undefined)
+    setExitOnReply(false)
     setHasUnsavedChanges(false)
     setLastError(null)
     clearHistory()
@@ -404,6 +366,8 @@ export function AutomationProvider({
     setName: setNameWithChange,
     listId,
     setListId: setListIdWithChange,
+    exitOnReply,
+    setExitOnReply: setExitOnReplyWithChange,
     canvasState,
     hasUnsavedChanges,
     markAsChanged,
@@ -429,6 +393,8 @@ export function AutomationProvider({
     setNameWithChange,
     listId,
     setListIdWithChange,
+    exitOnReply,
+    setExitOnReplyWithChange,
     canvasState,
     hasUnsavedChanges,
     markAsChanged,
@@ -452,12 +418,5 @@ export function AutomationProvider({
   )
 }
 
-// Hook to use automation context
-// eslint-disable-next-line react-refresh/only-export-components -- Hook co-located with context
-export function useAutomation(): AutomationContextType {
-  const context = useContext(AutomationContext)
-  if (!context) {
-    throw new Error('useAutomation must be used within an AutomationProvider')
-  }
-  return context
-}
+// `useAutomation` and the context object now live in ./automationContext so this file
+// only exports the AutomationProvider component (keeps Fast Refresh working).

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	appconfig "github.com/Notifuse/notifuse/config"
 	"github.com/Notifuse/notifuse/internal/domain"
 	"github.com/Notifuse/notifuse/pkg/logger"
 	"github.com/google/uuid"
@@ -32,6 +33,17 @@ type SetupConfig struct {
 	SMTPBridgePort          int
 	SMTPBridgeTLSCertBase64 string
 	SMTPBridgeTLSKeyBase64  string
+
+	// OIDC (optional SSO)
+	OIDCEnabled         bool
+	OIDCIssuerURL       string
+	OIDCClientID        string
+	OIDCClientSecret    string
+	OIDCRedirectURI     string
+	OIDCScopes          string
+	OIDCButtonLabel     string
+	OIDCAutoCreateUsers bool
+	OIDCAllowedDomains  string
 }
 
 // SMTPTestConfig represents SMTP configuration for testing
@@ -50,6 +62,7 @@ type ConfigurationStatus struct {
 	APIEndpointConfigured bool
 	RootEmailConfigured   bool
 	SMTPBridgeConfigured   bool
+	OIDCConfigured         bool
 }
 
 // SetupService handles setup wizard operations
@@ -81,6 +94,17 @@ type EnvironmentConfig struct {
 	SMTPBridgeTLSCertBase64 string
 	SMTPBridgeTLSKeyBase64  string
 	SMTPBridgeTLSMode       string // "off", "starttls", "implicit", or ""
+
+	// OIDC env values (Enabled/AutoCreateUsers are tri-state strings).
+	OIDCEnabled         string
+	OIDCIssuerURL       string
+	OIDCClientID        string
+	OIDCClientSecret    string
+	OIDCRedirectURI     string
+	OIDCScopes          string
+	OIDCButtonLabel     string
+	OIDCAutoCreateUsers string
+	OIDCAllowedDomains  string
 }
 
 // NewSetupService creates a new setup service
@@ -112,6 +136,7 @@ func (s *SetupService) GetConfigurationStatus() *ConfigurationStatus {
 			APIEndpointConfigured: false,
 			RootEmailConfigured:   false,
 			SMTPBridgeConfigured:   false,
+			OIDCConfigured:         false,
 		}
 	}
 
@@ -130,12 +155,25 @@ func (s *SetupService) GetConfigurationStatus() *ConfigurationStatus {
 			s.envConfig.SMTPBridgeTLSCertBase64 != "" &&
 			s.envConfig.SMTPBridgeTLSKeyBase64 != "")
 
+	// OIDC is "configured via env" (locking the wizard out) if any core env var is set.
+	oidcConfigured := s.envConfig.OIDCEnabled != "" ||
+		s.envConfig.OIDCIssuerURL != "" ||
+		s.envConfig.OIDCClientID != ""
+
 	return &ConfigurationStatus{
 		SMTPConfigured:        smtpConfigured,
 		APIEndpointConfigured: s.envConfig.APIEndpoint != "",
 		RootEmailConfigured:   s.envConfig.RootEmail != "",
 		SMTPBridgeConfigured:   smtpBridgeConfigured,
+		OIDCConfigured:         oidcConfigured,
 	}
+}
+
+// GetEnvConfig returns the environment-variable configuration the service was
+// constructed with (may be nil). Used to surface live env-overridden values that
+// differ from the values persisted to the database at install time.
+func (s *SetupService) GetEnvConfig() *EnvironmentConfig {
+	return s.envConfig
 }
 
 // GetEnvOverrides returns a map of setting keys that are overridden by environment variables.
@@ -196,6 +234,35 @@ func (s *SetupService) GetEnvOverrides() map[string]bool {
 		result["smtp_bridge_tls_mode"] = true
 	}
 
+	// OIDC overrides (keys match the settings keys so the UI can lock fields).
+	if s.envConfig.OIDCEnabled != "" {
+		result["oidc_enabled"] = true
+	}
+	if s.envConfig.OIDCIssuerURL != "" {
+		result["oidc_issuer_url"] = true
+	}
+	if s.envConfig.OIDCClientID != "" {
+		result["oidc_client_id"] = true
+	}
+	if s.envConfig.OIDCClientSecret != "" {
+		result["oidc_client_secret"] = true
+	}
+	if s.envConfig.OIDCRedirectURI != "" {
+		result["oidc_redirect_uri"] = true
+	}
+	if s.envConfig.OIDCScopes != "" {
+		result["oidc_scopes"] = true
+	}
+	if s.envConfig.OIDCButtonLabel != "" {
+		result["oidc_button_label"] = true
+	}
+	if s.envConfig.OIDCAutoCreateUsers != "" {
+		result["oidc_auto_create_users"] = true
+	}
+	if s.envConfig.OIDCAllowedDomains != "" {
+		result["oidc_allowed_domains"] = true
+	}
+
 	return result
 }
 
@@ -220,6 +287,22 @@ func (s *SetupService) ValidateSetupConfig(config *SetupConfig) error {
 
 		if config.SMTPFromEmail == "" {
 			return fmt.Errorf("smtp_from_email is required")
+		}
+	}
+
+	// Validate OIDC when the user enables it in the wizard (and it's not env-configured).
+	if !status.OIDCConfigured && config.OIDCEnabled {
+		if config.OIDCIssuerURL == "" {
+			return fmt.Errorf("oidc_issuer_url is required when OIDC is enabled")
+		}
+		if config.OIDCClientID == "" {
+			return fmt.Errorf("oidc_client_id is required when OIDC is enabled")
+		}
+		if config.OIDCClientSecret == "" {
+			return fmt.Errorf("oidc_client_secret is required when OIDC is enabled")
+		}
+		if config.OIDCAutoCreateUsers && config.OIDCAllowedDomains == "" {
+			return fmt.Errorf("oidc_allowed_domains is required when OIDC auto-create is enabled")
 		}
 	}
 
@@ -301,6 +384,35 @@ func (s *SetupService) Initialize(ctx context.Context, config *SetupConfig) erro
 		smtpBridgeTLSKeyBase64 = config.SMTPBridgeTLSKeyBase64
 	}
 
+	// Handle OIDC configuration (env wins, else user-provided).
+	var oidcEnabled, oidcAutoCreate bool
+	var oidcIssuerURL, oidcClientID, oidcClientSecret, oidcRedirectURI, oidcScopes, oidcButtonLabel, oidcAllowedDomains string
+	if status.OIDCConfigured {
+		oidcEnabled = s.envConfig.OIDCEnabled == "true"
+		oidcIssuerURL = s.envConfig.OIDCIssuerURL
+		oidcClientID = s.envConfig.OIDCClientID
+		oidcClientSecret = s.envConfig.OIDCClientSecret
+		oidcRedirectURI = s.envConfig.OIDCRedirectURI
+		oidcScopes = s.envConfig.OIDCScopes
+		oidcButtonLabel = s.envConfig.OIDCButtonLabel
+		oidcAutoCreate = s.envConfig.OIDCAutoCreateUsers == "true"
+		oidcAllowedDomains = s.envConfig.OIDCAllowedDomains
+	} else {
+		oidcEnabled = config.OIDCEnabled
+		oidcIssuerURL = config.OIDCIssuerURL
+		oidcClientID = config.OIDCClientID
+		oidcClientSecret = config.OIDCClientSecret
+		oidcRedirectURI = config.OIDCRedirectURI
+		oidcScopes = config.OIDCScopes
+		oidcButtonLabel = config.OIDCButtonLabel
+		oidcAutoCreate = config.OIDCAutoCreateUsers
+		oidcAllowedDomains = config.OIDCAllowedDomains
+	}
+	// Persist scopes with "openid" forced in (single source of truth at read time too).
+	if oidcEnabled {
+		oidcScopes = strings.Join(appconfig.ParseScopes(oidcScopes), " ")
+	}
+
 	// Store system settings
 	systemConfig := &SystemConfig{
 		IsInstalled:            true,
@@ -321,16 +433,29 @@ func (s *SetupService) Initialize(ctx context.Context, config *SetupConfig) erro
 		SMTPBridgePort:          smtpBridgePort,
 		SMTPBridgeTLSCertBase64: smtpBridgeTLSCertBase64,
 		SMTPBridgeTLSKeyBase64:  smtpBridgeTLSKeyBase64,
+		OIDCEnabled:             oidcEnabled,
+		OIDCIssuerURL:           oidcIssuerURL,
+		OIDCClientID:            oidcClientID,
+		OIDCClientSecret:        oidcClientSecret,
+		OIDCRedirectURI:         oidcRedirectURI,
+		OIDCScopes:              oidcScopes,
+		OIDCButtonLabel:         oidcButtonLabel,
+		OIDCAutoCreateUsers:     oidcAutoCreate,
+		OIDCAllowedDomains:      oidcAllowedDomains,
 	}
 
 	if err := s.settingService.SetSystemConfig(ctx, systemConfig, s.secretKey); err != nil {
 		return fmt.Errorf("failed to save system configuration: %w", err)
 	}
 
-	// Create root user (use final merged email)
+	// Create the primary root user. When ROOT_EMAIL holds a list, the first
+	// email is the primary; additional roots are created on startup by
+	// InitializeDatabase. Using the raw list string here would create a user
+	// with an invalid comma-joined email.
+	primaryRootEmail := appconfig.PrimaryRootEmail(finalConfig.RootEmail)
 	rootUser := &domain.User{
 		ID:        uuid.New().String(),
-		Email:     finalConfig.RootEmail,
+		Email:     primaryRootEmail,
 		Name:      "Root User",
 		Type:      domain.UserTypeUser,
 		CreatedAt: time.Now().UTC(),
@@ -344,10 +469,10 @@ func (s *SetupService) Initialize(ctx context.Context, config *SetupConfig) erro
 			return fmt.Errorf("failed to create root user: %w", err)
 		}
 		// User already exists - this is fine during setup, continue
-		s.logger.WithField("email", finalConfig.RootEmail).Info("Root user already exists, skipping creation")
+		s.logger.WithField("email", primaryRootEmail).Info("Root user already exists, skipping creation")
 	}
 
-	s.logger.WithField("email", finalConfig.RootEmail).Info("Setup wizard completed successfully")
+	s.logger.WithField("email", primaryRootEmail).Info("Setup wizard completed successfully")
 
 	// Reload configuration if callback is provided
 	if s.onSetupCompleted != nil {

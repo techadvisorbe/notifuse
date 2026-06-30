@@ -85,6 +85,31 @@ func TestLoadWithOptions(t *testing.T) {
 	assert.True(t, cfg.IsDevelopment())
 }
 
+func TestLoad_DataFeedSSRFProtectionDefault(t *testing.T) {
+	// SECRET_KEY is required for the config to load successfully.
+	_ = os.Setenv("SECRET_KEY", "test-secret-key-1234567890123456")
+	defer func() { _ = os.Unsetenv("SECRET_KEY") }()
+
+	t.Run("defaults to off (SSRF protection enabled)", func(t *testing.T) {
+		_ = os.Unsetenv("BROADCAST_DATA_FEED_ALLOW_PRIVATE_HOSTS")
+
+		cfg, err := LoadWithOptions(LoadOptions{})
+		require.NoError(t, err)
+		// Secure by default: a missing/typo'd env key must NOT disable protection.
+		assert.False(t, cfg.Broadcast.AllowPrivateDataFeedHosts,
+			"broadcast data-feed SSRF protection must be ON by default")
+	})
+
+	t.Run("opt-in via env var", func(t *testing.T) {
+		_ = os.Setenv("BROADCAST_DATA_FEED_ALLOW_PRIVATE_HOSTS", "true")
+		defer func() { _ = os.Unsetenv("BROADCAST_DATA_FEED_ALLOW_PRIVATE_HOSTS") }()
+
+		cfg, err := LoadWithOptions(LoadOptions{})
+		require.NoError(t, err)
+		assert.True(t, cfg.Broadcast.AllowPrivateDataFeedHosts)
+	})
+}
+
 func TestInvalidKeysHandling(t *testing.T) {
 	t.Run("missing_secret_key", func(t *testing.T) {
 		// Clear any existing environment variables

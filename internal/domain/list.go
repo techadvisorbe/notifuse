@@ -2,7 +2,9 @@ package domain
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/url"
 	"time"
 
@@ -332,6 +334,70 @@ func (r *UnsubscribeFromListsRequest) FromURLParams(queryParams url.Values) (err
 
 	if len(r.ListIDs) == 0 {
 		return fmt.Errorf("list_ids is required")
+	}
+
+	return nil
+}
+
+// FromOneClickURLParams parses an RFC 8058 one-click unsubscribe request from the
+// List-Unsubscribe URL query string. Per RFC 8058 (section 2.1) the identifying
+// parameters are carried in the URL query, not in the POST body, so the handler
+// reads them from here and ignores the body. The keys match those emitted by
+// BuildTemplateData when it builds the one-click unsubscribe URL (wid, email,
+// email_hmac, lids, mid).
+//
+// email_hmac is deliberately not required here: authentication is owned by
+// ListService.UnsubscribeFromLists, which verifies the HMAC against the workspace
+// secret key. This method only validates that the request structurally identifies
+// a contact and list(s) to act on.
+func (r *UnsubscribeFromListsRequest) FromOneClickURLParams(queryParams url.Values) error {
+	r.WorkspaceID = queryParams.Get("wid")
+	r.Email = queryParams.Get("email")
+	r.EmailHMAC = queryParams.Get("email_hmac")
+	r.ListIDs = queryParams["lids"]
+	r.MessageID = queryParams.Get("mid")
+
+	if r.WorkspaceID == "" {
+		return fmt.Errorf("wid is required")
+	}
+
+	if r.Email == "" {
+		return fmt.Errorf("email is required")
+	}
+
+	if len(r.ListIDs) == 0 {
+		return fmt.Errorf("lids is required")
+	}
+
+	return nil
+}
+
+// FromJSONBody parses a notification-center unsubscribe request from the first-party
+// SPA's JSON body (the widget's "Unsubscribe" action and per-list toggle, and the
+// console). Unlike the mail-client one-click POST (see FromOneClickURLParams), the SPA
+// sends the identifying params as a JSON body with no query string and no
+// "List-Unsubscribe=One-Click" token; the struct's json tags map the body keys
+// (wid, email, email_hmac, lids, mid).
+//
+// email_hmac is deliberately not required here, matching FromOneClickURLParams:
+// authentication is owned by ListService.UnsubscribeFromLists, which verifies the HMAC
+// against the workspace secret key. This method only validates that the request
+// structurally identifies a contact and list(s) to act on.
+func (r *UnsubscribeFromListsRequest) FromJSONBody(body io.Reader) error {
+	if err := json.NewDecoder(body).Decode(r); err != nil {
+		return fmt.Errorf("invalid request body: %w", err)
+	}
+
+	if r.WorkspaceID == "" {
+		return fmt.Errorf("wid is required")
+	}
+
+	if r.Email == "" {
+		return fmt.Errorf("email is required")
+	}
+
+	if len(r.ListIDs) == 0 {
+		return fmt.Errorf("lids is required")
 	}
 
 	return nil

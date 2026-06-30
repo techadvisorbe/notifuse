@@ -47,10 +47,38 @@ func TestIsPrivateIP(t *testing.T) {
 		// Unspecified (0.0.0.0/8)
 		{"unspecified 0.0.0.0", "0.0.0.0", true},
 
+		// IETF protocol assignments (192.0.0.0/24)
+		{"protocol assignments 192.0.0.1", "192.0.0.1", true},
+
+		// Documentation TEST-NET ranges (RFC 5737)
+		{"test-net-1 192.0.2.1", "192.0.2.1", true},
+		{"test-net-2 198.51.100.1", "198.51.100.1", true},
+		{"test-net-3 203.0.113.1", "203.0.113.1", true},
+
+		// Benchmarking (198.18.0.0/15)
+		{"benchmarking 198.18.0.1", "198.18.0.1", true},
+		{"benchmarking 198.19.255.255", "198.19.255.255", true},
+
+		// IPv4 multicast (224.0.0.0/4)
+		{"multicast 224.0.0.1", "224.0.0.1", true},
+		{"multicast 239.255.255.255", "239.255.255.255", true},
+
+		// Reserved + broadcast (240.0.0.0/4)
+		{"reserved 240.0.0.1", "240.0.0.1", true},
+		{"broadcast 255.255.255.255", "255.255.255.255", true},
+
+		// IPv6 documentation (2001:db8::/32)
+		{"ipv6 documentation 2001:db8::1", "2001:db8::1", true},
+
+		// 6to4 / NAT64 that embed a private IPv4 (127.0.0.1)
+		{"6to4 embedding loopback", "2002:7f00:1::", true},
+		{"nat64 embedding loopback", "64:ff9b::7f00:1", true},
+
 		// Public IPs
 		{"public 8.8.8.8", "8.8.8.8", false},
 		{"public 1.1.1.1", "1.1.1.1", false},
 		{"public 93.184.216.34", "93.184.216.34", false},
+		{"not reserved 223.255.255.255", "223.255.255.255", false},
 
 		// IPv6 loopback
 		{"ipv6 loopback", "::1", true},

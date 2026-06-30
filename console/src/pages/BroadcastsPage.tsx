@@ -1,4 +1,4 @@
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query'
 import {
   Card,
   Row,
@@ -18,11 +18,17 @@ import {
   Popconfirm,
   Pagination,
   Tag,
-  Table
+  Table,
+  Segmented
 } from 'antd'
-import { useParams } from '@tanstack/react-router'
+import { useParams, useSearch, useNavigate } from '@tanstack/react-router'
 import { useLingui } from '@lingui/react/macro'
-import { broadcastApi, Broadcast, TestResultsResponse } from '../services/api/broadcast'
+import {
+  broadcastApi,
+  Broadcast,
+  TestResultsResponse,
+  getStatusesForGroup
+} from '../services/api/broadcast'
 import { listsApi } from '../services/api/list'
 import { taskApi } from '../services/api/task'
 import { listSegments } from '../services/api/segment'
@@ -47,7 +53,7 @@ import {
   faSpinner,
   faRefresh
 } from '@fortawesome/free-solid-svg-icons'
-import React, { useState } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import dayjs from '../lib/dayjs'
 import { UpsertBroadcastDrawer } from '../components/broadcasts/UpsertBroadcastDrawer'
 import { SendOrScheduleModal } from '../components/broadcasts/SendOrScheduleModal'
@@ -1111,9 +1117,40 @@ const BroadcastCard: React.FC<BroadcastCardProps> = ({
   )
 }
 
+// URL search params for the broadcasts list (status group + name search query)
+interface BroadcastsSearch {
+  status?: string
+  q?: string
+}
+
+// Valid Segmented status group values. Anything else falls back to 'all'.
+const STATUS_GROUP_VALUES = ['all', 'draft', 'scheduled', 'sending', 'sent', 'failed']
+
 export function BroadcastsPage() {
   const { t } = useLingui()
   const { workspaceId } = useParams({ from: '/console/workspace/$workspaceId/broadcasts' })
+  const navigate = useNavigate({ from: '/console/workspace/$workspaceId/broadcasts' })
+  const routeSearch = useSearch({
+    from: '/console/workspace/$workspaceId/broadcasts'
+  }) as BroadcastsSearch
+
+  // Active status group + search term derived from the URL
+  const statusGroup =
+    routeSearch.status && STATUS_GROUP_VALUES.includes(routeSearch.status)
+      ? routeSearch.status
+      : 'all'
+  const searchTerm = routeSearch.q ?? ''
+  const hasActiveFilter = statusGroup !== 'all' || searchTerm !== ''
+
+  // Local mirror of the search box so typing stays responsive; the URL (and
+  // therefore the query) is only updated after a short debounce.
+  const [searchInput, setSearchInput] = useState(searchTerm)
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  // The last value we ourselves pushed to the URL via the debounce. Lets the
+  // URL->input sync effect ignore the echo of our own writes and only react to
+  // external changes (back/forward, deep links), so in-progress typing is never
+  // overwritten.
+  const lastNavigatedQRef = useRef<string | undefined>(undefined)
   const [deleteModalVisible, setDeleteModalVisible] = useState(false)
   const [broadcastToDelete, setBroadcastToDelete] = useState<Broadcast | null>(null)
   const [confirmationInput, setConfirmationInput] = useState('')
@@ -1131,16 +1168,101 @@ export function BroadcastsPage() {
   const currentWorkspace = workspaces.find((workspace) => workspace.id === workspaceId)
 
   const { data, isLoading } = useQuery({
-    queryKey: ['broadcasts', workspaceId, currentPage, pageSize],
+    queryKey: ['broadcasts', workspaceId, currentPage, pageSize, statusGroup, searchTerm],
     queryFn: () => {
       return broadcastApi.list({
         workspace_id: workspaceId,
         with_templates: true,
         limit: pageSize,
-        offset: (currentPage - 1) * pageSize
+        offset: (currentPage - 1) * pageSize,
+        statuses: getStatusesForGroup(statusGroup),
+        search: searchTerm || undefined
       })
-    }
+    },
+    // Keep the previous page's results visible while a new filter/search/page
+    // fetches, so the filter bar and list don't flash empty on every change.
+    placeholderData: keepPreviousData
   })
+
+  // Mirror the URL query into the search box ONLY for external changes
+  // (browser back/forward, deep links). Our own debounced writes are skipped
+  // via lastNavigatedQRef so they never clobber what the user is typing. On a
+  // genuine external change we also cancel any pending debounce (so a stale
+  // timer can't navigate back over where the user just went) and re-seed the
+  // ref so a later forward-nav to the same value still syncs the box.
+  useEffect(() => {
+    if (searchTerm !== lastNavigatedQRef.current) {
+      if (debounceRef.current) clearTimeout(debounceRef.current)
+      setSearchInput(searchTerm)
+      lastNavigatedQRef.current = searchTerm
+    }
+  }, [searchTerm])
+
+  // Strip an unknown status value from the URL (e.g. a hand-edited or stale
+  // ?status=garbage) so it doesn't linger in shareable links while the UI
+  // silently treats it as "All". replace: avoids adding a history entry.
+  useEffect(() => {
+    if (routeSearch.status && !STATUS_GROUP_VALUES.includes(routeSearch.status)) {
+      navigate({ replace: true, search: (prev) => ({ ...prev, status: undefined }) })
+    }
+  }, [routeSearch.status, navigate])
+
+  // Reset to the first page whenever the active filter or search changes. This
+  // also covers browser back/forward, which change the URL (and thus
+  // statusGroup/searchTerm) without going through the handlers below.
+  useEffect(() => {
+    setCurrentPage(1)
+  }, [statusGroup, searchTerm])
+
+  // Safety net: if we land on an out-of-range page (current page is empty but
+  // matches exist, e.g. after data changes), jump back to the first page so
+  // results are never hidden behind a stale offset.
+  useEffect(() => {
+    if (
+      !isLoading &&
+      data &&
+      (data.broadcasts?.length ?? 0) === 0 &&
+      data.total_count > 0 &&
+      currentPage > 1
+    ) {
+      setCurrentPage(1)
+    }
+  }, [isLoading, data, currentPage])
+
+  // Clear any pending debounce on unmount
+  useEffect(() => {
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current)
+    }
+  }, [])
+
+  const handleStatusGroupChange = (value: string) => {
+    setCurrentPage(1)
+    navigate({ search: (prev) => ({ ...prev, status: value === 'all' ? undefined : value }) })
+  }
+
+  const handleSearchChange = (value: string) => {
+    setSearchInput(value)
+    if (debounceRef.current) clearTimeout(debounceRef.current)
+    debounceRef.current = setTimeout(() => {
+      const trimmed = value.trim()
+      // Record the value searchTerm will become so the sync effect treats this
+      // as our own write and leaves the (possibly untrimmed) input untouched.
+      lastNavigatedQRef.current = trimmed
+      setCurrentPage(1)
+      // replace: each keystroke updates the URL in place instead of pushing a
+      // history entry, so Back doesn't step through every intermediate term.
+      navigate({ replace: true, search: (prev) => ({ ...prev, q: trimmed || undefined }) })
+    }, 300)
+  }
+
+  const handleClearFilters = () => {
+    if (debounceRef.current) clearTimeout(debounceRef.current)
+    lastNavigatedQRef.current = ''
+    setSearchInput('')
+    setCurrentPage(1)
+    navigate({ search: (prev) => ({ ...prev, status: undefined, q: undefined }) })
+  }
 
   // Fetch lists for the current workspace
   const { data: listsData } = useQuery({
@@ -1284,7 +1406,7 @@ export function BroadcastsPage() {
     <div className="p-6">
       <div className="flex justify-between items-center mb-6">
         <div className="text-2xl font-medium">{t`Broadcasts`}</div>
-        {currentWorkspace && hasBroadcasts && (
+        {currentWorkspace && (hasBroadcasts || hasActiveFilter) && (
           <Space>
             <Tooltip
               title={
@@ -1308,6 +1430,36 @@ export function BroadcastsPage() {
           </Space>
         )}
       </div>
+
+      {(hasBroadcasts || hasActiveFilter) && (
+        <div className="flex justify-between items-center mb-6 gap-4">
+          <Segmented
+            value={statusGroup}
+            onChange={(value) => handleStatusGroupChange(value as string)}
+            options={[
+              { label: t`All`, value: 'all' },
+              { label: t`Draft`, value: 'draft' },
+              { label: t`Scheduled`, value: 'scheduled' },
+              { label: t`Sending`, value: 'sending' },
+              { label: t`Sent`, value: 'sent' },
+              { label: t`Failed`, value: 'failed' }
+            ]}
+          />
+          <Input.Search
+            allowClear
+            placeholder={t`Search by name`}
+            value={searchInput}
+            onChange={(e) => handleSearchChange(e.target.value)}
+            onBlur={() => {
+              // Reconcile the box to the trimmed term that is actually applied
+              // so stray leading/trailing spaces don't linger after editing.
+              const trimmed = searchInput.trim()
+              if (trimmed !== searchInput) setSearchInput(trimmed)
+            }}
+            className="max-w-xs"
+          />
+        </div>
+      )}
 
       {!hasMarketingEmailProvider && (
         <Alert
@@ -1373,6 +1525,18 @@ export function BroadcastsPage() {
               />
             </div>
           )}
+        </div>
+      ) : hasActiveFilter ? (
+        <div className="text-center py-12">
+          <Title level={4} type="secondary">
+            {t`No broadcasts match your filters`}
+          </Title>
+          <Paragraph type="secondary">
+            {t`Try adjusting your search or status filter`}
+          </Paragraph>
+          <div className="mt-4">
+            <Button onClick={handleClearFilters}>{t`Clear filters`}</Button>
+          </div>
         </div>
       ) : (
         <div className="text-center py-12">

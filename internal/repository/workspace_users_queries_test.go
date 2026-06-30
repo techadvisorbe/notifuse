@@ -2,7 +2,7 @@ package repository
 
 import (
 	"context"
-	"errors"
+	"database/sql"
 	"fmt"
 	"testing"
 	"time"
@@ -102,13 +102,15 @@ func TestWorkspaceRepository_GetUserWorkspace(t *testing.T) {
 	assert.Equal(t, workspaceID, userWorkspace.WorkspaceID)
 	assert.Equal(t, "owner", userWorkspace.Role)
 
-	// Test not found case
-	mock.ExpectQuery(`SELECT user_id, workspace_id, role, created_at, updated_at FROM user_workspaces WHERE user_id = \$1 AND workspace_id = \$2`).
+	// Test not found case — sql.ErrNoRows is translated to the typed domain.ErrUserNotInWorkspace
+	// so callers (e.g. the platform-admin override) can errors.Is it.
+	mock.ExpectQuery(`SELECT user_id, workspace_id, role, permissions, created_at, updated_at FROM user_workspaces WHERE user_id = \$1 AND workspace_id = \$2`).
 		WithArgs("nonexistent", workspaceID).
-		WillReturnError(errors.New("no rows"))
+		WillReturnError(sql.ErrNoRows)
 
 	_, err = repo.GetUserWorkspace(context.Background(), "nonexistent", workspaceID)
 	require.Error(t, err)
+	require.ErrorIs(t, err, domain.ErrUserNotInWorkspace)
 
 	// Test database query error
 	mock.ExpectQuery(`SELECT user_id, workspace_id, role, created_at, updated_at FROM user_workspaces WHERE user_id = \$1 AND workspace_id = \$2`).

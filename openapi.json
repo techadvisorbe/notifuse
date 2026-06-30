@@ -3902,7 +3902,7 @@
       "post": {
         "summary": "Root user programmatic signin",
         "security": [],
-        "description": "Authenticates the root user using HMAC signature for programmatic access.\nThis endpoint is designed for automation scenarios like Infrastructure-as-Code\ndeployments, CI/CD pipelines, and automated testing where magic link\nauthentication is impractical.\n\n**Security Features:**\n- HMAC-SHA256 signature verification using the application's secret key\n- 60-second timestamp window to prevent replay attacks\n- Rate limited to 5 attempts per 5 minutes per email\n- Only works for the configured root email address\n\n**How to generate the signature:**\n```bash\nSECRET_KEY=\"your-notifuse-secret-key\"\nROOT_EMAIL=\"admin@example.com\"\nTIMESTAMP=$(date +%s)\nMESSAGE=\"${ROOT_EMAIL}:${TIMESTAMP}\"\nSIGNATURE=$(echo -n \"$MESSAGE\" | openssl dgst -sha256 -hmac \"$SECRET_KEY\" | awk '{print $2}')\n```\n",
+        "description": "Authenticates the root user using HMAC signature for programmatic access.\nThis endpoint is designed for automation scenarios like Infrastructure-as-Code\ndeployments, CI/CD pipelines, and automated testing where magic link\nauthentication is impractical.\n\n**Security Features:**\n- HMAC-SHA256 signature verification using the application's secret key\n- 60-second timestamp window to prevent replay attacks\n- Rate limited to 5 attempts per 5 minutes per email\n- Only works for a configured root email address (ROOT_EMAIL may list several, comma/semicolon-separated)\n\n**How to generate the signature:**\n```bash\nSECRET_KEY=\"your-notifuse-secret-key\"\nROOT_EMAIL=\"admin@example.com\"\nTIMESTAMP=$(date +%s)\nMESSAGE=\"${ROOT_EMAIL}:${TIMESTAMP}\"\nSIGNATURE=$(echo -n \"$MESSAGE\" | openssl dgst -sha256 -hmac \"$SECRET_KEY\" | awk '{print $2}')\n```\n",
         "operationId": "rootSignin",
         "tags": [
           "Authentication"
@@ -7471,7 +7471,7 @@
           "email": {
             "type": "string",
             "format": "email",
-            "description": "The root user's email address (must match configured ROOT_EMAIL)",
+            "description": "The root user's email address (must match one of the configured ROOT_EMAIL addresses)",
             "example": "admin@example.com"
           },
           "timestamp": {
@@ -7536,6 +7536,11 @@
             "type": "string",
             "description": "User's display name",
             "example": "Admin User"
+          },
+          "language": {
+            "type": "string",
+            "description": "User's preferred locale for the console UI and system emails",
+            "example": "en"
           },
           "created_at": {
             "type": "string",

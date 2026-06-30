@@ -93,12 +93,12 @@ func (r *AutomationRepository) CreateTx(ctx context.Context, tx *sql.Tx, workspa
 		Insert("automations").
 		Columns(
 			"id", "workspace_id", "name", "status", "list_id", "trigger_config",
-			"trigger_sql", "root_node_id", "nodes", "stats", "created_at", "updated_at",
+			"trigger_sql", "root_node_id", "nodes", "stats", "created_at", "updated_at", "exit_on_reply",
 		).
 		Values(
 			automation.ID, workspaceID, automation.Name, automation.Status,
 			automation.ListID, triggerJSON, automation.TriggerSQL,
-			automation.RootNodeID, nodesJSON, statsJSON, automation.CreatedAt, automation.UpdatedAt,
+			automation.RootNodeID, nodesJSON, statsJSON, automation.CreatedAt, automation.UpdatedAt, automation.ExitOnReply,
 		).
 		ToSql()
 	if err != nil {
@@ -137,7 +137,7 @@ func (r *AutomationRepository) GetByIDTx(ctx context.Context, tx *sql.Tx, worksp
 	query, args, err := automationPsql.
 		Select(
 			"id", "workspace_id", "name", "status", "list_id", "trigger_config",
-			"trigger_sql", "root_node_id", "nodes", "stats", "created_at", "updated_at", "deleted_at",
+			"trigger_sql", "root_node_id", "nodes", "stats", "created_at", "updated_at", "deleted_at", "exit_on_reply",
 		).
 		From("automations").
 		Where(sq.Eq{"id": id, "workspace_id": workspaceID, "deleted_at": nil}).
@@ -166,7 +166,7 @@ func (r *AutomationRepository) GetByIDTx(ctx context.Context, tx *sql.Tx, worksp
 	err = queryer.QueryRowContext(ctx, query, args...).Scan(
 		&automation.ID, &automation.WorkspaceID, &automation.Name, &automation.Status,
 		&automation.ListID, &triggerJSON, &automation.TriggerSQL, &automation.RootNodeID,
-		&nodesJSON, &statsJSON, &automation.CreatedAt, &automation.UpdatedAt, &deletedAt,
+		&nodesJSON, &statsJSON, &automation.CreatedAt, &automation.UpdatedAt, &deletedAt, &automation.ExitOnReply,
 	)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("automation not found: %s", id)
@@ -242,7 +242,7 @@ func (r *AutomationRepository) List(ctx context.Context, workspaceID string, fil
 	dataQuery := automationPsql.
 		Select(
 			"id", "workspace_id", "name", "status", "list_id", "trigger_config",
-			"trigger_sql", "root_node_id", "nodes", "stats", "created_at", "updated_at", "deleted_at",
+			"trigger_sql", "root_node_id", "nodes", "stats", "created_at", "updated_at", "deleted_at", "exit_on_reply",
 		).
 		From("automations").
 		Where(whereClause).
@@ -275,7 +275,7 @@ func (r *AutomationRepository) List(ctx context.Context, workspaceID string, fil
 		err := rows.Scan(
 			&automation.ID, &automation.WorkspaceID, &automation.Name, &automation.Status,
 			&automation.ListID, &triggerJSON, &automation.TriggerSQL, &automation.RootNodeID,
-			&nodesJSON, &statsJSON, &automation.CreatedAt, &automation.UpdatedAt, &deletedAt,
+			&nodesJSON, &statsJSON, &automation.CreatedAt, &automation.UpdatedAt, &deletedAt, &automation.ExitOnReply,
 		)
 		if err != nil {
 			return nil, 0, fmt.Errorf("failed to scan automation row: %w", err)
@@ -340,6 +340,7 @@ func (r *AutomationRepository) UpdateTx(ctx context.Context, tx *sql.Tx, workspa
 		Set("trigger_sql", automation.TriggerSQL).
 		Set("root_node_id", automation.RootNodeID).
 		Set("nodes", nodesJSON).
+		Set("exit_on_reply", automation.ExitOnReply).
 		Set("updated_at", automation.UpdatedAt).
 		Where(sq.Eq{"id": automation.ID, "workspace_id": workspaceID}).
 		ToSql()
@@ -374,6 +375,82 @@ func (r *AutomationRepository) UpdateTx(ctx context.Context, tx *sql.Tx, workspa
 	}
 
 	return nil
+}
+
+// UpdateContactAutomationIfActive persists the contact automation only while its
+// row is still 'active' (optimistic lock). Returns false (without error) when no
+// row was updated — i.e. the journey was concurrently exited (e.g. by a reply
+// interrupt) — so the executor can stop instead of clobbering the exit.
+func (r *AutomationRepository) UpdateContactAutomationIfActive(ctx context.Context, workspaceID string, ca *domain.ContactAutomation) (bool, error) {
+	contextJSON, err := json.Marshal(ca.Context)
+	if err != nil {
+		return false, fmt.Errorf("failed to marshal context: %w", err)
+	}
+
+	db, err := r.getDB(ctx, workspaceID)
+	if err != nil {
+		return false, fmt.Errorf("failed to get database connection: %w", err)
+	}
+
+	query, args, err := automationPsql.
+		Update("contact_automations").
+		Set("current_node_id", ca.CurrentNodeID).
+		Set("status", ca.Status).
+		Set("exit_reason", ca.ExitReason).
+		Set("scheduled_at", ca.ScheduledAt).
+		Set("context", contextJSON).
+		Set("retry_count", ca.RetryCount).
+		Set("last_error", ca.LastError).
+		Set("last_retry_at", ca.LastRetryAt).
+		Set("max_retries", ca.MaxRetries).
+		Where(sq.Eq{"id": ca.ID, "status": domain.ContactAutomationStatusActive}).
+		ToSql()
+	if err != nil {
+		return false, fmt.Errorf("failed to build query: %w", err)
+	}
+
+	result, err := db.ExecContext(ctx, query, args...)
+	if err != nil {
+		return false, fmt.Errorf("failed to update contact automation: %w", err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("failed to get rows affected: %w", err)
+	}
+	return rowsAffected > 0, nil
+}
+
+// ExitContactJourneysOnReply marks the contact's active journeys as exited when
+// their automation has exit_on_reply enabled. When automationID is non-nil only
+// that automation's journey is exited; otherwise all of the contact's
+// exit_on_reply journeys are exited. Returns the number of journeys exited.
+func (r *AutomationRepository) ExitContactJourneysOnReply(ctx context.Context, workspaceID, contactEmail string, automationID *string, reason string, before time.Time) (int, error) {
+	db, err := r.getDB(ctx, workspaceID)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get database connection: %w", err)
+	}
+
+	query := `
+		UPDATE contact_automations
+		SET status = 'exited', scheduled_at = NULL, exit_reason = $1
+		WHERE contact_email = $2
+		  AND status = 'active'
+		  AND entered_at < $3
+		  AND automation_id IN (
+		      SELECT id FROM automations WHERE exit_on_reply = TRUE AND deleted_at IS NULL
+		  )`
+	args := []interface{}{reason, contactEmail, before}
+	if automationID != nil && *automationID != "" {
+		query += " AND automation_id = $4"
+		args = append(args, *automationID)
+	}
+
+	res, err := db.ExecContext(ctx, query, args...)
+	if err != nil {
+		return 0, fmt.Errorf("failed to exit contact journeys on reply: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
 }
 
 // Delete soft-deletes an automation by setting deleted_at timestamp

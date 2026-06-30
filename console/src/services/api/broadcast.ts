@@ -178,10 +178,34 @@ export interface UpdateBroadcastRequest {
 
 export interface ListBroadcastsRequest {
   workspace_id: string
-  status?: BroadcastStatus
+  statuses?: BroadcastStatus[]
+  search?: string
   limit?: number
   offset?: number
   with_templates?: boolean
+}
+
+// Status filter groups shown in the broadcasts list Segmented control. Each
+// group maps to one or more underlying broadcast statuses. 'all' (no filter)
+// is intentionally not part of this map.
+export type BroadcastStatusGroup = 'all' | 'draft' | 'scheduled' | 'sending' | 'sent' | 'failed'
+
+export const BROADCAST_STATUS_GROUPS: Record<
+  Exclude<BroadcastStatusGroup, 'all'>,
+  BroadcastStatus[]
+> = {
+  draft: ['draft'],
+  scheduled: ['scheduled'],
+  sending: ['processing', 'paused', 'testing', 'winner_selected'],
+  sent: ['processed', 'test_completed'],
+  failed: ['failed', 'cancelled']
+}
+
+// getStatusesForGroup resolves a Segmented group value to the list of statuses
+// to filter by. Returns undefined for 'all' or any unknown group (no filter).
+export const getStatusesForGroup = (group: string | undefined): BroadcastStatus[] | undefined => {
+  if (!group || group === 'all') return undefined
+  return BROADCAST_STATUS_GROUPS[group as Exclude<BroadcastStatusGroup, 'all'>]
 }
 
 export interface ListBroadcastsResponse {
@@ -302,7 +326,9 @@ export const broadcastApi = {
   list: async (params: ListBroadcastsRequest): Promise<ListBroadcastsResponse> => {
     const searchParams = new URLSearchParams()
     searchParams.append('workspace_id', params.workspace_id)
-    if (params.status) searchParams.append('status', params.status)
+    if (params.statuses && params.statuses.length > 0)
+      searchParams.append('status', params.statuses.join(','))
+    if (params.search) searchParams.append('search', params.search)
     if (params.limit) searchParams.append('limit', params.limit.toString())
     if (params.offset) searchParams.append('offset', params.offset.toString())
     if (params.with_templates !== undefined)

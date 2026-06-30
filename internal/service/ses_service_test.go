@@ -1232,6 +1232,7 @@ func TestRegisterWebhooks_EventDestinationError(t *testing.T) {
 // Test GetWebhookStatus - success with registered webhooks
 func TestGetWebhookStatus_RegisteredWebhooks(t *testing.T) {
 	service, mockSESClient, _, _, _ := createMockSESService(t)
+	mockSESClient.EXPECT().DescribeActiveReceiptRuleSetWithContext(gomock.Any(), gomock.Any()).Return(&ses.DescribeActiveReceiptRuleSetOutput{}, nil).AnyTimes() // Phase 3: inbound status check
 
 	workspaceID := "test-workspace"
 	integrationID := "test-integration"
@@ -1283,6 +1284,7 @@ func TestGetWebhookStatus_RegisteredWebhooks(t *testing.T) {
 // Test GetWebhookStatus - not registered
 func TestGetWebhookStatus_NotRegistered(t *testing.T) {
 	service, mockSESClient, _, _, _ := createMockSESService(t)
+	mockSESClient.EXPECT().DescribeActiveReceiptRuleSetWithContext(gomock.Any(), gomock.Any()).Return(&ses.DescribeActiveReceiptRuleSetOutput{}, nil).AnyTimes() // Phase 3: inbound status check
 
 	workspaceID := "test-workspace"
 	integrationID := "test-integration"
@@ -1335,6 +1337,7 @@ func TestGetWebhookStatus_InvalidConfig(t *testing.T) {
 // Test GetWebhookStatus - list configuration sets error
 func TestGetWebhookStatus_ListConfigSetsError(t *testing.T) {
 	service, mockSESClient, _, _, _ := createMockSESService(t)
+	mockSESClient.EXPECT().DescribeActiveReceiptRuleSetWithContext(gomock.Any(), gomock.Any()).Return(&ses.DescribeActiveReceiptRuleSetOutput{}, nil).AnyTimes() // Phase 3: inbound status check
 
 	workspaceID := "test-workspace"
 	integrationID := "test-integration"
@@ -1361,6 +1364,7 @@ func TestGetWebhookStatus_ListConfigSetsError(t *testing.T) {
 // Test GetWebhookStatus - list event destinations error
 func TestGetWebhookStatus_ListEventDestinationsError(t *testing.T) {
 	service, mockSESClient, _, _, _ := createMockSESService(t)
+	mockSESClient.EXPECT().DescribeActiveReceiptRuleSetWithContext(gomock.Any(), gomock.Any()).Return(&ses.DescribeActiveReceiptRuleSetOutput{}, nil).AnyTimes() // Phase 3: inbound status check
 
 	workspaceID := "test-workspace"
 	integrationID := "test-integration"
@@ -1397,6 +1401,7 @@ func TestGetWebhookStatus_ListEventDestinationsError(t *testing.T) {
 // Test UnregisterWebhooks - success
 func TestUnregisterWebhooks_Success(t *testing.T) {
 	service, mockSESClient, mockSNSClient, _, _ := createMockSESService(t)
+	mockSESClient.EXPECT().DescribeActiveReceiptRuleSetWithContext(gomock.Any(), gomock.Any()).Return(&ses.DescribeActiveReceiptRuleSetOutput{}, nil).AnyTimes() // Phase 3: inbound status check
 
 	workspaceID := "test-workspace"
 	integrationID := "test-integration"
@@ -1461,6 +1466,7 @@ func TestUnregisterWebhooks_Success(t *testing.T) {
 // Test UnregisterWebhooks - configuration set does not exist
 func TestUnregisterWebhooks_ConfigSetNotExists(t *testing.T) {
 	service, mockSESClient, _, _, _ := createMockSESService(t)
+	mockSESClient.EXPECT().DescribeActiveReceiptRuleSetWithContext(gomock.Any(), gomock.Any()).Return(&ses.DescribeActiveReceiptRuleSetOutput{}, nil).AnyTimes() // Phase 3: inbound status check
 
 	workspaceID := "test-workspace"
 	integrationID := "test-integration"
@@ -1507,6 +1513,7 @@ func TestUnregisterWebhooks_InvalidConfig(t *testing.T) {
 // Test UnregisterWebhooks - partial cleanup failure
 func TestUnregisterWebhooks_PartialFailure(t *testing.T) {
 	service, mockSESClient, mockSNSClient, _, _ := createMockSESService(t)
+	mockSESClient.EXPECT().DescribeActiveReceiptRuleSetWithContext(gomock.Any(), gomock.Any()).Return(&ses.DescribeActiveReceiptRuleSetOutput{}, nil).AnyTimes() // Phase 3: inbound status check
 
 	workspaceID := "test-workspace"
 	integrationID := "test-integration"
@@ -1617,6 +1624,38 @@ func TestSendEmail_Success(t *testing.T) {
 	err := service.SendEmail(context.Background(), request)
 
 	assert.NoError(t, err)
+}
+
+// TestSendEmail_CapturesMessageID verifies SES surfaces the API-returned MessageId via
+// request.CapturedMessageID, so the worker can store the recipient-visible RFC Message-ID
+// for stop-on-reply matching (SES overwrites any Message-ID we set).
+func TestSendEmail_CapturesMessageID(t *testing.T) {
+	service, mockSESClient, _, _, _ := createMockSESService(t)
+
+	provider := &domain.EmailProvider{
+		SES: &domain.AmazonSESSettings{AccessKey: "k", SecretKey: "s", Region: "us-east-1"},
+	}
+	mockSESClient.EXPECT().
+		ListConfigurationSetsWithContext(gomock.Any(), gomock.Any()).
+		Return(&ses.ListConfigurationSetsOutput{ConfigurationSets: []*ses.ConfigurationSet{}}, nil)
+	returnedID := "0000018f-ses-id"
+	mockSESClient.EXPECT().
+		SendEmailWithContext(gomock.Any(), gomock.Any()).
+		Return(&ses.SendEmailOutput{MessageId: &returnedID}, nil)
+
+	captured := ""
+	request := domain.SendEmailProviderRequest{
+		WorkspaceID: "ws", IntegrationID: "int", MessageID: "local-msg", FromAddress: "h@x.com",
+		FromName: "H", To: "jane@example.com", Subject: "Hi", Content: "<p>hi</p>",
+		Provider: provider, CapturedMessageID: &captured,
+	}
+	err := service.SendEmail(context.Background(), request)
+
+	assert.NoError(t, err)
+	assert.Equal(t, returnedID, captured, "SES-returned MessageId must be captured")
+	// Stored host-independent (the bare local part); matching strips the amazonses.com host
+	// from a reply's In-Reply-To, so we don't depend on the exact host SES stamps.
+	assert.Equal(t, returnedID, domain.SESStoredMessageID(captured))
 }
 
 // Test SendEmail - nil SES provider

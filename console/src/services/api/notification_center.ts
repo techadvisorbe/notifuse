@@ -59,10 +59,10 @@ export const notificationCenterApi = {
     return api.post('/subscribe', params)
   },
 
-  // One-click unsubscribe for Gmail header link
+  // First-party notification center unsubscribe (JSON body, email_hmac-authorized)
   unsubscribeOneClick: async (
     params: UnsubscribeFromListsRequest
   ): Promise<{ success: boolean }> => {
-    return api.post('/unsubscribe-oneclick', params)
+    return api.post('/unsubscribe', params)
   }
 }

@@ -39,6 +39,7 @@ type AuthService struct {
 	workspaceRepo domain.WorkspaceRepository
 	logger        logger.Logger
 	getSecret     func() ([]byte, error) // Changed from getKeys
+	isRootEmail   func(string) bool      // reports whether an email is a configured platform admin (ROOT_EMAIL)
 
 	// Cached secret
 	cachedSecret []byte
@@ -50,6 +51,9 @@ type AuthServiceConfig struct {
 	WorkspaceRepository domain.WorkspaceRepository
 	GetSecret           func() ([]byte, error) // Changed from GetKeys
 	Logger              logger.Logger
+	// IsRootEmail reports whether an email is a configured platform admin (ROOT_EMAIL).
+	// When set, root emails get synthesized owner access to every workspace. Optional in tests.
+	IsRootEmail func(string) bool
 }
 
 func NewAuthService(cfg AuthServiceConfig) *AuthService {
@@ -58,6 +62,7 @@ func NewAuthService(cfg AuthServiceConfig) *AuthService {
 		workspaceRepo: cfg.WorkspaceRepository,
 		logger:        cfg.Logger,
 		getSecret:     cfg.GetSecret,
+		isRootEmail:   cfg.IsRootEmail,
 		secretLoaded:  false,
 	}
 }
@@ -136,7 +141,27 @@ func (s *AuthService) AuthenticateUserForWorkspace(ctx context.Context, workspac
 
 	// Then check if the user is a member of the workspace
 	userWorkspace, err := s.workspaceRepo.GetUserWorkspace(ctx, user.ID, workspaceID)
-	if err != nil {
+	switch {
+	case err == nil:
+		// Platform admins (ROOT_EMAIL) are full owners of every workspace. Elevate a root user
+		// who happens to hold a non-owner membership row so their access is identical to a root
+		// user who holds no row at all (handled below).
+		if s.isRootEmail != nil && s.isRootEmail(user.Email) && userWorkspace.Role != "owner" {
+			userWorkspace.Role = "owner"
+			userWorkspace.Permissions = domain.FullPermissions
+		}
+	case errors.Is(err, domain.ErrUserNotInWorkspace) && s.isRootEmail != nil && s.isRootEmail(user.Email):
+		// Platform-admin override: a configured ROOT_EMAIL gets synthesized owner access to
+		// every existing workspace, even without a membership row. Keyed off the typed
+		// not-found error so genuine DB failures still propagate. The GetByID check above
+		// already guaranteed the workspace exists.
+		userWorkspace = &domain.UserWorkspace{
+			UserID:      user.ID,
+			WorkspaceID: workspaceID,
+			Role:        "owner",
+			Permissions: domain.FullPermissions,
+		}
+	default:
 		return ctx, nil, nil, err
 	}
 

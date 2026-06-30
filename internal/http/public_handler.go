@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/Notifuse/notifuse/internal/domain"
-	"github.com/Notifuse/notifuse/pkg/botdetection"
 	pkgDatabase "github.com/Notifuse/notifuse/pkg/database"
 	"github.com/Notifuse/notifuse/pkg/logger"
 	"github.com/Notifuse/notifuse/pkg/ratelimiter"
@@ -53,7 +52,9 @@ func (h *NotificationCenterHandler) RegisterRoutes(mux *http.ServeMux) {
 	// Register public routes
 	mux.HandleFunc("/preferences", h.handlePreferences)
 	mux.HandleFunc("/subscribe", h.handleSubscribe)
-	// one-click unsubscribe for GMAIL header link
+	// first-party notification center unsubscribe (widget + console), JSON body
+	mux.HandleFunc("/unsubscribe", h.handleUnsubscribe)
+	// RFC 8058 one-click unsubscribe target baked into the List-Unsubscribe email header
 	mux.HandleFunc("/unsubscribe-oneclick", h.handleUnsubscribeOneClick)
 	// public health endpoint with connection stats
 	mux.HandleFunc("/health", h.handleHealth)
@@ -206,6 +207,41 @@ func (h *NotificationCenterHandler) handleSubscribe(w http.ResponseWriter, r *ht
 	})
 }
 
+// maxUnsubscribeBodyBytes caps the request body read by the unsubscribe handlers - the
+// SPA payload is a few hundred bytes; anything larger is malformed or hostile.
+const maxUnsubscribeBodyBytes = 4096
+
+// handleUnsubscribe is the first-party notification center unsubscribe endpoint (the
+// widget's "Unsubscribe" action and per-list toggle, and the console). It is the JSON
+// sibling of /subscribe: the SPA POSTs {wid, email, email_hmac, lids, mid} and the
+// email_hmac authorizes the request, verified by ListService.UnsubscribeFromLists.
+//
+// Mail-provider RFC 8058 one-click POSTs go to /unsubscribe-oneclick instead - that is
+// the URL baked into the List-Unsubscribe email header.
+func (h *NotificationCenterHandler) handleUnsubscribe(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		WriteJSONError(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req domain.UnsubscribeFromListsRequest
+	if err := req.FromJSONBody(io.LimitReader(r.Body, maxUnsubscribeBodyBytes)); err != nil {
+		h.logger.WithField("error", err.Error()).Error("Invalid notification center unsubscribe request")
+		WriteJSONError(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
+
+	if err := h.listService.UnsubscribeFromLists(r.Context(), &req, false); err != nil {
+		h.logger.WithField("error", err.Error()).Error("Failed to unsubscribe from lists")
+		WriteJSONError(w, "Failed to unsubscribe from lists", http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"success": true,
+	})
+}
+
 func (h *NotificationCenterHandler) handleUnsubscribeOneClick(w http.ResponseWriter, r *http.Request) {
 
 	if r.Method != http.MethodPost {
@@ -213,24 +249,54 @@ func (h *NotificationCenterHandler) handleUnsubscribeOneClick(w http.ResponseWri
 		return
 	}
 
-	// this is one-click unsubscribe from GMAIL header link
-
+	// This endpoint is the RFC 8058 one-click target baked into the List-Unsubscribe
+	// header of sent emails, so it must keep serving mail-provider POSTs forever. It
+	// branches on Content-Type. Either way authorization is owned by
+	// ListService.UnsubscribeFromLists, which verifies email_hmac against the workspace
+	// secret key.
+	//
+	//   1. Mail providers (Gmail/Yahoo/Apple) issue the RFC 8058 one-click POST: params
+	//      in the URL query (RFC 8058 section 2.1) plus a "List-Unsubscribe=One-Click"
+	//      token in the body (section 3.1). This is the primary, permanent contract.
+	//   2. A JSON body (no query string) is accepted as a backward-compat shim: the
+	//      notification center now posts to the dedicated /unsubscribe endpoint
+	//      (handleUnsubscribe), but already-cached widget bundles may still hit this
+	//      path. New code should use /unsubscribe.
 	var req domain.UnsubscribeFromListsRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		h.logger.WithField("error", err.Error()).Error("Failed to decode request body")
-		WriteJSONError(w, "Invalid request body", http.StatusBadRequest)
-		return
-	}
+	if strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
+		// Backward-compat shim for the SPA (see above). A link-prefetcher/scanner cannot
+		// reach here: it does not run the widget's JS and so never builds this JSON body,
+		// so the RFC 8058 token gate is unnecessary for this shape - and email_hmac still
+		// gates the actual unsubscribe in the service.
+		if err := req.FromJSONBody(io.LimitReader(r.Body, maxUnsubscribeBodyBytes)); err != nil {
+			h.logger.WithField("error", err.Error()).Error("Invalid notification center unsubscribe request")
+			WriteJSONError(w, "Invalid request", http.StatusBadRequest)
+			return
+		}
+	} else {
+		// RFC 8058 one-click path. Per section 2.1 the parameters are carried in the URL
+		// query string (not the body); read them from the query here.
+		if err := req.FromOneClickURLParams(r.URL.Query()); err != nil {
+			h.logger.WithField("error", err.Error()).Error("Invalid one-click unsubscribe request")
+			WriteJSONError(w, "Invalid request", http.StatusBadRequest)
+			return
+		}
 
-	// Bot detection: check user agent before processing unsubscribe
-	userAgent := r.Header.Get("User-Agent")
-	if botdetection.IsBotUserAgent(userAgent) {
-		// Return success without actually unsubscribing to avoid revealing bot detection
-		h.logger.WithField("user_agent", userAgent).Debug("Bot detected by user agent - not processing unsubscribe")
-		writeJSON(w, http.StatusOK, map[string]interface{}{
-			"success": true,
-		})
-		return
+		// RFC 8058 (section 3.1): the POST body is application/x-www-form-urlencoded
+		// containing "List-Unsubscribe=One-Click". Requiring that token is the
+		// defense-in-depth against link-prefetchers and security scanners that fire a
+		// bare POST: a conformant one-click request always carries it. We do NOT apply
+		// User-Agent bot detection here - an RFC 8058 POST is always machine-generated
+		// by the mail provider, so a UA blocklist only drops legitimate unsubscribes
+		// (the contact stays subscribed while the provider sees success). A missing
+		// token is a real 400, never a silent success. Authorization is the HMAC below.
+		bodyBytes, _ := io.ReadAll(io.LimitReader(r.Body, maxUnsubscribeBodyBytes))
+		if !strings.Contains(string(bodyBytes), "List-Unsubscribe=One-Click") {
+			h.logger.WithField("user_agent", r.Header.Get("User-Agent")).
+				Warn("One-click unsubscribe POST missing RFC 8058 List-Unsubscribe=One-Click token")
+			WriteJSONError(w, "Invalid request", http.StatusBadRequest)
+			return
+		}
 	}
 
 	fromBearerToken := false

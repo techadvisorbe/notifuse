@@ -131,6 +131,7 @@ func TestAutomationRepository_Create(t *testing.T) {
 			sqlmock.AnyArg(), // stats JSON
 			sqlmock.AnyArg(), // created_at
 			sqlmock.AnyArg(), // updated_at
+			automation.ExitOnReply,
 		).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
@@ -153,6 +154,7 @@ func TestAutomationRepository_Create(t *testing.T) {
 			sqlmock.AnyArg(),
 			sqlmock.AnyArg(),
 			sqlmock.AnyArg(),
+			automation.ExitOnReply,
 		).
 		WillReturnError(fmt.Errorf("database error"))
 
@@ -181,10 +183,10 @@ func TestAutomationRepository_GetByID(t *testing.T) {
 	// Test successful retrieval (includes deleted_at IS NULL filter)
 	rows := sqlmock.NewRows([]string{
 		"id", "workspace_id", "name", "status", "list_id", "trigger_config",
-		"trigger_sql", "root_node_id", "nodes", "stats", "created_at", "updated_at", "deleted_at",
+		"trigger_sql", "root_node_id", "nodes", "stats", "created_at", "updated_at", "deleted_at", "exit_on_reply",
 	}).AddRow(
 		automationID, workspaceID, "Test Automation", "draft", "list-123",
-		triggerJSON, nil, "node-root", nodesJSON, statsJSON, now, now, nil,
+		triggerJSON, nil, "node-root", nodesJSON, statsJSON, now, now, nil, true,
 	)
 
 	mock.ExpectQuery("SELECT .* FROM automations WHERE.*deleted_at IS NULL").
@@ -196,6 +198,8 @@ func TestAutomationRepository_GetByID(t *testing.T) {
 	assert.Equal(t, automationID, automation.ID)
 	assert.Equal(t, workspaceID, automation.WorkspaceID)
 	assert.Nil(t, automation.DeletedAt)
+	// exit_on_reply must be scanned into the right field (a true row must read back true).
+	assert.True(t, automation.ExitOnReply, "exit_on_reply must round-trip through the scan")
 	assert.NoError(t, mock.ExpectationsWereMet())
 
 	// Test not found
@@ -248,13 +252,13 @@ func TestAutomationRepository_List(t *testing.T) {
 	// Test data query (includes deleted_at IS NULL)
 	rows := sqlmock.NewRows([]string{
 		"id", "workspace_id", "name", "status", "list_id", "trigger_config",
-		"trigger_sql", "root_node_id", "nodes", "stats", "created_at", "updated_at", "deleted_at",
+		"trigger_sql", "root_node_id", "nodes", "stats", "created_at", "updated_at", "deleted_at", "exit_on_reply",
 	}).AddRow(
 		"auto-1", workspaceID, "Auto 1", "draft", "list-123",
-		triggerJSON, nil, "node-1", nodesJSON, statsJSON, now, now, nil,
+		triggerJSON, nil, "node-1", nodesJSON, statsJSON, now, now, nil, false,
 	).AddRow(
 		"auto-2", workspaceID, "Auto 2", "live", "list-123",
-		triggerJSON, nil, "node-2", nodesJSON, statsJSON, now, now, nil,
+		triggerJSON, nil, "node-2", nodesJSON, statsJSON, now, now, nil, true,
 	)
 
 	mock.ExpectQuery("SELECT .* FROM automations WHERE.*deleted_at IS NULL").
@@ -317,6 +321,7 @@ func TestAutomationRepository_Update(t *testing.T) {
 			automation.TriggerSQL,
 			automation.RootNodeID,
 			sqlmock.AnyArg(), // nodes JSON
+			automation.ExitOnReply,
 			sqlmock.AnyArg(), // updated_at
 			automation.ID,
 			workspaceID,
@@ -337,6 +342,7 @@ func TestAutomationRepository_Update(t *testing.T) {
 			automation.TriggerSQL,
 			automation.RootNodeID,
 			sqlmock.AnyArg(), // nodes JSON
+			automation.ExitOnReply,
 			sqlmock.AnyArg(), // updated_at
 			automation.ID,
 			workspaceID,
@@ -358,6 +364,7 @@ func TestAutomationRepository_Update(t *testing.T) {
 			automation.TriggerSQL,
 			automation.RootNodeID,
 			sqlmock.AnyArg(), // nodes JSON
+			automation.ExitOnReply,
 			sqlmock.AnyArg(), // updated_at
 			automation.ID,
 			workspaceID,
@@ -961,6 +968,7 @@ func TestAutomationRepository_CreateTx(t *testing.T) {
 			sqlmock.AnyArg(), // stats
 			sqlmock.AnyArg(), // created_at
 			sqlmock.AnyArg(), // updated_at
+			automation.ExitOnReply,
 		).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
@@ -995,10 +1003,10 @@ func TestAutomationRepository_GetByIDTx(t *testing.T) {
 	mock.ExpectBegin()
 	rows := sqlmock.NewRows([]string{
 		"id", "workspace_id", "name", "status", "list_id", "trigger_config",
-		"trigger_sql", "root_node_id", "nodes", "stats", "created_at", "updated_at", "deleted_at",
+		"trigger_sql", "root_node_id", "nodes", "stats", "created_at", "updated_at", "deleted_at", "exit_on_reply",
 	}).AddRow(
 		automationID, workspaceID, "Test", "draft", "list-123",
-		triggerJSON, nil, "node-root", nodesJSON, statsJSON, now, now, nil,
+		triggerJSON, nil, "node-root", nodesJSON, statsJSON, now, now, nil, false,
 	)
 	mock.ExpectQuery("SELECT .* FROM automations WHERE.*deleted_at IS NULL").
 		WillReturnRows(rows)
@@ -1040,10 +1048,10 @@ func TestAutomationRepository_GetByID_JSONUnmarshalError(t *testing.T) {
 	// Invalid JSON for trigger_config
 	rows := sqlmock.NewRows([]string{
 		"id", "workspace_id", "name", "status", "list_id", "trigger_config",
-		"trigger_sql", "root_node_id", "nodes", "stats", "created_at", "updated_at", "deleted_at",
+		"trigger_sql", "root_node_id", "nodes", "stats", "created_at", "updated_at", "deleted_at", "exit_on_reply",
 	}).AddRow(
 		automationID, workspaceID, "Test", "draft", "list-123",
-		"invalid json", nil, "node-root", "[]", "{}", now, now, nil,
+		"invalid json", nil, "node-root", "[]", "{}", now, now, nil, false,
 	)
 
 	mock.ExpectQuery("SELECT .* FROM automations WHERE.*deleted_at IS NULL").
@@ -1077,10 +1085,10 @@ func TestAutomationRepository_List_JSONUnmarshalError(t *testing.T) {
 	// Invalid JSON for trigger_config
 	rows := sqlmock.NewRows([]string{
 		"id", "workspace_id", "name", "status", "list_id", "trigger_config",
-		"trigger_sql", "root_node_id", "nodes", "stats", "created_at", "updated_at", "deleted_at",
+		"trigger_sql", "root_node_id", "nodes", "stats", "created_at", "updated_at", "deleted_at", "exit_on_reply",
 	}).AddRow(
 		"auto-1", workspaceID, "Auto 1", "draft", "list-123",
-		"invalid json", nil, "node-1", "[]", "{}", now, now, nil,
+		"invalid json", nil, "node-1", "[]", "{}", now, now, nil, false,
 	)
 
 	mock.ExpectQuery("SELECT .* FROM automations.*deleted_at IS NULL").
@@ -1218,6 +1226,7 @@ func TestAutomationRepository_Update_RowsAffectedError(t *testing.T) {
 			automation.TriggerSQL,
 			automation.RootNodeID,
 			sqlmock.AnyArg(), // nodes
+			automation.ExitOnReply,
 			sqlmock.AnyArg(), // updated_at
 			automation.ID,
 			workspaceID,
@@ -1405,10 +1414,10 @@ func TestAutomationRepository_List_ExcludesDeleted(t *testing.T) {
 	// Data query should include deleted_at IS NULL
 	rows := sqlmock.NewRows([]string{
 		"id", "workspace_id", "name", "status", "list_id", "trigger_config",
-		"trigger_sql", "root_node_id", "nodes", "stats", "created_at", "updated_at", "deleted_at",
+		"trigger_sql", "root_node_id", "nodes", "stats", "created_at", "updated_at", "deleted_at", "exit_on_reply",
 	}).AddRow(
 		"auto-1", workspaceID, "Auto 1", "draft", "list-123",
-		triggerJSON, nil, "node-1", nodesJSON, statsJSON, now, now, nil,
+		triggerJSON, nil, "node-1", nodesJSON, statsJSON, now, now, nil, false,
 	)
 
 	mock.ExpectQuery("SELECT .* FROM automations WHERE.*deleted_at IS NULL").
@@ -1453,13 +1462,13 @@ func TestAutomationRepository_List_IncludeDeleted(t *testing.T) {
 	// Data query should NOT filter by deleted_at
 	rows := sqlmock.NewRows([]string{
 		"id", "workspace_id", "name", "status", "list_id", "trigger_config",
-		"trigger_sql", "root_node_id", "nodes", "stats", "created_at", "updated_at", "deleted_at",
+		"trigger_sql", "root_node_id", "nodes", "stats", "created_at", "updated_at", "deleted_at", "exit_on_reply",
 	}).AddRow(
 		"auto-1", workspaceID, "Auto 1", "draft", "list-123",
-		triggerJSON, nil, "node-1", nodesJSON, statsJSON, now, now, nil,
+		triggerJSON, nil, "node-1", nodesJSON, statsJSON, now, now, nil, false,
 	).AddRow(
 		"auto-2", workspaceID, "Auto 2 (Deleted)", "draft", "list-123",
-		triggerJSON, nil, "node-2", nodesJSON, statsJSON, now, now, deletedAt,
+		triggerJSON, nil, "node-2", nodesJSON, statsJSON, now, now, deletedAt, true,
 	)
 
 	mock.ExpectQuery("SELECT .* FROM automations WHERE").

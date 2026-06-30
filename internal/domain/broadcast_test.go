@@ -1432,6 +1432,110 @@ func TestGetBroadcastsRequest_FromURLParams(t *testing.T) {
 	}
 }
 
+// TestGetBroadcastsRequest_FromURLParams_StatusesAndSearch tests parsing of the
+// multi-status (comma-separated) and name search query parameters.
+func TestGetBroadcastsRequest_FromURLParams_StatusesAndSearch(t *testing.T) {
+	t.Run("multiple comma-separated statuses", func(t *testing.T) {
+		request := domain.GetBroadcastsRequest{}
+		err := request.FromURLParams(url.Values{
+			"workspace_id": {"ws1"},
+			"status":       {"processing,paused,testing"},
+		})
+		require.NoError(t, err)
+		assert.Equal(t, []string{"processing", "paused", "testing"}, request.Statuses)
+		// For a multi-status request, Status stays empty rather than holding a
+		// malformed comma-joined value.
+		assert.Empty(t, request.Status)
+	})
+
+	t.Run("trims whitespace and drops empty entries", func(t *testing.T) {
+		request := domain.GetBroadcastsRequest{}
+		err := request.FromURLParams(url.Values{
+			"workspace_id": {"ws1"},
+			"status":       {" draft , , scheduled "},
+		})
+		require.NoError(t, err)
+		assert.Equal(t, []string{"draft", "scheduled"}, request.Statuses)
+	})
+
+	t.Run("single status populates Status and Statuses", func(t *testing.T) {
+		request := domain.GetBroadcastsRequest{}
+		err := request.FromURLParams(url.Values{
+			"workspace_id": {"ws1"},
+			"status":       {"draft"},
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "draft", request.Status)
+		assert.Equal(t, []string{"draft"}, request.Statuses)
+	})
+
+	t.Run("search is parsed and trimmed", func(t *testing.T) {
+		request := domain.GetBroadcastsRequest{}
+		err := request.FromURLParams(url.Values{
+			"workspace_id": {"ws1"},
+			"search":       {"  Summer Sale  "},
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "Summer Sale", request.Search)
+	})
+
+	t.Run("no status or search yields empty values", func(t *testing.T) {
+		request := domain.GetBroadcastsRequest{}
+		err := request.FromURLParams(url.Values{"workspace_id": {"ws1"}})
+		require.NoError(t, err)
+		assert.Empty(t, request.Statuses)
+		assert.Empty(t, request.Search)
+	})
+
+	t.Run("unknown status is rejected", func(t *testing.T) {
+		request := domain.GetBroadcastsRequest{}
+		err := request.FromURLParams(url.Values{
+			"workspace_id": {"ws1"},
+			"status":       {"drafty"},
+		})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid status")
+	})
+
+	t.Run("one bad status among valid ones is rejected", func(t *testing.T) {
+		request := domain.GetBroadcastsRequest{}
+		err := request.FromURLParams(url.Values{
+			"workspace_id": {"ws1"},
+			"status":       {"draft,bogus"},
+		})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid status")
+	})
+
+	t.Run("degenerate comma-only status is rejected (not treated as no filter)", func(t *testing.T) {
+		request := domain.GetBroadcastsRequest{}
+		err := request.FromURLParams(url.Values{
+			"workspace_id": {"ws1"},
+			"status":       {",,"},
+		})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid status parameter")
+	})
+}
+
+// TestBroadcastStatus_IsValid covers the status whitelist used by both entity
+// validation and the list-filter parsing.
+func TestBroadcastStatus_IsValid(t *testing.T) {
+	valid := []domain.BroadcastStatus{
+		domain.BroadcastStatusDraft, domain.BroadcastStatusScheduled,
+		domain.BroadcastStatusProcessing, domain.BroadcastStatusPaused,
+		domain.BroadcastStatusProcessed, domain.BroadcastStatusCancelled,
+		domain.BroadcastStatusFailed, domain.BroadcastStatusTesting,
+		domain.BroadcastStatusTestCompleted, domain.BroadcastStatusWinnerSelected,
+	}
+	for _, s := range valid {
+		assert.True(t, s.IsValid(), "expected %s to be valid", s)
+	}
+	for _, s := range []domain.BroadcastStatus{"", "Draft", "sending", "sent", "bogus"} {
+		assert.False(t, s.IsValid(), "expected %s to be invalid", s)
+	}
+}
+
 // TestGetBroadcastRequest_FromURLParams tests the FromURLParams method of GetBroadcastRequest
 func TestGetBroadcastRequest_FromURLParams(t *testing.T) {
 	tests := []struct {

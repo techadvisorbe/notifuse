@@ -32,6 +32,8 @@ type RootHandler struct {
 	workspaceRepo         domain.WorkspaceRepository
 	blogService           domain.BlogService
 	cache                 cache.Cache
+	oidcEnabled           bool
+	oidcButtonLabel       string
 }
 
 // NewRootHandler creates a root handler that serves both console and notification center static files
@@ -50,6 +52,8 @@ func NewRootHandler(
 	workspaceRepo domain.WorkspaceRepository,
 	blogService domain.BlogService,
 	cache cache.Cache,
+	oidcEnabled bool,
+	oidcButtonLabel string,
 ) *RootHandler {
 	return &RootHandler{
 		consoleDir:            consoleDir,
@@ -66,6 +70,8 @@ func NewRootHandler(
 		workspaceRepo:         workspaceRepo,
 		blogService:           blogService,
 		cache:                 cache,
+		oidcEnabled:           oidcEnabled,
+		oidcButtonLabel:       oidcButtonLabel,
 	}
 }
 
@@ -153,8 +159,20 @@ func (h *RootHandler) serveConfigJS(w http.ResponseWriter, r *http.Request) {
 		smtpBridgeEnabledStr = "true"
 	}
 
+	oidcEnabledStr := "false"
+	if h.oidcEnabled {
+		oidcEnabledStr = "true"
+	}
+	// Only flags reach the browser — NEVER the client_id, issuer, or secret. The
+	// label is operator text; %q escapes the JS-string literal, and the SPA must
+	// render it as React text content (never dangerouslySetInnerHTML).
+	oidcButtonLabel := h.oidcButtonLabel
+	if oidcButtonLabel == "" {
+		oidcButtonLabel = "Sign in with SSO"
+	}
+
 	configJS := fmt.Sprintf(
-		"window.API_ENDPOINT = %q;\nwindow.VERSION = %q;\nwindow.ROOT_EMAIL = %q;\nwindow.IS_INSTALLED = %s;\nwindow.TIMEZONES = %s;\nwindow.SMTP_BRIDGE_ENABLED = %s;\nwindow.SMTP_BRIDGE_DOMAIN = %q;\nwindow.SMTP_BRIDGE_PORT = %d;\nwindow.SMTP_BRIDGE_TLS_MODE = %q;",
+		"window.API_ENDPOINT = %q;\nwindow.VERSION = %q;\nwindow.ROOT_EMAIL = %q;\nwindow.IS_INSTALLED = %s;\nwindow.TIMEZONES = %s;\nwindow.SMTP_BRIDGE_ENABLED = %s;\nwindow.SMTP_BRIDGE_DOMAIN = %q;\nwindow.SMTP_BRIDGE_PORT = %d;\nwindow.SMTP_BRIDGE_TLS_MODE = %q;\nwindow.OIDC_ENABLED = %s;\nwindow.OIDC_BUTTON_LABEL = %q;",
 		h.apiEndpoint,
 		h.version,
 		h.rootEmail,
@@ -164,6 +182,8 @@ func (h *RootHandler) serveConfigJS(w http.ResponseWriter, r *http.Request) {
 		h.smtpBridgeDomain,
 		h.smtpBridgePort,
 		h.smtpBridgeTLSMode,
+		oidcEnabledStr,
+		oidcButtonLabel,
 	)
 	_, _ = w.Write([]byte(configJS))
 }

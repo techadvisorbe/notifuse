@@ -518,6 +518,12 @@ export const createRichExtensions = () => [
   StarterKit.configure({
     // Disable headings for email compatibility, but enable lists
     heading: false,
+    // Disable StarterKit's bundled Link/Underline so the explicit CustomLink
+    // (email-friendly HTML) and Underline added below are the only ones registered.
+    // Otherwise tiptap warns "Duplicate extension names found: ['link', 'underline']"
+    // and the resolution is ambiguous.
+    link: false,
+    underline: false,
     bulletList: {
       HTMLAttributes: {}
     },
@@ -581,6 +587,16 @@ export const createInlineExtensions = () => [
     blockquote: false,
     codeBlock: false,
     horizontalRule: false,
+    // Use the explicit CustomLink + Underline added below instead of StarterKit's
+    // bundled ones (prevents "Duplicate extension names" warnings and ambiguous resolution).
+    link: false,
+    underline: false,
+    // Disable the trailing node. StarterKit enables it by default to keep a trailing
+    // paragraph in block documents, but our inline schema has no paragraph. In that case
+    // TrailingNode resolves its node to the inline schema's default type (hardBreak) and
+    // appends a <br> after every transaction, so each typed character ends up on its own
+    // line (see issue #352). Inline button text never needs a trailing node.
+    trailingNode: false,
     // Keep only inline marks and commands
     bold: {
       HTMLAttributes: {}

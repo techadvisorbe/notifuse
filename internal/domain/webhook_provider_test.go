@@ -61,6 +61,11 @@ func TestGenerateWebhookCallbackURL(t *testing.T) {
 	}
 }
 
+func TestGenerateInboundWebhookURL(t *testing.T) {
+	result := domain.GenerateInboundWebhookURL("https://api.example.com", "ws-123", "int-456")
+	assert.Equal(t, "https://api.example.com/webhooks/email/inbound?workspace_id=ws-123&integration_id=int-456", result)
+}
+
 func TestWebhookRegistrationStatus_JSON(t *testing.T) {
 	// Create a test status
 	status := &domain.WebhookRegistrationStatus{

@@ -417,6 +417,17 @@ func formatSingleAttributeWithLiquid(key string, value interface{}, templateData
 		processedValue := processAttributeValue(*v, kebabKey, templateData, blockID)
 		escapedValue := escapeAttributeValue(processedValue, kebabKey)
 		return fmt.Sprintf(` %s="%s"`, kebabKey, escapedValue)
+	case map[string]interface{}:
+		// Visual-editor box-model objects (e.g. inner-padding stored as
+		// {top, right, bottom, left}) must compile to a CSS shorthand, never to
+		// Go's "map[...]" formatting which strict clients like Gmail reject.
+		cssValue, ok := formatBoxModelMap(v)
+		if !ok || cssValue == "" {
+			return ""
+		}
+		processedValue := processAttributeValue(cssValue, kebabKey, templateData, blockID)
+		escapedValue := escapeAttributeValue(processedValue, kebabKey)
+		return fmt.Sprintf(` %s="%s"`, kebabKey, escapedValue)
 	default:
 		// Handle other types (int, float, etc.) by converting to string
 		strValue := fmt.Sprintf("%v", value)
@@ -426,6 +437,51 @@ func formatSingleAttributeWithLiquid(key string, value interface{}, templateData
 		processedValue := processAttributeValue(strValue, kebabKey, templateData, blockID)
 		escapedValue := escapeAttributeValue(processedValue, kebabKey)
 		return fmt.Sprintf(` %s="%s"`, kebabKey, escapedValue)
+	}
+}
+
+// boxModelSides are the side keys a visual-editor padding/margin object may carry.
+var boxModelSides = []string{"top", "right", "bottom", "left"}
+
+// formatBoxModelMap converts a visual-editor box-model object such as
+// {"top": "0px", "bottom": "0px"} into a CSS shorthand string ("0px",
+// "10px 25px" or "1px 2px 3px 4px"). Missing sides default to "0px", mirroring
+// the console's PaddingInput shorthand logic. It returns ok=false when the map is
+// not a box-model object (or is empty), so the caller can skip the attribute
+// entirely instead of leaking Go's "map[...]" formatting into the MJML/CSS.
+func formatBoxModelMap(m map[string]interface{}) (string, bool) {
+	hasSide := false
+	for _, side := range boxModelSides {
+		if _, ok := m[side]; ok {
+			hasSide = true
+			break
+		}
+	}
+	if !hasSide {
+		return "", false
+	}
+
+	sideValue := func(key string) string {
+		if v, ok := m[key]; ok && v != nil {
+			if s := strings.TrimSpace(fmt.Sprintf("%v", v)); s != "" {
+				return s
+			}
+		}
+		return "0px"
+	}
+
+	top := sideValue("top")
+	right := sideValue("right")
+	bottom := sideValue("bottom")
+	left := sideValue("left")
+
+	switch {
+	case top == right && right == bottom && bottom == left:
+		return top, true
+	case top == bottom && right == left:
+		return top + " " + right, true
+	default:
+		return top + " " + right + " " + bottom + " " + left, true
 	}
 }
 

@@ -29,6 +29,17 @@ type SystemConfig struct {
 	SMTPBridgePort          int
 	SMTPBridgeTLSCertBase64 string
 	SMTPBridgeTLSKeyBase64  string
+
+	// OIDC settings (client secret encrypted at rest).
+	OIDCEnabled         bool
+	OIDCIssuerURL       string
+	OIDCClientID        string
+	OIDCClientSecret    string
+	OIDCRedirectURI     string
+	OIDCScopes          string
+	OIDCButtonLabel     string
+	OIDCAutoCreateUsers bool
+	OIDCAllowedDomains  string
 }
 
 // SettingService provides methods for managing system settings
@@ -164,6 +175,39 @@ func (s *SettingService) GetSystemConfig(ctx context.Context, secretKey string) 
 			return nil, fmt.Errorf("failed to decrypt SMTP bridge TLS key: %w", err)
 		}
 		config.SMTPBridgeTLSKeyBase64 = decrypted
+	}
+
+	// OIDC settings
+	if setting, err := s.repo.Get(ctx, "oidc_enabled"); err == nil {
+		config.OIDCEnabled = setting.Value == "true"
+	}
+	if setting, err := s.repo.Get(ctx, "oidc_issuer_url"); err == nil {
+		config.OIDCIssuerURL = setting.Value
+	}
+	if setting, err := s.repo.Get(ctx, "oidc_client_id"); err == nil {
+		config.OIDCClientID = setting.Value
+	}
+	if setting, err := s.repo.Get(ctx, "oidc_redirect_uri"); err == nil {
+		config.OIDCRedirectURI = setting.Value
+	}
+	if setting, err := s.repo.Get(ctx, "oidc_scopes"); err == nil {
+		config.OIDCScopes = setting.Value
+	}
+	if setting, err := s.repo.Get(ctx, "oidc_button_label"); err == nil {
+		config.OIDCButtonLabel = setting.Value
+	}
+	if setting, err := s.repo.Get(ctx, "oidc_auto_create_users"); err == nil {
+		config.OIDCAutoCreateUsers = setting.Value == "true"
+	}
+	if setting, err := s.repo.Get(ctx, "oidc_allowed_domains"); err == nil {
+		config.OIDCAllowedDomains = setting.Value
+	}
+	if setting, err := s.repo.Get(ctx, "encrypted_oidc_client_secret"); err == nil && setting.Value != "" {
+		decrypted, err := crypto.DecryptFromHexString(setting.Value, secretKey)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decrypt OIDC client secret: %w", err)
+		}
+		config.OIDCClientSecret = decrypted
 	}
 
 	return config, nil
@@ -328,6 +372,54 @@ func (s *SettingService) SetSystemConfig(ctx context.Context, config *SystemConf
 	} else {
 		if err := s.repo.Set(ctx, "encrypted_smtp_bridge_tls_key_base64", ""); err != nil {
 			return fmt.Errorf("failed to clear encrypted_smtp_bridge_tls_key_base64: %w", err)
+		}
+	}
+
+	// OIDC settings
+	oidcEnabledVal := "false"
+	if config.OIDCEnabled {
+		oidcEnabledVal = "true"
+	}
+	if err := s.repo.Set(ctx, "oidc_enabled", oidcEnabledVal); err != nil {
+		return fmt.Errorf("failed to set oidc_enabled: %w", err)
+	}
+	if err := s.repo.Set(ctx, "oidc_issuer_url", config.OIDCIssuerURL); err != nil {
+		return fmt.Errorf("failed to set oidc_issuer_url: %w", err)
+	}
+	if err := s.repo.Set(ctx, "oidc_client_id", config.OIDCClientID); err != nil {
+		return fmt.Errorf("failed to set oidc_client_id: %w", err)
+	}
+	if err := s.repo.Set(ctx, "oidc_redirect_uri", config.OIDCRedirectURI); err != nil {
+		return fmt.Errorf("failed to set oidc_redirect_uri: %w", err)
+	}
+	if err := s.repo.Set(ctx, "oidc_scopes", config.OIDCScopes); err != nil {
+		return fmt.Errorf("failed to set oidc_scopes: %w", err)
+	}
+	if err := s.repo.Set(ctx, "oidc_button_label", config.OIDCButtonLabel); err != nil {
+		return fmt.Errorf("failed to set oidc_button_label: %w", err)
+	}
+	oidcAutoVal := "false"
+	if config.OIDCAutoCreateUsers {
+		oidcAutoVal = "true"
+	}
+	if err := s.repo.Set(ctx, "oidc_auto_create_users", oidcAutoVal); err != nil {
+		return fmt.Errorf("failed to set oidc_auto_create_users: %w", err)
+	}
+	if err := s.repo.Set(ctx, "oidc_allowed_domains", config.OIDCAllowedDomains); err != nil {
+		return fmt.Errorf("failed to set oidc_allowed_domains: %w", err)
+	}
+	// Encrypt and store OIDC client secret (allow clearing)
+	if config.OIDCClientSecret != "" {
+		encrypted, err := crypto.EncryptString(config.OIDCClientSecret, secretKey)
+		if err != nil {
+			return fmt.Errorf("failed to encrypt OIDC client secret: %w", err)
+		}
+		if err := s.repo.Set(ctx, "encrypted_oidc_client_secret", encrypted); err != nil {
+			return fmt.Errorf("failed to set encrypted_oidc_client_secret: %w", err)
+		}
+	} else {
+		if err := s.repo.Set(ctx, "encrypted_oidc_client_secret", ""); err != nil {
+			return fmt.Errorf("failed to clear encrypted_oidc_client_secret: %w", err)
 		}
 	}
 

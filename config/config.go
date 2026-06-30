@@ -15,7 +15,7 @@ import (
 	"github.com/spf13/viper"
 )
 
-const VERSION = "32.2"
+const VERSION = "34.1"
 
 type Config struct {
 	Server              ServerConfig
@@ -24,6 +24,7 @@ type Config struct {
 	Tracing             TracingConfig
 	SMTP                SMTPConfig
 	SMTPBridge          SMTPBridgeConfig
+	OIDC                OIDCConfig
 	Demo                DemoConfig
 	Broadcast           BroadcastConfig
 	TaskScheduler       TaskSchedulerConfig
@@ -62,6 +63,18 @@ type EnvValues struct {
 	SMTPBridgeTLSCertBase64 string
 	SMTPBridgeTLSKeyBase64  string
 	SMTPBridgeTLSMode       string // "off", "starttls", "implicit", or "" (empty = auto-resolve)
+
+	// OIDC env values. Enabled/AutoCreateUsers use the string "tri-state" pattern
+	// ("true"/"false"/"") so an explicit env value can lock out the DB setting.
+	OIDCEnabled         string // "true"/"false"/"" (unset → DB may set)
+	OIDCIssuerURL       string
+	OIDCClientID        string
+	OIDCClientSecret    string
+	OIDCRedirectURI     string
+	OIDCScopes          string // raw space/comma/semicolon-separated
+	OIDCButtonLabel     string
+	OIDCAutoCreateUsers string // "true"/"false"/""
+	OIDCAllowedDomains  string // raw comma/semicolon/space list
 }
 
 type DemoConfig struct {
@@ -163,6 +176,12 @@ type SMTPBridgeConfig struct {
 
 type BroadcastConfig struct {
 	DefaultRateLimit int // Default rate limit per minute for broadcasts (0 means use service default)
+
+	// AllowPrivateDataFeedHosts disables SSRF protection on broadcast data-feed
+	// requests, allowing feeds to target private/loopback/link-local addresses.
+	// Off by default. Only enable in trusted, self-hosted deployments that
+	// intentionally fetch data feeds from services on their internal network.
+	AllowPrivateDataFeedHosts bool
 }
 
 type TaskSchedulerConfig struct {
@@ -203,6 +222,17 @@ type SystemSettings struct {
 	SMTPBridgeTLSCertBase64 string
 	SMTPBridgeTLSKeyBase64  string
 	SMTPBridgeTLSMode       string
+
+	// OIDC settings loaded from the DB (used only when the matching env var is unset).
+	OIDCEnabled         bool
+	OIDCIssuerURL       string
+	OIDCClientID        string
+	OIDCClientSecret    string // decrypted from encrypted_oidc_client_secret
+	OIDCRedirectURI     string
+	OIDCScopes          string
+	OIDCButtonLabel     string
+	OIDCAutoCreateUsers bool
+	OIDCAllowedDomains  string
 }
 
 // getSystemDSN constructs the database connection string for the system database
@@ -344,6 +374,27 @@ func loadSystemSettings(db *sql.DB, secretKey string) (*SystemSettings, error) {
 		}
 
 		settings.SMTPBridgeTLSMode = settingsMap["smtp_bridge_tls_mode"]
+
+		// OIDC settings
+		if v, ok := settingsMap["oidc_enabled"]; ok {
+			settings.OIDCEnabled = v == "true"
+		}
+		settings.OIDCIssuerURL = settingsMap["oidc_issuer_url"]
+		settings.OIDCClientID = settingsMap["oidc_client_id"]
+		settings.OIDCRedirectURI = settingsMap["oidc_redirect_uri"]
+		settings.OIDCScopes = settingsMap["oidc_scopes"]
+		settings.OIDCButtonLabel = settingsMap["oidc_button_label"]
+		if v, ok := settingsMap["oidc_auto_create_users"]; ok {
+			settings.OIDCAutoCreateUsers = v == "true"
+		}
+		settings.OIDCAllowedDomains = settingsMap["oidc_allowed_domains"]
+
+		// Decrypt OIDC client secret if present (mirror encrypted_smtp_password)
+		if enc, ok := settingsMap["encrypted_oidc_client_secret"]; ok && enc != "" {
+			if dec, err := crypto.DecryptFromHexString(enc, secretKey); err == nil {
+				settings.OIDCClientSecret = dec
+			}
+		}
 	}
 
 	return settings, nil
@@ -383,6 +434,13 @@ func LoadWithOptions(opts LoadOptions) (*Config, error) {
 	// SMTP Bridge defaults (formerly SMTP Relay)
 	// NOTE: Don't set default for SMTP_BRIDGE_ENABLED - we need to detect when it's truly unset
 	v.SetDefault("SMTP_BRIDGE_PORT", 587)
+
+	// OIDC: deliberately NO viper SetDefault. A viper default would make
+	// v.GetString("OIDC_SCOPES"/"OIDC_BUTTON_LABEL") non-empty even when unset,
+	// shadowing the DB value and defeating the env-wins-else-DB overlay. Defaults
+	// (openid scopes, "Sign in with SSO") are applied inside resolveOIDCConfig
+	// instead, which is the single source of truth. OIDC_ENABLED /
+	// OIDC_AUTO_CREATE_USERS likewise have no default (IsSet detects "unset").
 
 	// Default tracing config
 	v.SetDefault("TRACING_ENABLED", false)
@@ -548,6 +606,17 @@ func LoadWithOptions(opts LoadOptions) (*Config, error) {
 		smtpBridgeTLSMode = v.GetString("SMTP_RELAY_TLS") // backward compat
 	}
 
+	// OIDC tri-state reads: only capture an explicit env value so an unset var lets
+	// the DB setting take effect (mirrors smtpBridgeEnabledStr above).
+	var oidcEnabledStr string
+	if v.IsSet("OIDC_ENABLED") {
+		oidcEnabledStr = v.GetString("OIDC_ENABLED")
+	}
+	var oidcAutoCreateStr string
+	if v.IsSet("OIDC_AUTO_CREATE_USERS") {
+		oidcAutoCreateStr = v.GetString("OIDC_AUTO_CREATE_USERS")
+	}
+
 	envVals := EnvValues{
 		RootEmail:               v.GetString("ROOT_EMAIL"),
 		APIEndpoint:             v.GetString("API_ENDPOINT"),
@@ -565,6 +634,16 @@ func LoadWithOptions(opts LoadOptions) (*Config, error) {
 		SMTPBridgeTLSCertBase64: smtpBridgeTLSCertBase64,
 		SMTPBridgeTLSKeyBase64:  smtpBridgeTLSKeyBase64,
 		SMTPBridgeTLSMode:       smtpBridgeTLSMode,
+
+		OIDCEnabled:         oidcEnabledStr,
+		OIDCIssuerURL:       v.GetString("OIDC_ISSUER_URL"),
+		OIDCClientID:        v.GetString("OIDC_CLIENT_ID"),
+		OIDCClientSecret:    v.GetString("OIDC_CLIENT_SECRET"),
+		OIDCRedirectURI:     v.GetString("OIDC_REDIRECT_URI"),
+		OIDCScopes:          v.GetString("OIDC_SCOPES"),
+		OIDCButtonLabel:     v.GetString("OIDC_BUTTON_LABEL"),
+		OIDCAutoCreateUsers: oidcAutoCreateStr,
+		OIDCAllowedDomains:  v.GetString("OIDC_ALLOWED_DOMAINS"),
 	}
 
 	// Derive JWT secret from SECRET_KEY
@@ -757,6 +836,14 @@ func LoadWithOptions(opts LoadOptions) (*Config, error) {
 	// Sanitize API endpoint - strip trailing slashes to prevent double-slash URL issues
 	apiEndpoint = strings.TrimRight(apiEndpoint, "/")
 
+	// Resolve OIDC config (env-wins-else-DB). Built AFTER the apiEndpoint trim so the
+	// derived redirect URI uses the final endpoint, and validated to fail boot fast
+	// on static misconfiguration (issuer reachability is a runtime concern).
+	oidcConfig := resolveOIDCConfig(envVals, systemSettings, isInstalled, apiEndpoint)
+	if err := oidcConfig.Validate(); err != nil {
+		return nil, err
+	}
+
 	config := &Config{
 		Server: ServerConfig{
 			Port: v.GetInt("SERVER_PORT"),
@@ -770,6 +857,7 @@ func LoadWithOptions(opts LoadOptions) (*Config, error) {
 		Database:   dbConfig,
 		SMTP:       smtpConfig,
 		SMTPBridge: smtpBridgeConfig,
+		OIDC:       oidcConfig,
 		Security: SecurityConfig{
 			JWTSecret: jwtSecret,
 			SecretKey: secretKey,
@@ -817,7 +905,8 @@ func LoadWithOptions(opts LoadOptions) (*Config, error) {
 			PrometheusPort:  v.GetInt("TRACING_PROMETHEUS_PORT"),
 		},
 		Broadcast: BroadcastConfig{
-			DefaultRateLimit: v.GetInt("BROADCAST_DEFAULT_RATE_LIMIT"),
+			DefaultRateLimit:          v.GetInt("BROADCAST_DEFAULT_RATE_LIMIT"),
+			AllowPrivateDataFeedHosts: v.GetBool("BROADCAST_DATA_FEED_ALLOW_PRIVATE_HOSTS"),
 		},
 		TaskScheduler: TaskSchedulerConfig{
 			Enabled:  v.GetBool("TASK_SCHEDULER_ENABLED"),

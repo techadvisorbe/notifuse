@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +15,7 @@ import (
 	"github.com/Notifuse/notifuse/internal/domain"
 	"github.com/Notifuse/notifuse/internal/domain/mocks"
 	pkgmocks "github.com/Notifuse/notifuse/pkg/mocks"
+	"github.com/Notifuse/notifuse/pkg/ratelimiter"
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
 
@@ -37,6 +39,7 @@ func setupInboundWebhookEventHandlerTest(t *testing.T) (*InboundWebhookEventHand
 	handler := NewInboundWebhookEventHandler(
 		mockService,
 		func() ([]byte, error) { return jwtSecret, nil },
+		nil, // rate limiter disabled by default in unit tests
 		mockLogger,
 	)
 
@@ -326,4 +329,115 @@ type errorReader struct{}
 
 func (r *errorReader) Read(p []byte) (n int, err error) {
 	return 0, errors.New("simulated read error")
+}
+
+// Tests for handleIncomingReply
+
+func TestInboundWebhookEventHandler_handleIncomingReply_MethodNotAllowed(t *testing.T) {
+	handler, _, _ := setupInboundWebhookEventHandlerTest(t)
+	req := httptest.NewRequest(http.MethodGet, "/webhooks/email/inbound", nil)
+	w := httptest.NewRecorder()
+	handler.handleIncomingReply(w, req)
+	assert.Equal(t, http.StatusMethodNotAllowed, w.Code)
+}
+
+func TestInboundWebhookEventHandler_handleIncomingReply_MissingParams(t *testing.T) {
+	handler, _, _ := setupInboundWebhookEventHandlerTest(t)
+	req := httptest.NewRequest(http.MethodPost, "/webhooks/email/inbound", nil)
+	w := httptest.NewRecorder()
+	handler.handleIncomingReply(w, req)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestInboundWebhookEventHandler_handleIncomingReply_Success(t *testing.T) {
+	handler, mockService, _ := setupInboundWebhookEventHandlerTest(t)
+
+	mockService.EXPECT().
+		ProcessInboundReply(gomock.Any(), "ws1", "int1", gomock.Any()).
+		DoAndReturn(func(_ context.Context, _, _ string, parsed *domain.InboundRequest) error {
+			assert.Equal(t, "jane@example.com", parsed.Form.Get("sender"))
+			return nil
+		})
+
+	body := bytes.NewBufferString("sender=jane%40example.com&subject=Re%3A+Hi")
+	req := httptest.NewRequest(http.MethodPost, "/webhooks/email/inbound?workspace_id=ws1&integration_id=int1", body)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+
+	handler.handleIncomingReply(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var resp map[string]interface{}
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
+	assert.Equal(t, true, resp["success"])
+}
+
+func TestInboundWebhookEventHandler_handleIncomingReply_ServiceError(t *testing.T) {
+	handler, mockService, _ := setupInboundWebhookEventHandlerTest(t)
+
+	mockService.EXPECT().
+		ProcessInboundReply(gomock.Any(), "ws1", "int1", gomock.Any()).
+		Return(errors.New("db down"))
+
+	req := httptest.NewRequest(http.MethodPost, "/webhooks/email/inbound?workspace_id=ws1&integration_id=int1", bytes.NewBufferString("sender=jane%40example.com"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+
+	handler.handleIncomingReply(w, req)
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+}
+
+func TestInboundWebhookEventHandler_handleIncomingReply_PermanentErrorsMapTo4xx(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want int
+	}{
+		{"integration not found -> 404", fmt.Errorf("x: %w", domain.ErrInboundIntegrationNotFound), http.StatusNotFound},
+		{"workspace not found -> 404", fmt.Errorf("x: %w", &domain.ErrWorkspaceNotFound{WorkspaceID: "ws1"}), http.StatusNotFound},
+		{"unsupported provider -> 400", fmt.Errorf("x: %w", domain.ErrInboundProviderUnsupported), http.StatusBadRequest},
+		{"transient infra -> 500", errors.New("db down"), http.StatusInternalServerError},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			handler, mockService, _ := setupInboundWebhookEventHandlerTest(t)
+			mockService.EXPECT().ProcessInboundReply(gomock.Any(), "ws1", "int1", gomock.Any()).Return(tc.err)
+			req := httptest.NewRequest(http.MethodPost, "/webhooks/email/inbound?workspace_id=ws1&integration_id=int1", bytes.NewBufferString("sender=j%40e.com"))
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			w := httptest.NewRecorder()
+			handler.handleIncomingReply(w, req)
+			assert.Equal(t, tc.want, w.Code)
+		})
+	}
+}
+
+func TestInboundWebhookEventHandler_handleIncomingReply_RateLimited(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	mockService := mocks.NewMockInboundWebhookEventServiceInterface(ctrl)
+	mockLogger := pkgmocks.NewMockLogger(ctrl)
+	mockLogger.EXPECT().WithField(gomock.Any(), gomock.Any()).Return(mockLogger).AnyTimes()
+	mockLogger.EXPECT().Info(gomock.Any()).AnyTimes()
+	mockLogger.EXPECT().Error(gomock.Any()).AnyTimes()
+
+	rl := ratelimiter.NewRateLimiter()
+	defer rl.Stop()
+	rl.SetPolicy("inbound:ip", 1, time.Minute) // strict: 1 per window
+	rl.SetPolicy("inbound:workspace", 100, time.Minute)
+	handler := NewInboundWebhookEventHandler(mockService, func() ([]byte, error) { return []byte("k"), nil }, rl, mockLogger)
+
+	// The service must be invoked only for the first (allowed) request, proving the
+	// rate-limit rejection happens BEFORE any service/DB work.
+	mockService.EXPECT().ProcessInboundReply(gomock.Any(), "ws1", "int1", gomock.Any()).Return(nil).Times(1)
+
+	doReq := func() int {
+		req := httptest.NewRequest(http.MethodPost, "/webhooks/email/inbound?workspace_id=ws1&integration_id=int1", bytes.NewBufferString("sender=j%40e.com"))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.RemoteAddr = "203.0.113.9:1234"
+		w := httptest.NewRecorder()
+		handler.handleIncomingReply(w, req)
+		return w.Code
+	}
+	assert.Equal(t, http.StatusOK, doReq())
+	assert.Equal(t, http.StatusTooManyRequests, doReq(), "second request from the same IP must be rate-limited")
 }

@@ -12,7 +12,7 @@
       - HMAC-SHA256 signature verification using the application's secret key
       - 60-second timestamp window to prevent replay attacks
       - Rate limited to 5 attempts per 5 minutes per email
-      - Only works for the configured root email address
+      - Only works for a configured root email address (ROOT_EMAIL may list several, comma/semicolon-separated)
 
       **How to generate the signature:**
       ```bash

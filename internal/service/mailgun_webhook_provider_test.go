@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -254,19 +255,17 @@ func TestMailgunService_GetWebhookStatus(t *testing.T) {
 			}
 		}`
 
-		// Setup mock HTTP client
-		resp := &http.Response{
-			StatusCode: http.StatusOK,
-			Body:       io.NopCloser(strings.NewReader(listResponse)),
-		}
-
+		// Mock both GETs: the webhooks list and the new routes list (no inbound route).
 		mockHTTPClient.EXPECT().
 			Do(gomock.Any()).
 			DoAndReturn(func(req *http.Request) (*http.Response, error) {
 				assert.Equal(t, "GET", req.Method)
-				assert.Contains(t, req.URL.String(), "/webhooks")
-				return resp, nil
-			})
+				body := listResponse
+				if strings.Contains(req.URL.Path, "/routes") {
+					body = `{"items":[],"total_count":0}`
+				}
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body))}, nil
+			}).Times(2)
 
 		// Call the service
 		status, err := service.GetWebhookStatus(ctx, workspaceID, integrationID, providerConfig)
@@ -281,6 +280,30 @@ func TestMailgunService_GetWebhookStatus(t *testing.T) {
 		// Check provider details
 		assert.Equal(t, workspaceID, status.ProviderDetails["workspace_id"])
 		assert.Equal(t, integrationID, status.ProviderDetails["integration_id"])
+		assert.Equal(t, false, status.ProviderDetails["inbound_registered"], "no inbound route present")
+	})
+
+	t.Run("inbound route registered is reported", func(t *testing.T) {
+		providerConfig := &domain.EmailProvider{
+			Kind:    domain.EmailProviderKindMailgun,
+			Mailgun: &domain.MailgunSettings{Domain: "example.com", APIKey: "test-api-key", Region: "US"},
+		}
+		emptyWebhooks := `{"webhooks":{"delivered":{"urls":[]},"permanent_fail":{"urls":[]},"temporary_fail":{"urls":[]},"complained":{"urls":[]}}}`
+		// A route forwarding inbound mail to this integration's endpoint.
+		fwd := fmt.Sprintf(`forward(\"https://api.notifuse.com/webhooks/email/inbound?workspace_id=%s&integration_id=%s\")`, workspaceID, integrationID)
+		routes := fmt.Sprintf(`{"total_count":1,"items":[{"id":"r1","actions":["%s","stop()"]}]}`, fwd)
+
+		mockHTTPClient.EXPECT().Do(gomock.Any()).DoAndReturn(func(req *http.Request) (*http.Response, error) {
+			body := emptyWebhooks
+			if strings.Contains(req.URL.Path, "/routes") {
+				body = routes
+			}
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body))}, nil
+		}).Times(2)
+
+		status, err := service.GetWebhookStatus(ctx, workspaceID, integrationID, providerConfig)
+		require.NoError(t, err)
+		assert.Equal(t, true, status.ProviderDetails["inbound_registered"], "inbound route must be detected")
 	})
 
 	t.Run("successful status check with no webhooks", func(t *testing.T) {
@@ -312,19 +335,17 @@ func TestMailgunService_GetWebhookStatus(t *testing.T) {
 			}
 		}`
 
-		// Setup mock HTTP client
-		resp := &http.Response{
-			StatusCode: http.StatusOK,
-			Body:       io.NopCloser(strings.NewReader(listResponse)),
-		}
-
+		// Mock both GETs: the webhooks list and the new routes list (no inbound route).
 		mockHTTPClient.EXPECT().
 			Do(gomock.Any()).
 			DoAndReturn(func(req *http.Request) (*http.Response, error) {
 				assert.Equal(t, "GET", req.Method)
-				assert.Contains(t, req.URL.String(), "/webhooks")
-				return resp, nil
-			})
+				body := listResponse
+				if strings.Contains(req.URL.Path, "/routes") {
+					body = `{"items":[],"total_count":0}`
+				}
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body))}, nil
+			}).Times(2)
 
 		// Call the service
 		status, err := service.GetWebhookStatus(ctx, workspaceID, integrationID, providerConfig)
@@ -412,94 +433,62 @@ func TestMailgunService_UnregisterWebhooks(t *testing.T) {
 	integrationID := "integration456"
 
 	t.Run("successful unregistration", func(t *testing.T) {
-		// Create email provider config
+		// Own controller so the path-aware AnyTimes handler doesn't bleed into sibling
+		// subtests that share the outer controller.
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		svc, httpClient := newMailgunTestService(ctrl)
+
 		providerConfig := &domain.EmailProvider{
-			Kind: domain.EmailProviderKindMailgun,
-			Mailgun: &domain.MailgunSettings{
-				Domain: "example.com",
-				APIKey: "test-api-key",
-				Region: "US",
-			},
+			Kind:    domain.EmailProviderKindMailgun,
+			Mailgun: &domain.MailgunSettings{Domain: "example.com", APIKey: "test-api-key", Region: "US"},
 		}
 
-		// Mock list webhooks response with registered webhooks
 		webhookURL := "https://api.notifuse.com/webhooks/email?provider=mailgun&workspace_id=workspace123&integration_id=integration456"
-		listResponse := `{
-			"webhooks": {
-				"delivered": {
-					"urls": ["` + webhookURL + `"]
-				},
-				"permanent_fail": {
-					"urls": ["` + webhookURL + `"]
-				},
-				"temporary_fail": {
-					"urls": []
-				},
-				"complained": {
-					"urls": ["` + webhookURL + `"]
-				}
-			}
-		}`
+		listResponse := `{"webhooks":{"delivered":{"urls":["` + webhookURL + `"]},"permanent_fail":{"urls":["` + webhookURL + `"]},"temporary_fail":{"urls":[]},"complained":{"urls":["` + webhookURL + `"]}}}`
+		// A routes list containing OUR inbound reply route, so unregister must delete it.
+		fwd := `forward(\"https://api.notifuse.com/webhooks/email/inbound?workspace_id=workspace123&integration_id=integration456\")`
+		routesBody := fmt.Sprintf(`{"total_count":1,"items":[{"id":"route-1","actions":["%s","stop()"]}]}`, fwd)
 
-		// Setup mock HTTP client for listing webhooks
-		listResp := &http.Response{
-			StatusCode: http.StatusOK,
-			Body:       io.NopCloser(strings.NewReader(listResponse)),
-		}
-
-		mockHTTPClient.EXPECT().
-			Do(gomock.Any()).
-			DoAndReturn(func(req *http.Request) (*http.Response, error) {
-				assert.Equal(t, "GET", req.Method)
-				assert.Contains(t, req.URL.String(), "/webhooks")
-				return listResp, nil
-			})
-
-		// Setup mock HTTP client for deleting webhooks (3 webhooks = 3 API calls)
 		deletedEvents := map[string]bool{}
-
-		for i := 0; i < 3; i++ {
-			deleteResp := &http.Response{
-				StatusCode: http.StatusOK,
-				Body:       io.NopCloser(strings.NewReader(`{"message": "Webhook has been deleted"}`)),
+		deletedRoute := false
+		httpClient.EXPECT().Do(gomock.Any()).DoAndReturn(func(req *http.Request) (*http.Response, error) {
+			ok := func(b string) *http.Response {
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(b))}
 			}
+			switch {
+			case req.Method == http.MethodGet && strings.Contains(req.URL.Path, "/routes"):
+				return ok(routesBody), nil
+			case req.Method == http.MethodGet:
+				return ok(listResponse), nil
+			case req.Method == http.MethodDelete && strings.Contains(req.URL.Path, "/routes/"):
+				deletedRoute = true
+				return ok(`{"message":"Route has been deleted"}`), nil
+			case req.Method == http.MethodDelete:
+				u := req.URL.String()
+				switch {
+				case strings.Contains(u, "/webhooks/delivered"):
+					deletedEvents["delivered"] = true
+				case strings.Contains(u, "/webhooks/permanent_fail"):
+					deletedEvents["permanent_fail"] = true
+				case strings.Contains(u, "/webhooks/complained"):
+					deletedEvents["complained"] = true
+				default:
+					t.Errorf("unexpected DELETE URL: %s", u)
+				}
+				return ok(`{"message":"Webhook has been deleted"}`), nil
+			default:
+				return ok(``), nil
+			}
+		}).AnyTimes()
 
-			mockHTTPClient.EXPECT().
-				Do(gomock.Any()).
-				DoAndReturn(func(req *http.Request) (*http.Response, error) {
-					assert.Equal(t, "DELETE", req.Method)
-
-					// Check that one of our events is being deleted
-					urlString := req.URL.String()
-
-					if strings.Contains(urlString, "/webhooks/delivered") {
-						deletedEvents["delivered"] = true
-					} else if strings.Contains(urlString, "/webhooks/permanent_fail") {
-						deletedEvents["permanent_fail"] = true
-					} else if strings.Contains(urlString, "/webhooks/complained") {
-						deletedEvents["complained"] = true
-					} else {
-						t.Errorf("Unexpected webhook URL: %s", urlString)
-					}
-
-					return deleteResp, nil
-				})
-		}
-
-		// Allow any logger calls since we don't test logging
-		mockLogger.EXPECT().WithField(gomock.Any(), gomock.Any()).Return(mockLogger).AnyTimes()
-		mockLogger.EXPECT().Info(gomock.Any()).AnyTimes()
-
-		// Call the service
-		err := service.UnregisterWebhooks(ctx, workspaceID, integrationID, providerConfig)
-
-		// Verify results
+		err := svc.UnregisterWebhooks(ctx, workspaceID, integrationID, providerConfig)
 		require.NoError(t, err)
 
-		// Verify all event types were deleted
 		assert.True(t, deletedEvents["delivered"])
 		assert.True(t, deletedEvents["permanent_fail"])
 		assert.True(t, deletedEvents["complained"])
+		assert.True(t, deletedRoute, "the inbound reply route must be deleted on unregister")
 	})
 
 	t.Run("missing configuration", func(t *testing.T) {
@@ -558,57 +547,34 @@ func TestMailgunService_UnregisterWebhooks(t *testing.T) {
 	})
 
 	t.Run("delete webhook error", func(t *testing.T) {
-		// Create email provider config
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		svc, httpClient := newMailgunTestService(ctrl)
+
 		providerConfig := &domain.EmailProvider{
-			Kind: domain.EmailProviderKindMailgun,
-			Mailgun: &domain.MailgunSettings{
-				Domain: "example.com",
-				APIKey: "test-api-key",
-				Region: "US",
-			},
+			Kind:    domain.EmailProviderKindMailgun,
+			Mailgun: &domain.MailgunSettings{Domain: "example.com", APIKey: "test-api-key", Region: "US"},
 		}
-
-		// Mock list webhooks response with registered webhooks
 		webhookURL := "https://api.notifuse.com/webhooks/email?provider=mailgun&workspace_id=workspace123&integration_id=integration456"
-		listResponse := `{
-			"webhooks": {
-				"delivered": {
-					"urls": ["` + webhookURL + `"]
-				},
-				"permanent_fail": {
-					"urls": []
-				},
-				"temporary_fail": {
-					"urls": []
-				},
-				"complained": {
-					"urls": []
-				}
+		listResponse := `{"webhooks":{"delivered":{"urls":["` + webhookURL + `"]},"permanent_fail":{"urls":[]},"temporary_fail":{"urls":[]},"complained":{"urls":[]}}}`
+
+		httpClient.EXPECT().Do(gomock.Any()).DoAndReturn(func(req *http.Request) (*http.Response, error) {
+			ok := func(b string) *http.Response {
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(b))}
 			}
-		}`
+			switch {
+			case req.Method == http.MethodGet && strings.Contains(req.URL.Path, "/routes"):
+				return ok(`{"total_count":0,"items":[]}`), nil
+			case req.Method == http.MethodGet:
+				return ok(listResponse), nil
+			case req.Method == http.MethodDelete:
+				return nil, assert.AnError // webhook delete fails
+			default:
+				return ok(``), nil
+			}
+		}).AnyTimes()
 
-		// Setup mock HTTP client for listing webhooks
-		listResp := &http.Response{
-			StatusCode: http.StatusOK,
-			Body:       io.NopCloser(strings.NewReader(listResponse)),
-		}
-
-		mockHTTPClient.EXPECT().
-			Do(gomock.Any()).
-			DoAndReturn(func(req *http.Request) (*http.Response, error) {
-				assert.Equal(t, "GET", req.Method)
-				return listResp, nil
-			})
-
-		// Setup mock HTTP client for deleting webhook with error
-		mockHTTPClient.EXPECT().
-			Do(gomock.Any()).
-			Return(nil, assert.AnError)
-
-		// Call the service
-		err := service.UnregisterWebhooks(ctx, workspaceID, integrationID, providerConfig)
-
-		// Verify error is returned
+		err := svc.UnregisterWebhooks(ctx, workspaceID, integrationID, providerConfig)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to unregister one or more Mailgun webhooks")
 	})

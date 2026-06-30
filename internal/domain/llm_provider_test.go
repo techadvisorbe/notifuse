@@ -96,6 +96,30 @@ func TestLLMProvider_Validate(t *testing.T) {
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "OpenAI settings required")
 	})
+
+	t.Run("valid Gemini provider", func(t *testing.T) {
+		provider := domain.LLMProvider{
+			Kind: domain.LLMProviderKindGemini,
+			Gemini: &domain.GeminiSettings{
+				APIKey: "AIzaSy-test-gemini-key",
+				Model:  "gemini-2.5-flash",
+			},
+		}
+
+		err := provider.Validate(passphrase)
+		require.NoError(t, err)
+		assert.NotEmpty(t, provider.Gemini.EncryptedAPIKey)
+	})
+
+	t.Run("Gemini kind without settings", func(t *testing.T) {
+		provider := domain.LLMProvider{
+			Kind: domain.LLMProviderKindGemini,
+		}
+
+		err := provider.Validate(passphrase)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "Gemini settings required")
+	})
 }
 
 func TestLLMProvider_EncryptDecryptSecretKeys(t *testing.T) {
@@ -197,5 +221,28 @@ func TestLLMProvider_EncryptDecryptSecretKeys(t *testing.T) {
 		err := provider.DecryptSecretKeys(passphrase)
 		require.NoError(t, err)
 		assert.Empty(t, provider.OpenAI.APIKey)
+	})
+
+	t.Run("encrypt and decrypt Gemini API key", func(t *testing.T) {
+		originalAPIKey := "AIzaSy-test-gemini-key-12345"
+
+		provider := domain.LLMProvider{
+			Kind: domain.LLMProviderKindGemini,
+			Gemini: &domain.GeminiSettings{
+				APIKey: originalAPIKey,
+				Model:  "gemini-2.5-flash",
+			},
+		}
+
+		// Encrypt
+		err := provider.EncryptSecretKeys(passphrase)
+		require.NoError(t, err)
+		assert.NotEmpty(t, provider.Gemini.EncryptedAPIKey)
+		assert.Empty(t, provider.Gemini.APIKey) // Should be cleared after encryption
+
+		// Decrypt
+		err = provider.DecryptSecretKeys(passphrase)
+		require.NoError(t, err)
+		assert.Equal(t, originalAPIKey, provider.Gemini.APIKey)
 	})
 }

@@ -1058,11 +1058,8 @@ func (o *BroadcastOrchestrator) Process(ctx context.Context, task *domain.Task, 
 			break
 		}
 
-		// Use workspace CustomEndpointURL if provided, otherwise use default API endpoint
-		endpoint := o.apiEndpoint
-		if workspace.Settings.CustomEndpointURL != nil && *workspace.Settings.CustomEndpointURL != "" {
-			endpoint = *workspace.Settings.CustomEndpointURL
-		}
+		// Resolve the tracking/base endpoint: custom endpoint if set, else the API endpoint.
+		endpoint := workspace.Settings.ResolveEndpoint(o.apiEndpoint)
 
 		// Process this batch of recipients
 		sent, failed, sendErr := o.messageSender.SendBatch(

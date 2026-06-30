@@ -41,6 +41,7 @@ type SESWebhookPayload struct {
 	MessageID         string                         `json:"MessageId"`
 	TopicARN          string                         `json:"TopicArn"`
 	Message           string                         `json:"Message"`
+	Subject           string                         `json:"Subject,omitempty"` // SNS subject; part of the signed string when present
 	Timestamp         string                         `json:"Timestamp"`
 	SignatureVersion  string                         `json:"SignatureVersion"`
 	Signature         string                         `json:"Signature"`
@@ -76,6 +77,16 @@ type SESDeliveryNotification struct {
 	EventType string      `json:"eventType"`
 	Delivery  SESDelivery `json:"delivery"`
 	Mail      SESMail     `json:"mail"`
+}
+
+// SESReceivedNotification is the inner notification SES publishes to SNS for an INBOUND
+// (received) email, when a receipt rule has an SNS action — used for stop-on-reply reply
+// ingestion. Mail.Headers carries the full header set (incl. In-Reply-To/References) unless
+// HeadersTruncated; Content holds the raw MIME (base64 when the action uses Base64 encoding).
+type SESReceivedNotification struct {
+	NotificationType string  `json:"notificationType"` // "Received"
+	Mail             SESMail `json:"mail"`
+	Content          string  `json:"content"`
 }
 
 // SESMail represents the mail part of an SES notification
@@ -170,6 +181,13 @@ type AmazonSESSettings struct {
 
 	// decoded secret key, not stored in the database
 	SecretKey string `json:"secret_key,omitempty"`
+
+	// InboundTopicARN is the SNS topic ARN provisioned for stop-on-reply inbound mail
+	// (written by EnsureInboundRoute). The inbound parser binds to it: a valid SNS signature
+	// only proves AWS signed the message, not that it came from OUR topic, so messages whose
+	// TopicArn doesn't match this are rejected. For manual SES inbound setups this must be set
+	// explicitly (the SNS topic ARN that the receipt rule publishes to).
+	InboundTopicARN string `json:"inbound_topic_arn,omitempty"`
 }
 
 func (a *AmazonSESSettings) DecryptSecretKey(passphrase string) error {

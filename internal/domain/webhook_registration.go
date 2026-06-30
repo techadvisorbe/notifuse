@@ -105,3 +105,23 @@ func GenerateWebhookCallbackURL(baseURL string, provider EmailProviderKind, work
 		workspaceID,
 		integrationID)
 }
+
+// GenerateInboundWebhookURL generates the callback URL a provider's inbound-mail
+// feature (e.g. a Mailgun Route's forward() action) should POST replies to.
+// Format: {baseURL}/webhooks/email/inbound?workspace_id={workspaceID}&integration_id={integrationID}
+func GenerateInboundWebhookURL(baseURL string, workspaceID string, integrationID string) string {
+	return fmt.Sprintf("%s/webhooks/email/inbound?workspace_id=%s&integration_id=%s",
+		baseURL,
+		workspaceID,
+		integrationID)
+}
+
+// InboundRouteRegistrar is an optional capability for webhook providers whose inbound
+// (reply) mail is delivered via a provider-side route/rule rather than a regular event
+// webhook (e.g. Mailgun Routes). The orchestration layer invokes it, when supported,
+// as part of webhook registration so stop-on-reply works without manual ESP setup.
+type InboundRouteRegistrar interface {
+	// EnsureInboundRoute idempotently ensures a route exists that forwards inbound mail
+	// to inboundURL. Implementations must be a no-op when the route already exists.
+	EnsureInboundRoute(ctx context.Context, providerConfig *EmailProvider, inboundURL string) error
+}

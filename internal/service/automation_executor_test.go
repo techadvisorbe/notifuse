@@ -90,7 +90,7 @@ func TestAutomationExecutor_Execute_HappyPath(t *testing.T) {
 	mockContactRepo.EXPECT().GetContactByEmail(gomock.Any(), workspaceID, "test@example.com").Return(contact, nil)
 	mockAutomationRepo.EXPECT().CreateNodeExecution(gomock.Any(), workspaceID, gomock.Any()).Return(nil)
 	mockAutomationRepo.EXPECT().GetNodeExecutions(gomock.Any(), workspaceID, "ca1").Return([]*domain.NodeExecution{}, nil)
-	mockAutomationRepo.EXPECT().UpdateContactAutomation(gomock.Any(), workspaceID, gomock.Any()).Return(nil)
+	mockAutomationRepo.EXPECT().UpdateContactAutomationIfActive(gomock.Any(), workspaceID, gomock.Any()).Return(true, nil)
 	mockAutomationRepo.EXPECT().UpdateNodeExecution(gomock.Any(), workspaceID, gomock.Any()).Return(nil)
 
 	// Execute
@@ -176,7 +176,7 @@ func TestAutomationExecutor_Execute_NoCurrentNode(t *testing.T) {
 	}
 
 	mockAutomationRepo.EXPECT().GetByID(gomock.Any(), workspaceID, "auto1").Return(automation, nil)
-	mockAutomationRepo.EXPECT().UpdateContactAutomation(gomock.Any(), workspaceID, gomock.Any()).Return(nil)
+	mockAutomationRepo.EXPECT().UpdateContactAutomationIfActive(gomock.Any(), workspaceID, gomock.Any()).Return(true, nil)
 	mockAutomationRepo.EXPECT().IncrementAutomationStat(gomock.Any(), workspaceID, "auto1", "completed").Return(nil)
 	mockTimelineRepo.EXPECT().Create(gomock.Any(), workspaceID, gomock.Any()).Return(nil)
 
@@ -213,7 +213,7 @@ func TestAutomationExecutor_Execute_AutomationNotFound(t *testing.T) {
 
 	mockAutomationRepo.EXPECT().GetByID(gomock.Any(), workspaceID, "auto1").Return(nil, errors.New("not found"))
 	mockAutomationRepo.EXPECT().CreateNodeExecution(gomock.Any(), workspaceID, gomock.Any()).Return(nil)
-	mockAutomationRepo.EXPECT().UpdateContactAutomation(gomock.Any(), workspaceID, gomock.Any()).Return(nil)
+	mockAutomationRepo.EXPECT().UpdateContactAutomationIfActive(gomock.Any(), workspaceID, gomock.Any()).Return(true, nil)
 
 	err := executor.Execute(context.Background(), workspaceID, contactAutomation)
 	require.NoError(t, err) // Error is handled internally
@@ -263,7 +263,7 @@ func TestAutomationExecutor_Execute_NodeNotFound(t *testing.T) {
 
 	mockAutomationRepo.EXPECT().GetByID(gomock.Any(), workspaceID, "auto1").Return(automation, nil)
 	mockContactRepo.EXPECT().GetContactByEmail(gomock.Any(), workspaceID, "test@example.com").Return(contact, nil)
-	mockAutomationRepo.EXPECT().UpdateContactAutomation(gomock.Any(), workspaceID, gomock.Any()).Return(nil)
+	mockAutomationRepo.EXPECT().UpdateContactAutomationIfActive(gomock.Any(), workspaceID, gomock.Any()).Return(true, nil)
 	mockAutomationRepo.EXPECT().IncrementAutomationStat(gomock.Any(), workspaceID, "auto1", "exited").Return(nil)
 	mockTimelineRepo.EXPECT().Create(gomock.Any(), workspaceID, gomock.Any()).Return(nil)
 
@@ -320,7 +320,7 @@ func TestAutomationExecutor_Execute_UnsupportedNodeType(t *testing.T) {
 	mockAutomationRepo.EXPECT().GetByID(gomock.Any(), workspaceID, "auto1").Return(automation, nil)
 	mockContactRepo.EXPECT().GetContactByEmail(gomock.Any(), workspaceID, "test@example.com").Return(contact, nil)
 	mockAutomationRepo.EXPECT().CreateNodeExecution(gomock.Any(), workspaceID, gomock.Any()).Return(nil)
-	mockAutomationRepo.EXPECT().UpdateContactAutomation(gomock.Any(), workspaceID, gomock.Any()).Return(nil)
+	mockAutomationRepo.EXPECT().UpdateContactAutomationIfActive(gomock.Any(), workspaceID, gomock.Any()).Return(true, nil)
 
 	err := executor.Execute(context.Background(), workspaceID, contactAutomation)
 	require.NoError(t, err)
@@ -390,7 +390,7 @@ func TestAutomationExecutor_Execute_TerminalNode(t *testing.T) {
 	mockAutomationRepo.EXPECT().GetNodeExecutions(gomock.Any(), workspaceID, "ca1").Return([]*domain.NodeExecution{}, nil)
 	// AddToList executor adds contact to list
 	mockContactListRepo.EXPECT().AddContactToList(gomock.Any(), workspaceID, gomock.Any()).Return(nil)
-	mockAutomationRepo.EXPECT().UpdateContactAutomation(gomock.Any(), workspaceID, gomock.Any()).Return(nil)
+	mockAutomationRepo.EXPECT().UpdateContactAutomationIfActive(gomock.Any(), workspaceID, gomock.Any()).Return(true, nil)
 	mockAutomationRepo.EXPECT().UpdateNodeExecution(gomock.Any(), workspaceID, gomock.Any()).Return(nil)
 	mockAutomationRepo.EXPECT().IncrementAutomationStat(gomock.Any(), workspaceID, "auto1", "completed").Return(nil)
 	mockTimelineRepo.EXPECT().Create(gomock.Any(), workspaceID, gomock.Any()).Return(nil)
@@ -433,7 +433,7 @@ func TestAutomationExecutor_Execute_MaxRetriesExceeded(t *testing.T) {
 	mockAutomationRepo.EXPECT().GetByID(gomock.Any(), workspaceID, "auto1").Return(nil, errors.New("not found"))
 	mockAutomationRepo.EXPECT().IncrementAutomationStat(gomock.Any(), workspaceID, "auto1", "failed").Return(nil)
 	mockAutomationRepo.EXPECT().CreateNodeExecution(gomock.Any(), workspaceID, gomock.Any()).Return(nil)
-	mockAutomationRepo.EXPECT().UpdateContactAutomation(gomock.Any(), workspaceID, gomock.Any()).Return(nil)
+	mockAutomationRepo.EXPECT().UpdateContactAutomationIfActive(gomock.Any(), workspaceID, gomock.Any()).Return(true, nil)
 	mockTimelineRepo.EXPECT().Create(gomock.Any(), workspaceID, gomock.Any()).Return(nil)
 
 	err := executor.Execute(context.Background(), workspaceID, contactAutomation)
@@ -519,7 +519,7 @@ func TestAutomationExecutor_ProcessBatch(t *testing.T) {
 	mockAutomationRepo.EXPECT().CreateNodeExecution(gomock.Any(), workspaceID, gomock.Any()).Return(nil)
 	mockAutomationRepo.EXPECT().GetNodeExecutions(gomock.Any(), workspaceID, "ca1").Return([]*domain.NodeExecution{}, nil)
 	mockContactListRepo.EXPECT().AddContactToList(gomock.Any(), workspaceID, gomock.Any()).Return(nil)
-	mockAutomationRepo.EXPECT().UpdateContactAutomation(gomock.Any(), workspaceID, gomock.Any()).Return(nil)
+	mockAutomationRepo.EXPECT().UpdateContactAutomationIfActive(gomock.Any(), workspaceID, gomock.Any()).Return(true, nil)
 	mockAutomationRepo.EXPECT().UpdateNodeExecution(gomock.Any(), workspaceID, gomock.Any()).Return(nil)
 	mockAutomationRepo.EXPECT().IncrementAutomationStat(gomock.Any(), workspaceID, "auto1", "completed").Return(nil)
 	mockTimelineRepo.EXPECT().Create(gomock.Any(), workspaceID, gomock.Any()).Return(nil)
@@ -530,7 +530,7 @@ func TestAutomationExecutor_ProcessBatch(t *testing.T) {
 	mockAutomationRepo.EXPECT().CreateNodeExecution(gomock.Any(), workspaceID, gomock.Any()).Return(nil)
 	mockAutomationRepo.EXPECT().GetNodeExecutions(gomock.Any(), workspaceID, "ca2").Return([]*domain.NodeExecution{}, nil)
 	mockContactListRepo.EXPECT().AddContactToList(gomock.Any(), workspaceID, gomock.Any()).Return(nil)
-	mockAutomationRepo.EXPECT().UpdateContactAutomation(gomock.Any(), workspaceID, gomock.Any()).Return(nil)
+	mockAutomationRepo.EXPECT().UpdateContactAutomationIfActive(gomock.Any(), workspaceID, gomock.Any()).Return(true, nil)
 	mockAutomationRepo.EXPECT().UpdateNodeExecution(gomock.Any(), workspaceID, gomock.Any()).Return(nil)
 	mockAutomationRepo.EXPECT().IncrementAutomationStat(gomock.Any(), workspaceID, "auto1", "completed").Return(nil)
 	mockTimelineRepo.EXPECT().Create(gomock.Any(), workspaceID, gomock.Any()).Return(nil)
@@ -634,7 +634,7 @@ func TestAutomationExecutor_ProcessBatch_PartialFailure(t *testing.T) {
 	mockAutomationRepo.EXPECT().GetByID(gomock.Any(), workspaceID, "auto1").Return(automation, nil)
 	mockContactRepo.EXPECT().GetContactByEmail(gomock.Any(), workspaceID, "test1@example.com").Return(nil, errors.New("contact not found"))
 	mockAutomationRepo.EXPECT().CreateNodeExecution(gomock.Any(), workspaceID, gomock.Any()).Return(nil)
-	mockAutomationRepo.EXPECT().UpdateContactAutomation(gomock.Any(), workspaceID, gomock.Any()).Return(nil)
+	mockAutomationRepo.EXPECT().UpdateContactAutomationIfActive(gomock.Any(), workspaceID, gomock.Any()).Return(true, nil)
 
 	// Second contact succeeds
 	mockAutomationRepo.EXPECT().GetByID(gomock.Any(), workspaceID, "auto1").Return(automation, nil)
@@ -642,7 +642,7 @@ func TestAutomationExecutor_ProcessBatch_PartialFailure(t *testing.T) {
 	mockAutomationRepo.EXPECT().CreateNodeExecution(gomock.Any(), workspaceID, gomock.Any()).Return(nil)
 	mockAutomationRepo.EXPECT().GetNodeExecutions(gomock.Any(), workspaceID, "ca2").Return([]*domain.NodeExecution{}, nil)
 	mockContactListRepo.EXPECT().AddContactToList(gomock.Any(), workspaceID, gomock.Any()).Return(nil)
-	mockAutomationRepo.EXPECT().UpdateContactAutomation(gomock.Any(), workspaceID, gomock.Any()).Return(nil)
+	mockAutomationRepo.EXPECT().UpdateContactAutomationIfActive(gomock.Any(), workspaceID, gomock.Any()).Return(true, nil)
 	mockAutomationRepo.EXPECT().UpdateNodeExecution(gomock.Any(), workspaceID, gomock.Any()).Return(nil)
 	mockAutomationRepo.EXPECT().IncrementAutomationStat(gomock.Any(), workspaceID, "auto1", "completed").Return(nil)
 	mockTimelineRepo.EXPECT().Create(gomock.Any(), workspaceID, gomock.Any()).Return(nil)
@@ -680,7 +680,7 @@ func TestAutomationExecutor_handleError_Retry(t *testing.T) {
 	}
 
 	mockAutomationRepo.EXPECT().CreateNodeExecution(gomock.Any(), workspaceID, gomock.Any()).Return(nil)
-	mockAutomationRepo.EXPECT().UpdateContactAutomation(gomock.Any(), workspaceID, gomock.Any()).Return(nil)
+	mockAutomationRepo.EXPECT().UpdateContactAutomationIfActive(gomock.Any(), workspaceID, gomock.Any()).Return(true, nil)
 
 	err := executor.handleError(context.Background(), workspaceID, ca, errors.New("test error"), "test context")
 	require.NoError(t, err)
@@ -722,7 +722,7 @@ func TestAutomationExecutor_handleError_MaxRetriesExceeded(t *testing.T) {
 
 	mockAutomationRepo.EXPECT().IncrementAutomationStat(gomock.Any(), workspaceID, "auto1", "failed").Return(nil)
 	mockAutomationRepo.EXPECT().CreateNodeExecution(gomock.Any(), workspaceID, gomock.Any()).Return(nil)
-	mockAutomationRepo.EXPECT().UpdateContactAutomation(gomock.Any(), workspaceID, gomock.Any()).Return(nil)
+	mockAutomationRepo.EXPECT().UpdateContactAutomationIfActive(gomock.Any(), workspaceID, gomock.Any()).Return(true, nil)
 	mockTimelineRepo.EXPECT().Create(gomock.Any(), workspaceID, gomock.Any()).Return(nil)
 
 	err := executor.handleError(context.Background(), workspaceID, ca, errors.New("test error"), "test context")
@@ -1074,7 +1074,7 @@ func TestAutomationExecutor_Execute_PassesExecutionContext(t *testing.T) {
 	mockContactRepo.EXPECT().GetContactByEmail(gomock.Any(), workspaceID, "test@example.com").Return(contact, nil)
 	mockAutomationRepo.EXPECT().CreateNodeExecution(gomock.Any(), workspaceID, gomock.Any()).Return(nil)
 	mockAutomationRepo.EXPECT().GetNodeExecutions(gomock.Any(), workspaceID, "ca1").Return(previousExecutions, nil)
-	mockAutomationRepo.EXPECT().UpdateContactAutomation(gomock.Any(), workspaceID, gomock.Any()).Return(nil)
+	mockAutomationRepo.EXPECT().UpdateContactAutomationIfActive(gomock.Any(), workspaceID, gomock.Any()).Return(true, nil)
 	mockAutomationRepo.EXPECT().UpdateNodeExecution(gomock.Any(), workspaceID, gomock.Any()).Return(nil)
 	mockAutomationRepo.EXPECT().IncrementAutomationStat(gomock.Any(), workspaceID, "auto1", "completed").Return(nil)
 	mockTimelineRepo.EXPECT().Create(gomock.Any(), workspaceID, gomock.Any()).Return(nil)
@@ -1190,7 +1190,7 @@ func TestAutomationExecutor_Execute_WebhookNode_Success(t *testing.T) {
 	mockContactRepo.EXPECT().GetContactByEmail(gomock.Any(), workspaceID, "test@example.com").Return(contact, nil)
 	mockAutomationRepo.EXPECT().CreateNodeExecution(gomock.Any(), workspaceID, gomock.Any()).Return(nil)
 	mockAutomationRepo.EXPECT().GetNodeExecutions(gomock.Any(), workspaceID, "ca1").Return([]*domain.NodeExecution{}, nil)
-	mockAutomationRepo.EXPECT().UpdateContactAutomation(gomock.Any(), workspaceID, gomock.Any()).Return(nil)
+	mockAutomationRepo.EXPECT().UpdateContactAutomationIfActive(gomock.Any(), workspaceID, gomock.Any()).Return(true, nil)
 	mockAutomationRepo.EXPECT().UpdateNodeExecution(gomock.Any(), workspaceID, gomock.Any()).Return(nil)
 	mockAutomationRepo.EXPECT().IncrementAutomationStat(gomock.Any(), workspaceID, automationID, "completed").Return(nil)
 	mockTimelineRepo.EXPECT().Create(gomock.Any(), workspaceID, gomock.Any()).Return(nil)
@@ -1277,7 +1277,7 @@ func TestAutomationExecutor_Execute_WebhookNode_WithSecret(t *testing.T) {
 	mockContactRepo.EXPECT().GetContactByEmail(gomock.Any(), workspaceID, "test@example.com").Return(contact, nil)
 	mockAutomationRepo.EXPECT().CreateNodeExecution(gomock.Any(), workspaceID, gomock.Any()).Return(nil)
 	mockAutomationRepo.EXPECT().GetNodeExecutions(gomock.Any(), workspaceID, "ca1").Return([]*domain.NodeExecution{}, nil)
-	mockAutomationRepo.EXPECT().UpdateContactAutomation(gomock.Any(), workspaceID, gomock.Any()).Return(nil)
+	mockAutomationRepo.EXPECT().UpdateContactAutomationIfActive(gomock.Any(), workspaceID, gomock.Any()).Return(true, nil)
 	mockAutomationRepo.EXPECT().UpdateNodeExecution(gomock.Any(), workspaceID, gomock.Any()).Return(nil)
 	mockAutomationRepo.EXPECT().IncrementAutomationStat(gomock.Any(), workspaceID, "auto1", "completed").Return(nil)
 	mockTimelineRepo.EXPECT().Create(gomock.Any(), workspaceID, gomock.Any()).Return(nil)
@@ -1351,7 +1351,7 @@ func TestAutomationExecutor_Execute_WebhookNode_ServerError_TriggersRetry(t *tes
 	mockAutomationRepo.EXPECT().UpdateNodeExecution(gomock.Any(), workspaceID, gomock.Any()).Return(nil)
 	// Error handling expects these calls for retry
 	mockAutomationRepo.EXPECT().CreateNodeExecution(gomock.Any(), workspaceID, gomock.Any()).Return(nil)
-	mockAutomationRepo.EXPECT().UpdateContactAutomation(gomock.Any(), workspaceID, gomock.Any()).Return(nil)
+	mockAutomationRepo.EXPECT().UpdateContactAutomationIfActive(gomock.Any(), workspaceID, gomock.Any()).Return(true, nil)
 
 	err := executor.Execute(context.Background(), workspaceID, contactAutomation)
 	require.NoError(t, err) // Error is handled internally, returns nil
@@ -1426,7 +1426,7 @@ func TestAutomationExecutor_Execute_WebhookNode_ClientError_TriggersRetry(t *tes
 	mockAutomationRepo.EXPECT().UpdateNodeExecution(gomock.Any(), workspaceID, gomock.Any()).Return(nil)
 	// Error handling expects these calls
 	mockAutomationRepo.EXPECT().CreateNodeExecution(gomock.Any(), workspaceID, gomock.Any()).Return(nil)
-	mockAutomationRepo.EXPECT().UpdateContactAutomation(gomock.Any(), workspaceID, gomock.Any()).Return(nil)
+	mockAutomationRepo.EXPECT().UpdateContactAutomationIfActive(gomock.Any(), workspaceID, gomock.Any()).Return(true, nil)
 
 	err := executor.Execute(context.Background(), workspaceID, contactAutomation)
 	require.NoError(t, err)
@@ -1498,7 +1498,7 @@ func TestAutomationExecutor_Execute_WebhookNode_TerminalNode(t *testing.T) {
 	mockContactRepo.EXPECT().GetContactByEmail(gomock.Any(), workspaceID, "test@example.com").Return(contact, nil)
 	mockAutomationRepo.EXPECT().CreateNodeExecution(gomock.Any(), workspaceID, gomock.Any()).Return(nil)
 	mockAutomationRepo.EXPECT().GetNodeExecutions(gomock.Any(), workspaceID, "ca1").Return([]*domain.NodeExecution{}, nil)
-	mockAutomationRepo.EXPECT().UpdateContactAutomation(gomock.Any(), workspaceID, gomock.Any()).Return(nil)
+	mockAutomationRepo.EXPECT().UpdateContactAutomationIfActive(gomock.Any(), workspaceID, gomock.Any()).Return(true, nil)
 	mockAutomationRepo.EXPECT().UpdateNodeExecution(gomock.Any(), workspaceID, gomock.Any()).Return(nil)
 	mockAutomationRepo.EXPECT().IncrementAutomationStat(gomock.Any(), workspaceID, "auto1", "completed").Return(nil)
 	mockTimelineRepo.EXPECT().Create(gomock.Any(), workspaceID, gomock.Any()).Return(nil)
@@ -1578,7 +1578,7 @@ func TestAutomationExecutor_Execute_WebhookNode_ResponseStoredInContext(t *testi
 	mockContactRepo.EXPECT().GetContactByEmail(gomock.Any(), workspaceID, "test@example.com").Return(contact, nil)
 	mockAutomationRepo.EXPECT().CreateNodeExecution(gomock.Any(), workspaceID, gomock.Any()).Return(nil)
 	mockAutomationRepo.EXPECT().GetNodeExecutions(gomock.Any(), workspaceID, "ca1").Return([]*domain.NodeExecution{}, nil)
-	mockAutomationRepo.EXPECT().UpdateContactAutomation(gomock.Any(), workspaceID, gomock.Any()).Return(nil)
+	mockAutomationRepo.EXPECT().UpdateContactAutomationIfActive(gomock.Any(), workspaceID, gomock.Any()).Return(true, nil)
 	mockAutomationRepo.EXPECT().UpdateNodeExecution(gomock.Any(), workspaceID, gomock.Any()).DoAndReturn(
 		func(ctx context.Context, wsID string, ne *domain.NodeExecution) error {
 			capturedNodeExecution = ne
@@ -1676,7 +1676,7 @@ func TestAutomationExecutor_Execute_LoopMultipleNonDelayNodes(t *testing.T) {
 	mockAutomationRepo.EXPECT().CreateNodeExecution(gomock.Any(), workspaceID, gomock.Any()).Return(nil).Times(3)
 	mockAutomationRepo.EXPECT().GetNodeExecutions(gomock.Any(), workspaceID, "ca1").Return([]*domain.NodeExecution{}, nil).Times(3)
 	// 3 nodes = 3 UpdateContactAutomation calls (state persisted after each node)
-	mockAutomationRepo.EXPECT().UpdateContactAutomation(gomock.Any(), workspaceID, gomock.Any()).Return(nil).Times(3)
+	mockAutomationRepo.EXPECT().UpdateContactAutomationIfActive(gomock.Any(), workspaceID, gomock.Any()).Return(true, nil).Times(3)
 	mockAutomationRepo.EXPECT().UpdateNodeExecution(gomock.Any(), workspaceID, gomock.Any()).Return(nil).Times(3)
 	mockAutomationRepo.EXPECT().IncrementAutomationStat(gomock.Any(), workspaceID, "auto1", "completed").Return(nil)
 	mockTimelineRepo.EXPECT().Create(gomock.Any(), workspaceID, gomock.Any()).Return(nil)
@@ -1765,7 +1765,7 @@ func TestAutomationExecutor_Execute_LoopStopsAtDelayNode(t *testing.T) {
 	// Only 2 nodes executed before hitting delay
 	mockAutomationRepo.EXPECT().CreateNodeExecution(gomock.Any(), workspaceID, gomock.Any()).Return(nil).Times(2)
 	mockAutomationRepo.EXPECT().GetNodeExecutions(gomock.Any(), workspaceID, "ca1").Return([]*domain.NodeExecution{}, nil).Times(2)
-	mockAutomationRepo.EXPECT().UpdateContactAutomation(gomock.Any(), workspaceID, gomock.Any()).Return(nil).Times(2)
+	mockAutomationRepo.EXPECT().UpdateContactAutomationIfActive(gomock.Any(), workspaceID, gomock.Any()).Return(true, nil).Times(2)
 	mockAutomationRepo.EXPECT().UpdateNodeExecution(gomock.Any(), workspaceID, gomock.Any()).Return(nil).Times(2)
 	// No IncrementAutomationStat - not completed yet
 
@@ -1846,15 +1846,15 @@ func TestAutomationExecutor_Execute_StatePersistsAfterEachNode(t *testing.T) {
 	mockContactRepo.EXPECT().GetContactByEmail(gomock.Any(), workspaceID, "test@example.com").Return(contact, nil)
 	mockAutomationRepo.EXPECT().CreateNodeExecution(gomock.Any(), workspaceID, gomock.Any()).Return(nil).Times(3)
 	mockAutomationRepo.EXPECT().GetNodeExecutions(gomock.Any(), workspaceID, "ca1").Return([]*domain.NodeExecution{}, nil).Times(3)
-	mockAutomationRepo.EXPECT().UpdateContactAutomation(gomock.Any(), workspaceID, gomock.Any()).DoAndReturn(
-		func(ctx context.Context, wsID string, ca *domain.ContactAutomation) error {
+	mockAutomationRepo.EXPECT().UpdateContactAutomationIfActive(gomock.Any(), workspaceID, gomock.Any()).DoAndReturn(
+		func(ctx context.Context, wsID string, ca *domain.ContactAutomation) (bool, error) {
 			// Capture the current node ID at each persist
 			if ca.CurrentNodeID != nil {
 				capturedNodeIDs = append(capturedNodeIDs, strPtr(*ca.CurrentNodeID))
 			} else {
 				capturedNodeIDs = append(capturedNodeIDs, nil)
 			}
-			return nil
+			return true, nil
 		}).Times(3)
 	mockAutomationRepo.EXPECT().UpdateNodeExecution(gomock.Any(), workspaceID, gomock.Any()).Return(nil).Times(3)
 	mockAutomationRepo.EXPECT().IncrementAutomationStat(gomock.Any(), workspaceID, "auto1", "completed").Return(nil)
@@ -1945,7 +1945,7 @@ func TestAutomationExecutor_Execute_MaxIterationsLimit(t *testing.T) {
 	// maxNodesPerTick = 10
 	mockAutomationRepo.EXPECT().CreateNodeExecution(gomock.Any(), workspaceID, gomock.Any()).Return(nil).Times(10)
 	mockAutomationRepo.EXPECT().GetNodeExecutions(gomock.Any(), workspaceID, "ca1").Return([]*domain.NodeExecution{}, nil).Times(10)
-	mockAutomationRepo.EXPECT().UpdateContactAutomation(gomock.Any(), workspaceID, gomock.Any()).Return(nil).Times(10)
+	mockAutomationRepo.EXPECT().UpdateContactAutomationIfActive(gomock.Any(), workspaceID, gomock.Any()).Return(true, nil).Times(10)
 	mockAutomationRepo.EXPECT().UpdateNodeExecution(gomock.Any(), workspaceID, gomock.Any()).Return(nil).Times(10)
 	// No completion - stopped at max iterations
 
@@ -2023,13 +2023,13 @@ func TestAutomationExecutor_Execute_ExitReasonPropagation(t *testing.T) {
 	mockContactRepo.EXPECT().GetContactByEmail(gomock.Any(), workspaceID, "test@example.com").Return(contact, nil)
 	mockAutomationRepo.EXPECT().CreateNodeExecution(gomock.Any(), workspaceID, gomock.Any()).Return(nil)
 	mockAutomationRepo.EXPECT().GetNodeExecutions(gomock.Any(), workspaceID, "ca1").Return([]*domain.NodeExecution{}, nil)
-	mockAutomationRepo.EXPECT().UpdateContactAutomation(gomock.Any(), workspaceID, gomock.Any()).
-		DoAndReturn(func(ctx context.Context, wsID string, ca *domain.ContactAutomation) error {
+	mockAutomationRepo.EXPECT().UpdateContactAutomationIfActive(gomock.Any(), workspaceID, gomock.Any()).
+		DoAndReturn(func(ctx context.Context, wsID string, ca *domain.ContactAutomation) (bool, error) {
 			// Verify ExitReason is set before persist
 			require.NotNil(t, ca.ExitReason)
 			assert.Equal(t, "unsubscribed", *ca.ExitReason)
 			assert.Equal(t, domain.ContactAutomationStatusExited, ca.Status)
-			return nil
+			return true, nil
 		})
 	mockAutomationRepo.EXPECT().UpdateNodeExecution(gomock.Any(), workspaceID, gomock.Any()).Return(nil)
 	mockAutomationRepo.EXPECT().IncrementAutomationStat(gomock.Any(), workspaceID, "auto1", "exited").Return(nil)
@@ -2041,4 +2041,97 @@ func TestAutomationExecutor_Execute_ExitReasonPropagation(t *testing.T) {
 	assert.Equal(t, domain.ContactAutomationStatusExited, contactAutomation.Status)
 	require.NotNil(t, contactAutomation.ExitReason)
 	assert.Equal(t, "unsubscribed", *contactAutomation.ExitReason)
+}
+
+// TestAutomationExecutor_Execute_OptimisticLockAbortsOnConcurrentExit verifies that
+// when the in-loop persist finds the journey is no longer active (e.g. a stop-on-reply
+// interrupt flipped status to exited mid-tick), the executor aborts without finalizing
+// the node (no completion stat / end event), so the concurrent exit is not clobbered.
+func TestAutomationExecutor_Execute_OptimisticLockAbortsOnConcurrentExit(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockAutomationRepo := mocks.NewMockAutomationRepository(ctrl)
+	mockContactRepo := mocks.NewMockContactRepository(ctrl)
+	mockContactListRepo := mocks.NewMockContactListRepository(ctrl)
+	mockTimelineRepo := mocks.NewMockContactTimelineRepository(ctrl)
+	mockLogger := setupMockLogger(ctrl)
+
+	executor := &AutomationExecutor{
+		automationRepo:  mockAutomationRepo,
+		contactRepo:     mockContactRepo,
+		contactListRepo: mockContactListRepo,
+		timelineRepo:    mockTimelineRepo,
+		nodeExecutors: map[domain.NodeType]NodeExecutor{
+			domain.NodeTypeAddToList: NewAddToListNodeExecutor(mockContactListRepo),
+		},
+		logger: mockLogger,
+	}
+
+	workspaceID := "ws1"
+	nodeID := "terminal_node"
+	contactAutomation := &domain.ContactAutomation{
+		ID:            "ca1",
+		AutomationID:  "auto1",
+		ContactEmail:  "test@example.com",
+		CurrentNodeID: &nodeID,
+		Status:        domain.ContactAutomationStatusActive,
+	}
+	terminalNode := &domain.AutomationNode{
+		ID:         nodeID,
+		Type:       domain.NodeTypeAddToList,
+		NextNodeID: nil,
+		Config:     map[string]interface{}{"list_id": "list1", "status": "active"},
+	}
+	automation := &domain.Automation{
+		ID:     "auto1",
+		Name:   "Test Automation",
+		Status: domain.AutomationStatusLive,
+		Nodes:  []*domain.AutomationNode{terminalNode},
+	}
+
+	mockAutomationRepo.EXPECT().GetByID(gomock.Any(), workspaceID, "auto1").Return(automation, nil)
+	mockContactRepo.EXPECT().GetContactByEmail(gomock.Any(), workspaceID, "test@example.com").Return(&domain.Contact{Email: "test@example.com"}, nil)
+	mockAutomationRepo.EXPECT().CreateNodeExecution(gomock.Any(), workspaceID, gomock.Any()).Return(nil)
+	mockAutomationRepo.EXPECT().GetNodeExecutions(gomock.Any(), workspaceID, "ca1").Return([]*domain.NodeExecution{}, nil)
+	mockContactListRepo.EXPECT().AddContactToList(gomock.Any(), workspaceID, gomock.Any()).Return(nil)
+	// The journey was concurrently exited → persist matches 0 rows.
+	mockAutomationRepo.EXPECT().UpdateContactAutomationIfActive(gomock.Any(), workspaceID, gomock.Any()).Return(false, nil)
+	// Abort: no completion stat, no end-event timeline write, no node-execution finalize.
+	mockAutomationRepo.EXPECT().IncrementAutomationStat(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Times(0)
+	mockTimelineRepo.EXPECT().Create(gomock.Any(), gomock.Any(), gomock.Any()).Times(0)
+
+	err := executor.Execute(context.Background(), workspaceID, contactAutomation)
+	assert.NoError(t, err)
+}
+
+// TestAutomationExecutor_HandleError_DoesNotResurrectConcurrentlyExitedJourney verifies
+// the error/retry path uses the active-guarded write: when a concurrent stop-on-reply
+// exit has flipped the row to 'exited', handleError must NOT fall back to an unconditional
+// update that would resurrect it back to active+scheduled (the high-severity bug).
+func TestAutomationExecutor_HandleError_DoesNotResurrectConcurrentlyExitedJourney(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockAutomationRepo := mocks.NewMockAutomationRepository(ctrl)
+	executor := &AutomationExecutor{automationRepo: mockAutomationRepo, logger: setupMockLogger(ctrl)}
+
+	workspaceID := "ws1"
+	nodeID := "n1"
+	ca := &domain.ContactAutomation{
+		ID: "ca1", AutomationID: "auto1", ContactEmail: "x@example.com",
+		CurrentNodeID: &nodeID, Status: domain.ContactAutomationStatusActive,
+		RetryCount: 0, MaxRetries: 3,
+	}
+
+	// The journey was exited concurrently → the active-guarded write reports 0 rows.
+	mockAutomationRepo.EXPECT().
+		UpdateContactAutomationIfActive(gomock.Any(), workspaceID, gomock.Any()).
+		Return(false, nil)
+	mockAutomationRepo.EXPECT().CreateNodeExecution(gomock.Any(), workspaceID, gomock.Any()).Return(nil).AnyTimes()
+	// The unconditional update (which would resurrect the exited row) must never run.
+	mockAutomationRepo.EXPECT().UpdateContactAutomation(gomock.Any(), gomock.Any(), gomock.Any()).Times(0)
+
+	err := executor.handleError(context.Background(), workspaceID, ca, errors.New("boom"), "node failed")
+	assert.NoError(t, err)
 }

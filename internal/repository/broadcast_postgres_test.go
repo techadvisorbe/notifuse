@@ -1224,6 +1224,146 @@ func TestBroadcastRepository_ListBroadcasts_WithStatus(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+// broadcastListColumnNames mirrors the column order selected by ListBroadcastsTx.
+var broadcastListColumnNames = []string{
+	"id", "workspace_id", "name", "status", "audience", "schedule",
+	"test_settings", "utm_parameters", "metadata",
+	"winning_template",
+	"test_sent_at", "winner_sent_at", "enqueued_count",
+	"created_at", "updated_at",
+	"started_at", "completed_at", "cancelled_at", "paused_at", "pause_reason",
+	"data_feed",
+}
+
+// TestBroadcastRepository_ListBroadcasts_WithStatusesAndSearch tests listing
+// broadcasts filtered by multiple statuses combined with a name search.
+func TestBroadcastRepository_ListBroadcasts_WithStatusesAndSearch(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockWorkspaceRepo := mocks.NewMockWorkspaceRepository(ctrl)
+	repo := NewBroadcastRepository(mockWorkspaceRepo)
+
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	ctx := context.Background()
+	workspaceID := "ws123"
+	statuses := []domain.BroadcastStatus{
+		domain.BroadcastStatusProcessing,
+		domain.BroadcastStatusPaused,
+	}
+
+	mockWorkspaceRepo.EXPECT().
+		GetConnection(gomock.Any(), workspaceID).
+		Return(db, nil)
+
+	mock.ExpectBegin()
+
+	// Count query pins the full WHERE clause and placeholder numbering so a
+	// future reorder / off-by-one in the dynamic builder is caught.
+	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM broadcasts WHERE workspace_id = \$1 AND status IN \(\$2, \$3\) AND name ILIKE \$4`).
+		WithArgs(workspaceID, statuses[0], statuses[1], "%promo%").
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
+
+	rows := sqlmock.NewRows(broadcastListColumnNames).
+		AddRow(
+			"bc1", workspaceID, "Promo Blast", domain.BroadcastStatusProcessing,
+			[]byte("{}"), []byte("{}"), []byte("{}"), []byte("{}"), []byte("{}"),
+			"", nil, nil, 0, time.Now(), time.Now(), nil, nil, nil, nil, nil,
+			nil, // data_feed
+		)
+
+	// Data query pins the same WHERE clause plus pagination placeholders.
+	mock.ExpectQuery(`FROM broadcasts WHERE workspace_id = \$1 AND status IN \(\$2, \$3\) AND name ILIKE \$4 ORDER BY created_at DESC LIMIT \$5 OFFSET \$6`).
+		WithArgs(workspaceID, statuses[0], statuses[1], "%promo%", 10, 0).
+		WillReturnRows(rows)
+
+	mock.ExpectCommit()
+
+	result, err := repo.ListBroadcasts(ctx, domain.ListBroadcastsParams{
+		WorkspaceID: workspaceID,
+		Statuses:    statuses,
+		Search:      "promo",
+		Limit:       10,
+		Offset:      0,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, 1, result.TotalCount)
+	require.Len(t, result.Broadcasts, 1)
+	assert.Equal(t, "bc1", result.Broadcasts[0].ID)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestBroadcastRepository_ListBroadcasts_SearchOnly tests listing broadcasts
+// filtered by a name search with no status filter (verifies placeholder math).
+func TestBroadcastRepository_ListBroadcasts_SearchOnly(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockWorkspaceRepo := mocks.NewMockWorkspaceRepository(ctrl)
+	repo := NewBroadcastRepository(mockWorkspaceRepo)
+
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	ctx := context.Background()
+	workspaceID := "ws123"
+
+	mockWorkspaceRepo.EXPECT().
+		GetConnection(gomock.Any(), workspaceID).
+		Return(db, nil)
+
+	mock.ExpectBegin()
+
+	// Special LIKE characters in the term must be escaped before binding, and
+	// the search-only path must use $2 (no status placeholders before it).
+	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM broadcasts WHERE workspace_id = \$1 AND name ILIKE \$2`).
+		WithArgs(workspaceID, `%50\% off%`).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
+
+	rows := sqlmock.NewRows(broadcastListColumnNames).
+		AddRow(
+			"bc1", workspaceID, "50% off sale", domain.BroadcastStatusDraft,
+			[]byte("{}"), []byte("{}"), []byte("{}"), []byte("{}"), []byte("{}"),
+			"", nil, nil, 0, time.Now(), time.Now(), nil, nil, nil, nil, nil,
+			nil,
+		)
+
+	mock.ExpectQuery(`FROM broadcasts WHERE workspace_id = \$1 AND name ILIKE \$2 ORDER BY created_at DESC LIMIT \$3 OFFSET \$4`).
+		WithArgs(workspaceID, `%50\% off%`, 25, 0).
+		WillReturnRows(rows)
+
+	mock.ExpectCommit()
+
+	result, err := repo.ListBroadcasts(ctx, domain.ListBroadcastsParams{
+		WorkspaceID: workspaceID,
+		Search:      "50% off",
+		Limit:       25,
+		Offset:      0,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, 1, result.TotalCount)
+	require.Len(t, result.Broadcasts, 1)
+	assert.Equal(t, "bc1", result.Broadcasts[0].ID)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestEscapeLikePattern verifies the LIKE/ILIKE special-character escaping.
+func TestEscapeLikePattern(t *testing.T) {
+	assert.Equal(t, "plain", escapeLikePattern("plain"))
+	assert.Equal(t, `50\% off`, escapeLikePattern("50% off"))
+	assert.Equal(t, `a\_b`, escapeLikePattern("a_b"))
+	assert.Equal(t, `back\\slash`, escapeLikePattern(`back\slash`))
+	assert.Equal(t, `\\\%\_`, escapeLikePattern(`\%_`))
+}
+
 func TestBroadcastRepository_GetBroadcastTx(t *testing.T) {
 	// Test broadcastRepository.GetBroadcastTx - this was at 0% coverage
 	ctrl := gomock.NewController(t)

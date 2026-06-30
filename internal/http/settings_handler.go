@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
+	"github.com/Notifuse/notifuse/config"
 	"github.com/Notifuse/notifuse/internal/domain"
 	"github.com/Notifuse/notifuse/internal/http/middleware"
 	"github.com/Notifuse/notifuse/internal/service"
@@ -37,6 +39,15 @@ type SystemSettingsData struct {
 	SMTPBridgePort          int    `json:"smtp_bridge_port"`
 	SMTPBridgeTLSCertBase64 string `json:"smtp_bridge_tls_cert_base64"`
 	SMTPBridgeTLSKeyBase64  string `json:"smtp_bridge_tls_key_base64"`
+	OIDCEnabled             bool   `json:"oidc_enabled"`
+	OIDCIssuerURL           string `json:"oidc_issuer_url"`
+	OIDCClientID            string `json:"oidc_client_id"`
+	OIDCClientSecret        string `json:"oidc_client_secret"` // masked on GET
+	OIDCRedirectURI         string `json:"oidc_redirect_uri"`
+	OIDCScopes              string `json:"oidc_scopes"`
+	OIDCButtonLabel         string `json:"oidc_button_label"`
+	OIDCAutoCreateUsers     bool   `json:"oidc_auto_create_users"`
+	OIDCAllowedDomains      string `json:"oidc_allowed_domains"`
 }
 
 // SystemSettingsResponse wraps settings with env override info
@@ -97,7 +108,7 @@ func (h *SettingsHandler) requireRootUser(w http.ResponseWriter, r *http.Request
 		return nil
 	}
 
-	if user.Email != h.rootEmail {
+	if !config.IsRootEmail(h.rootEmail, user.Email) {
 		WriteJSONError(w, "Forbidden: root user access required", http.StatusForbidden)
 		return nil
 	}
@@ -141,20 +152,117 @@ func (h *SettingsHandler) handleGet(w http.ResponseWriter, r *http.Request) {
 		SMTPBridgeEnabled: sysConfig.SMTPBridgeEnabled,
 		SMTPBridgeDomain:  sysConfig.SMTPBridgeDomain,
 		SMTPBridgePort:    sysConfig.SMTPBridgePort,
-	}
-
-	// Mask sensitive fields
-	if sysConfig.SMTPPassword != "" {
-		settings.SMTPPassword = passwordMask
-	}
-	if sysConfig.SMTPBridgeTLSCertBase64 != "" {
-		settings.SMTPBridgeTLSCertBase64 = configuredMask
-	}
-	if sysConfig.SMTPBridgeTLSKeyBase64 != "" {
-		settings.SMTPBridgeTLSKeyBase64 = configuredMask
+		// OIDC non-secret fields (the client secret is masked below).
+		OIDCEnabled:         sysConfig.OIDCEnabled,
+		OIDCIssuerURL:       sysConfig.OIDCIssuerURL,
+		OIDCClientID:        sysConfig.OIDCClientID,
+		OIDCRedirectURI:     sysConfig.OIDCRedirectURI,
+		OIDCScopes:          sysConfig.OIDCScopes,
+		OIDCButtonLabel:     sysConfig.OIDCButtonLabel,
+		OIDCAutoCreateUsers: sysConfig.OIDCAutoCreateUsers,
+		OIDCAllowedDomains:  sysConfig.OIDCAllowedDomains,
 	}
 
 	envOverrides := h.setupService.GetEnvOverrides()
+
+	// Env vars are authoritative and may differ from the values persisted to the DB at
+	// install time (e.g. an operator added a second ROOT_EMAIL, or changed SMTP_HOST,
+	// and restarted). GetSystemConfig only reflects the DB, so a field overridden by an
+	// env var would otherwise show a stale value in the (disabled) panel. For every
+	// env-overridden field, surface the live env value the rest of the app actually uses.
+	// Secrets are overlaid into local vars and masked below — never returned in clear.
+	smtpPassword := sysConfig.SMTPPassword
+	tlsCert := sysConfig.SMTPBridgeTLSCertBase64
+	tlsKey := sysConfig.SMTPBridgeTLSKeyBase64
+	oidcSecret := sysConfig.OIDCClientSecret
+	if env := h.setupService.GetEnvConfig(); env != nil {
+		if envOverrides["root_email"] {
+			settings.RootEmail = env.RootEmail
+		}
+		if envOverrides["api_endpoint"] {
+			settings.APIEndpoint = env.APIEndpoint
+		}
+		if envOverrides["smtp_host"] {
+			settings.SMTPHost = env.SMTPHost
+		}
+		if envOverrides["smtp_port"] {
+			settings.SMTPPort = env.SMTPPort
+		}
+		if envOverrides["smtp_username"] {
+			settings.SMTPUsername = env.SMTPUsername
+		}
+		if envOverrides["smtp_from_email"] {
+			settings.SMTPFromEmail = env.SMTPFromEmail
+		}
+		if envOverrides["smtp_from_name"] {
+			settings.SMTPFromName = env.SMTPFromName
+		}
+		if envOverrides["smtp_use_tls"] {
+			settings.SMTPUseTLS = env.SMTPUseTLS != "false"
+		}
+		if envOverrides["smtp_ehlo_hostname"] {
+			settings.SMTPEHLOHostname = env.SMTPEHLOHostname
+		}
+		if envOverrides["smtp_bridge_enabled"] {
+			settings.SMTPBridgeEnabled = env.SMTPBridgeEnabled == "true"
+		}
+		if envOverrides["smtp_bridge_domain"] {
+			settings.SMTPBridgeDomain = env.SMTPBridgeDomain
+		}
+		if envOverrides["smtp_bridge_port"] {
+			settings.SMTPBridgePort = env.SMTPBridgePort
+		}
+		if envOverrides["smtp_password"] {
+			smtpPassword = env.SMTPPassword
+		}
+		if envOverrides["smtp_bridge_tls_cert_base64"] {
+			tlsCert = env.SMTPBridgeTLSCertBase64
+		}
+		if envOverrides["smtp_bridge_tls_key_base64"] {
+			tlsKey = env.SMTPBridgeTLSKeyBase64
+		}
+		if envOverrides["oidc_enabled"] {
+			settings.OIDCEnabled = env.OIDCEnabled == "true"
+		}
+		if envOverrides["oidc_issuer_url"] {
+			settings.OIDCIssuerURL = env.OIDCIssuerURL
+		}
+		if envOverrides["oidc_client_id"] {
+			settings.OIDCClientID = env.OIDCClientID
+		}
+		if envOverrides["oidc_redirect_uri"] {
+			settings.OIDCRedirectURI = env.OIDCRedirectURI
+		}
+		if envOverrides["oidc_scopes"] {
+			settings.OIDCScopes = env.OIDCScopes
+		}
+		if envOverrides["oidc_button_label"] {
+			settings.OIDCButtonLabel = env.OIDCButtonLabel
+		}
+		if envOverrides["oidc_auto_create_users"] {
+			settings.OIDCAutoCreateUsers = env.OIDCAutoCreateUsers == "true"
+		}
+		if envOverrides["oidc_allowed_domains"] {
+			settings.OIDCAllowedDomains = env.OIDCAllowedDomains
+		}
+		if envOverrides["oidc_client_secret"] {
+			oidcSecret = env.OIDCClientSecret
+		}
+	}
+
+	// Mask sensitive fields based on the effective (post-override) value
+	if smtpPassword != "" {
+		settings.SMTPPassword = passwordMask
+	}
+	if tlsCert != "" {
+		settings.SMTPBridgeTLSCertBase64 = configuredMask
+	}
+	if tlsKey != "" {
+		settings.SMTPBridgeTLSKeyBase64 = configuredMask
+	}
+	if oidcSecret != "" {
+		settings.OIDCClientSecret = passwordMask
+	}
 
 	response := SystemSettingsResponse{
 		Settings:     settings,
@@ -209,6 +317,12 @@ func (h *SettingsHandler) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		tlsKey = currentConfig.SMTPBridgeTLSKeyBase64
 	}
 
+	// Handle masked OIDC client secret: if sentinel value, retain existing.
+	oidcClientSecret := reqData.OIDCClientSecret
+	if oidcClientSecret == passwordMask {
+		oidcClientSecret = currentConfig.OIDCClientSecret
+	}
+
 	// Build SystemConfig for persistence
 	newConfig := &service.SystemConfig{
 		IsInstalled:             true,
@@ -229,6 +343,26 @@ func (h *SettingsHandler) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		SMTPBridgePort:          reqData.SMTPBridgePort,
 		SMTPBridgeTLSCertBase64: tlsCert,
 		SMTPBridgeTLSKeyBase64:  tlsKey,
+		OIDCEnabled:             reqData.OIDCEnabled,
+		OIDCIssuerURL:           reqData.OIDCIssuerURL,
+		OIDCClientID:            reqData.OIDCClientID,
+		OIDCClientSecret:        oidcClientSecret,
+		OIDCRedirectURI:         reqData.OIDCRedirectURI,
+		OIDCScopes:              reqData.OIDCScopes,
+		OIDCButtonLabel:         reqData.OIDCButtonLabel,
+		OIDCAutoCreateUsers:     reqData.OIDCAutoCreateUsers,
+		OIDCAllowedDomains:      reqData.OIDCAllowedDomains,
+	}
+
+	// Fail fast on an invalid OIDC config BEFORE persisting + restarting. Without this
+	// guard, a bad config (OIDC enabled with no issuer/client/secret, a non-https
+	// issuer, or auto-create with no allowlist) would be saved, the server would
+	// restart, and config.OIDCConfig.Validate() at boot would abort startup —
+	// bricking the instance (login + admin UI down) with no in-product recovery.
+	// This mirrors the setup wizard's ValidateSetupConfig.
+	if err := validateOIDCForUpdate(newConfig); err != nil {
+		WriteJSONError(w, err.Error(), http.StatusBadRequest)
+		return
 	}
 
 	if err := h.settingService.SetSystemConfig(ctx, newConfig, h.secretKey); err != nil {
@@ -327,4 +461,32 @@ func (h *SettingsHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("/api/settings.get", requireAuth(http.HandlerFunc(h.handleGet)))
 	mux.Handle("/api/settings.update", requireAuth(http.HandlerFunc(h.handleUpdate)))
 	mux.Handle("/api/settings.testSmtp", requireAuth(http.HandlerFunc(h.handleTestSMTP)))
+}
+
+// validateOIDCForUpdate runs the canonical config.OIDCConfig.Validate() against a
+// settings-update payload BEFORE it is persisted, converting what would otherwise be
+// a fatal post-restart boot failure into a recoverable HTTP 400. The redirect URI is
+// derived the same way config.resolveOIDCConfig does (from API_ENDPOINT) so a blank
+// redirect — which boot re-derives — is not a false-positive rejection.
+func validateOIDCForUpdate(c *service.SystemConfig) error {
+	redirect := c.OIDCRedirectURI
+	if redirect == "" {
+		if c.APIEndpoint != "" {
+			redirect = strings.TrimRight(c.APIEndpoint, "/") + "/api/user.oidc.callback"
+		} else {
+			// API_ENDPOINT may be supplied via env at boot; don't reject a URI that
+			// will be derivable then. The other (real) checks still run.
+			redirect = "https://placeholder.invalid/api/user.oidc.callback"
+		}
+	}
+	oidcCfg := config.OIDCConfig{
+		Enabled:         c.OIDCEnabled,
+		IssuerURL:       c.OIDCIssuerURL,
+		ClientID:        c.OIDCClientID,
+		ClientSecret:    c.OIDCClientSecret,
+		RedirectURI:     redirect,
+		AutoCreateUsers: c.OIDCAutoCreateUsers,
+		AllowedDomains:  config.ParseRootEmails(c.OIDCAllowedDomains),
+	}
+	return oidcCfg.Validate()
 }

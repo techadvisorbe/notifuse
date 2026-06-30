@@ -23,11 +23,13 @@ export default function SetupWizard() {
     api_endpoint_configured: boolean
     root_email_configured: boolean
     smtp_bridge_configured: boolean
+    oidc_configured: boolean
   }>({
     smtp_configured: false,
     api_endpoint_configured: false,
     root_email_configured: false,
-    smtp_bridge_configured: false
+    smtp_bridge_configured: false,
+    oidc_configured: false
   })
   const { message } = App.useApp()
 
@@ -49,7 +51,8 @@ export default function SetupWizard() {
           smtp_configured: status.smtp_configured,
           api_endpoint_configured: status.api_endpoint_configured,
           root_email_configured: status.root_email_configured,
-          smtp_bridge_configured: status.smtp_bridge_configured
+          smtp_bridge_configured: status.smtp_bridge_configured,
+          oidc_configured: status.oidc_configured
         })
       } catch {
         message.error(t`Failed to fetch setup status`)
@@ -122,6 +125,27 @@ export default function SetupWizard() {
           setupConfig.smtp_bridge_port = typeof values.smtp_bridge_port === 'number' ? values.smtp_bridge_port : 587
           setupConfig.smtp_bridge_tls_cert_base64 = typeof values.smtp_bridge_tls_cert_base64 === 'string' ? values.smtp_bridge_tls_cert_base64 : undefined
           setupConfig.smtp_bridge_tls_key_base64 = typeof values.smtp_bridge_tls_key_base64 === 'string' ? values.smtp_bridge_tls_key_base64 : undefined
+        }
+      }
+
+      // OIDC / SSO configuration (only if not configured via env)
+      if (!configStatus.oidc_configured) {
+        setupConfig.oidc_enabled = typeof values.oidc_enabled === 'boolean' ? values.oidc_enabled : false
+        if (values.oidc_enabled) {
+          setupConfig.oidc_issuer_url =
+            typeof values.oidc_issuer_url === 'string' ? values.oidc_issuer_url : undefined
+          setupConfig.oidc_client_id =
+            typeof values.oidc_client_id === 'string' ? values.oidc_client_id : undefined
+          setupConfig.oidc_client_secret =
+            typeof values.oidc_client_secret === 'string' ? values.oidc_client_secret : undefined
+          setupConfig.oidc_button_label =
+            typeof values.oidc_button_label === 'string' ? values.oidc_button_label : undefined
+          setupConfig.oidc_scopes =
+            typeof values.oidc_scopes === 'string' ? values.oidc_scopes : undefined
+          setupConfig.oidc_auto_create_users =
+            typeof values.oidc_auto_create_users === 'boolean' ? values.oidc_auto_create_users : false
+          setupConfig.oidc_allowed_domains =
+            typeof values.oidc_allowed_domains === 'string' ? values.oidc_allowed_domains : undefined
         }
       }
 
@@ -645,6 +669,108 @@ export default function SetupWizard() {
                                             style={{ fontFamily: 'monospace', fontSize: '12px' }}
                                           />
                                         </Form.Item>
+                                      </div>
+                                    ) : null
+                                  }
+                                </Form.Item>
+                              </>
+                            )}
+
+                            {/* SSO (OIDC) Configuration - Hidden if configured via env */}
+                            {!configStatus.oidc_configured && (
+                              <>
+                                <Divider style={{ marginTop: 24, marginBottom: 24 }} />
+
+                                <Form.Item
+                                  name="oidc_enabled"
+                                  valuePropName="checked"
+                                  label={t`Enable Single Sign-On (OpenID Connect)`}
+                                  tooltip={t`Let users sign in with an external identity provider (Google Workspace, Keycloak, Okta, …) alongside magic codes.`}
+                                >
+                                  <Switch />
+                                </Form.Item>
+
+                                <Form.Item
+                                  noStyle
+                                  shouldUpdate={(prevValues, currentValues) =>
+                                    prevValues.oidc_enabled !== currentValues.oidc_enabled ||
+                                    prevValues.oidc_auto_create_users !==
+                                      currentValues.oidc_auto_create_users
+                                  }
+                                >
+                                  {({ getFieldValue }) =>
+                                    getFieldValue('oidc_enabled') ? (
+                                      <div
+                                        style={{
+                                          marginTop: 16,
+                                          paddingLeft: 24,
+                                          borderLeft: '3px solid #1890ff'
+                                        }}
+                                      >
+                                        <Form.Item
+                                          label={t`Issuer URL`}
+                                          name="oidc_issuer_url"
+                                          rules={[
+                                            { required: true, message: t`Issuer URL is required` },
+                                            { type: 'url', message: t`Must be a valid https URL` }
+                                          ]}
+                                          tooltip={t`OIDC issuer base URL — discovery happens at <issuer>/.well-known/openid-configuration`}
+                                        >
+                                          <Input placeholder="https://accounts.google.com" />
+                                        </Form.Item>
+
+                                        <Form.Item
+                                          label={t`Client ID`}
+                                          name="oidc_client_id"
+                                          rules={[
+                                            { required: true, message: t`Client ID is required` }
+                                          ]}
+                                        >
+                                          <Input placeholder="xxxxxxxx.apps.googleusercontent.com" />
+                                        </Form.Item>
+
+                                        <Form.Item
+                                          label={t`Client Secret`}
+                                          name="oidc_client_secret"
+                                          rules={[
+                                            { required: true, message: t`Client Secret is required` }
+                                          ]}
+                                        >
+                                          <Input.Password autoComplete="new-password" />
+                                        </Form.Item>
+
+                                        <Form.Item
+                                          label={t`Button Label`}
+                                          name="oidc_button_label"
+                                          tooltip={t`Text shown on the sign-in button`}
+                                        >
+                                          <Input placeholder={t`Sign in with SSO`} />
+                                        </Form.Item>
+
+                                        <Form.Item
+                                          name="oidc_auto_create_users"
+                                          valuePropName="checked"
+                                          label={t`Auto-create accounts on first sign-in`}
+                                          tooltip={t`When off (recommended), only already-invited users can sign in via SSO. When on, a verified email in an allowed domain creates an account automatically.`}
+                                        >
+                                          <Switch />
+                                        </Form.Item>
+
+                                        {getFieldValue('oidc_auto_create_users') ? (
+                                          <Form.Item
+                                            label={t`Allowed email domains`}
+                                            name="oidc_allowed_domains"
+                                            rules={[
+                                              {
+                                                required: true,
+                                                message: t`At least one domain is required when auto-create is enabled`
+                                              }
+                                            ]}
+                                            tooltip={t`Comma-separated list of email domains permitted to auto-create accounts`}
+                                          >
+                                            <Input placeholder="example.com, sub.example.com" />
+                                          </Form.Item>
+                                        ) : null}
                                       </div>
                                     ) : null
                                   }

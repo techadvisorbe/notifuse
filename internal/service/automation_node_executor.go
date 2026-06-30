@@ -293,11 +293,8 @@ func (e *EmailNodeExecutor) Execute(ctx context.Context, params NodeExecutionPar
 	// 5. Generate message ID
 	messageID := fmt.Sprintf("%s_%s", params.WorkspaceID, uuid.New().String())
 
-	// 6. Setup tracking settings
-	endpoint := e.apiEndpoint
-	if workspace.Settings.CustomEndpointURL != nil && *workspace.Settings.CustomEndpointURL != "" {
-		endpoint = *workspace.Settings.CustomEndpointURL
-	}
+	// 6. Setup tracking settings — custom endpoint if set, else the API endpoint.
+	endpoint := workspace.Settings.ResolveEndpoint(e.apiEndpoint)
 
 	trackingSettings := notifuse_mjml.TrackingSettings{
 		Endpoint:       endpoint,
@@ -348,11 +345,11 @@ func (e *EmailNodeExecutor) Execute(ctx context.Context, params NodeExecutionPar
 	compileReq := notifuse_mjml.CompileTemplateRequest{
 		WorkspaceID:      params.WorkspaceID,
 		MessageID:        messageID,
-		VisualEditorTree: emailContent.VisualEditorTree,
 		TemplateData:     notifuse_mjml.MapOfAny(templateData),
 		TrackingSettings: trackingSettings,
 	}
-	compileReq.MjmlSource = emailContent.GetCodeModeMjmlSource()
+	// Wires the resolved variant's tree/source + its inbox-preview override.
+	emailContent.ApplyToCompileRequest(&compileReq, nil)
 	compiledTemplate, err := notifuse_mjml.CompileTemplate(compileReq)
 	if err != nil {
 		return nil, fmt.Errorf("failed to compile template: %w", err)
@@ -382,6 +379,15 @@ func (e *EmailNodeExecutor) Execute(ctx context.Context, params NodeExecutionPar
 		return nil, fmt.Errorf("no sender configured for email provider")
 	}
 
+	// Flag the send for stop-on-reply only when the automation opts in. This drives
+	// the worker's just-in-time reply guard and the Message-ID capture; absent for
+	// every other send so the feature stays free for non-users.
+	var contactAutomationID *string
+	if params.Automation != nil && params.Automation.ExitOnReply {
+		id := params.Contact.ID
+		contactAutomationID = &id
+	}
+
 	// 12. Create queue entry
 	entry := &domain.EmailQueueEntry{
 		ID:            uuid.New().String(),
@@ -395,11 +401,12 @@ func (e *EmailNodeExecutor) Execute(ctx context.Context, params NodeExecutionPar
 		MessageID:     messageID,
 		TemplateID:    config.TemplateID,
 		Payload: domain.EmailQueuePayload{
-			FromAddress:        sender.Email,
-			FromName:           sender.Name,
-			Subject:            subject,
-			HTMLContent:        htmlContent,
-			RateLimitPerMinute: emailProvider.RateLimitPerMinute,
+			FromAddress:         sender.Email,
+			FromName:            sender.Name,
+			Subject:             subject,
+			HTMLContent:         htmlContent,
+			RateLimitPerMinute:  emailProvider.RateLimitPerMinute,
+			ContactAutomationID: contactAutomationID,
 			EmailOptions: domain.EmailOptions{
 				ReplyTo: emailContent.ReplyTo,
 			},

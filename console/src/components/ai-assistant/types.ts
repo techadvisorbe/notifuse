@@ -45,6 +45,8 @@ export interface UseAIAssistantReturn {
   costs: { input: number; output: number; total: number }
   inputContainerRef: RefObject<HTMLDivElement | null>
   llmIntegration: Integration | undefined
+  llmIntegrations: Integration[]
+  setSelectedLLMIntegrationId: (id: string) => void
   handleCancel: () => void
   handleSend: () => Promise<void>
   bubbleItems: BubbleItem[]
@@ -78,6 +80,8 @@ export interface AIAssistantChatProps {
   costs: { input: number; output: number; total: number }
   inputContainerRef: RefObject<HTMLDivElement | null>
   llmIntegration: Integration | undefined
+  llmIntegrations: Integration[]
+  setSelectedLLMIntegrationId: (id: string) => void
   handleCancel: () => void
   handleSend: () => Promise<void>
   bubbleItems: BubbleItem[]

@@ -41,7 +41,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // Token exists, fetch current user data
       const { user, workspaces } = await authService.getCurrentUser()
       setUser(user)
-      setWorkspaces(workspaces)
+      setWorkspaces(workspaces ?? [])
       setLoading(false)
     } catch {
       // If there's an error (like an expired token), clear the storage
@@ -67,7 +67,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // Fetch current user data using the token
       const { user, workspaces } = await authService.getCurrentUser()
       setUser(user)
-      setWorkspaces(workspaces)
+      setWorkspaces(workspaces ?? [])
     } catch (error) {
       // If there's an error, clear the storage
       localStorage.removeItem('auth_token')

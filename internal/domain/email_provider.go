@@ -310,9 +310,9 @@ func (e *EmailProvider) DecryptSecretKeys(passphrase string) error {
 }
 
 type EmailOptions struct {
-	FromName           *string      `json:"from_name,omitempty"`        // Override default sender from name
-	Subject            *string      `json:"subject,omitempty"`          // Override template subject
-	SubjectPreview     *string      `json:"subject_preview,omitempty"`  // Override template preheader
+	FromName           *string      `json:"from_name,omitempty"`       // Override default sender from name
+	Subject            *string      `json:"subject,omitempty"`         // Override template subject
+	SubjectPreview     *string      `json:"subject_preview,omitempty"` // Override template preheader
 	CC                 []string     `json:"cc,omitempty"`
 	BCC                []string     `json:"bcc,omitempty"`
 	ReplyTo            string       `json:"reply_to,omitempty"`
@@ -359,6 +359,13 @@ type SendEmailProviderRequest struct {
 	Content       string         `validate:"required"`
 	Provider      *EmailProvider `validate:"required"`
 	EmailOptions  EmailOptions
+
+	// CapturedMessageID, when non-nil, is written by providers that OVERWRITE the RFC
+	// Message-ID at send time (e.g. Amazon SES) with the provider-returned MessageId, so
+	// the caller can store the recipient-visible Message-ID for reply matching. It is a
+	// pointer so the written value survives the by-value request copy through the send
+	// chain. nil for providers/callers that don't need it.
+	CapturedMessageID *string
 }
 
 // Validate ensures all required fields are present and valid
@@ -396,9 +403,9 @@ func (r *SendEmailProviderRequest) Validate() error {
 // SendEmailRequest encapsulates all parameters needed to send an email using a template
 type SendEmailRequest struct {
 	// Core identification
-	WorkspaceID   string `validate:"required"`
-	IntegrationID string `validate:"required"`
-	MessageID     string `validate:"required"`
+	WorkspaceID                 string `validate:"required"`
+	IntegrationID               string `validate:"required"`
+	MessageID                   string `validate:"required"`
 	ExternalID                  *string
 	AutomationID                *string
 	TransactionalNotificationID *string

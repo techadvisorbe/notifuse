@@ -22,7 +22,8 @@ import { SettingsSectionHeader } from './SettingsSectionHeader'
 interface CustomFieldsConfigurationProps {
   workspace: Workspace | null
   onWorkspaceUpdate: (workspace: Workspace) => void
-  isOwner: boolean
+  /** Whether the current user can manage custom field labels (workspace:write or owner). */
+  canManage: boolean
 }
 
 interface CustomFieldMapping {
@@ -49,7 +50,7 @@ const ALL_CUSTOM_FIELDS = [
 export function CustomFieldsConfiguration({
   workspace,
   onWorkspaceUpdate,
-  isOwner
+  canManage
 }: CustomFieldsConfigurationProps) {
   const { t } = useLingui()
   const [modalVisible, setModalVisible] = useState(false)
@@ -107,12 +108,9 @@ export function CustomFieldsConfiguration({
         [values.fieldKey]: values.label.trim()
       }
 
-      await workspaceService.update({
-        ...workspace,
-        settings: {
-          ...workspace.settings,
-          custom_field_labels: updatedLabels
-        }
+      await workspaceService.setCustomFieldLabels({
+        workspace_id: workspace.id,
+        custom_field_labels: updatedLabels
       })
 
       // Refresh the workspace data
@@ -136,12 +134,9 @@ export function CustomFieldsConfiguration({
       const updatedLabels = { ...customFieldLabels }
       delete updatedLabels[fieldKey]
 
-      await workspaceService.update({
-        ...workspace,
-        settings: {
-          ...workspace.settings,
-          custom_field_labels: updatedLabels
-        }
+      await workspaceService.setCustomFieldLabels({
+        workspace_id: workspace.id,
+        custom_field_labels: updatedLabels
       })
 
       // Refresh the workspace data
@@ -162,13 +157,21 @@ export function CustomFieldsConfiguration({
         description={t`Set friendly display names for contact custom fields.`}
       />
 
-      {isOwner && (
-        <div style={{ textAlign: 'right', marginBottom: 16 }}>
-          <Button type="primary" ghost size="small" onClick={() => handleOpenModal()}>
-            {t`Add Label`}
-          </Button>
-        </div>
-      )}
+      <div style={{ textAlign: 'right', marginBottom: 16 }}>
+        <Tooltip title={!canManage ? t`You don't have permission to manage custom fields` : undefined}>
+          <span style={{ display: 'inline-block' }}>
+            <Button
+              type="primary"
+              ghost
+              size="small"
+              disabled={!canManage}
+              onClick={() => handleOpenModal()}
+            >
+              {t`Add Label`}
+            </Button>
+          </span>
+        </Tooltip>
+      </div>
 
       {mappedFields.length > 0 && (
         <Descriptions bordered size="small" column={1}>
@@ -186,14 +189,23 @@ export function CustomFieldsConfiguration({
                 style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
               >
                 <span>{field.label}</span>
-                {isOwner && (
-                  <Space size="small">
-                    <Button
-                      type="text"
-                      size="small"
-                      icon={<EditOutlined />}
-                      onClick={() => handleOpenModal(field.fieldKey)}
-                    />
+                <Space size="small">
+                  <Tooltip
+                    title={
+                      !canManage ? t`You don't have permission to manage custom fields` : undefined
+                    }
+                  >
+                    <span style={{ display: 'inline-block' }}>
+                      <Button
+                        type="text"
+                        size="small"
+                        icon={<EditOutlined />}
+                        disabled={!canManage}
+                        onClick={() => handleOpenModal(field.fieldKey)}
+                      />
+                    </span>
+                  </Tooltip>
+                  {canManage ? (
                     <Popconfirm
                       title={t`Remove custom field label`}
                       description={t`Are you sure you want to remove this custom field label?`}
@@ -203,8 +215,14 @@ export function CustomFieldsConfiguration({
                     >
                       <Button type="text" size="small" icon={<DeleteOutlined />} />
                     </Popconfirm>
-                  </Space>
-                )}
+                  ) : (
+                    <Tooltip title={t`You don't have permission to manage custom fields`}>
+                      <span style={{ display: 'inline-block' }}>
+                        <Button type="text" size="small" icon={<DeleteOutlined />} disabled />
+                      </span>
+                    </Tooltip>
+                  )}
+                </Space>
               </div>
             </Descriptions.Item>
           ))}

@@ -256,6 +256,80 @@ func (sm *ServerManager) StartLive(ctx context.Context) error {
 	return nil
 }
 
+// StartLiveDirect brings up the server like StartLive (real TaskScheduler ticker +
+// background workers) but exercises the production Cloud path: the internal scheduler
+// is ENABLED and the APIEndpoint is intentionally unreachable.
+//
+// With the scheduler enabled, app.Initialize wires SetDirectExecution(true), so
+// ExecutePendingTasks runs each task in-process and must never dispatch over HTTP. The
+// dead APIEndpoint ("http://127.0.0.1:1") is the assertion's teeth: if the execution-mode
+// coupling regressed and it fell back to HTTP dispatch, every task would stall against the
+// unreachable endpoint instead of silently succeeding.
+//
+// Mirrors StartLive's ordering: bind the listener, mutate the shared config pointer
+// BEFORE app.Initialize() (so InitServices reads Enabled + APIEndpoint), then start the
+// ticker and workers.
+func (sm *ServerManager) StartLiveDirect(ctx context.Context) error {
+	if sm.isStarted {
+		return nil
+	}
+
+	listener, err := net.Listen("tcp", fmt.Sprintf("%s:0", sm.config.Server.Host))
+	if err != nil {
+		return fmt.Errorf("failed to create listener: %w", err)
+	}
+	sm.listener = listener
+	port := listener.Addr().(*net.TCPAddr).Port
+	sm.url = fmt.Sprintf("http://%s:%d", sm.config.Server.Host, port)
+
+	// Enable the internal scheduler so app wiring sets directExecution=true, and point
+	// APIEndpoint at an unreachable address so any (incorrect) HTTP dispatch fails loudly.
+	sm.config.TaskScheduler.Enabled = true
+	sm.config.APIEndpoint = "http://127.0.0.1:1"
+
+	if err := sm.app.Initialize(); err != nil {
+		_ = listener.Close()
+		return fmt.Errorf("failed to initialize app: %w", err)
+	}
+
+	sm.server = &http.Server{
+		Handler:      sm.app.GetMux(),
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 30 * time.Second,
+	}
+	go func() {
+		if err := sm.server.Serve(listener); err != nil && err != http.ErrServerClosed {
+			sm.app.GetLogger().WithField("error", err.Error()).Error("Server error")
+		}
+	}()
+
+	cleanup := func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = sm.server.Shutdown(shutdownCtx)
+		_ = listener.Close()
+	}
+
+	if err := sm.waitForReady(10 * time.Second); err != nil {
+		cleanup()
+		return fmt.Errorf("server not ready: %w", err)
+	}
+
+	// Start the real task scheduler ticker (Enabled is true, but the harness drives it
+	// explicitly since it serves the mux directly rather than calling app.Start()).
+	if scheduler := sm.app.GetTaskScheduler(); scheduler != nil {
+		scheduler.Start(ctx)
+	}
+
+	if err := sm.StartBackgroundWorkers(ctx); err != nil {
+		cleanup()
+		return fmt.Errorf("failed to start background workers: %w", err)
+	}
+
+	sm.isStarted = true
+	return nil
+}
+
 // StartBackgroundWorkers starts the email queue worker and other background services
 // Call this after Start() when you need workers to process queued items
 func (sm *ServerManager) StartBackgroundWorkers(ctx context.Context) error {

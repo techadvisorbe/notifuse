@@ -219,6 +219,7 @@ type Automation struct {
 	Name        string                 `json:"name"`
 	Status      AutomationStatus       `json:"status"`
 	ListID      string                 `json:"list_id"`
+	ExitOnReply bool                   `json:"exit_on_reply"` // Stop the journey when the contact replies (see inbound reply detection)
 	Trigger     *TimelineTriggerConfig `json:"trigger"`
 	TriggerSQL  *string                `json:"trigger_sql,omitempty"` // Generated SQL for WHEN clause
 	RootNodeID  string                 `json:"root_node_id"`
@@ -697,7 +698,21 @@ type AutomationRepository interface {
 	ListContactAutomations(ctx context.Context, workspaceID string, filter ContactAutomationFilter) ([]*ContactAutomation, int, error)
 	UpdateContactAutomation(ctx context.Context, workspaceID string, ca *ContactAutomation) error
 	UpdateContactAutomationTx(ctx context.Context, tx *sql.Tx, workspaceID string, ca *ContactAutomation) error
+	// UpdateContactAutomationIfActive persists the contact automation only while its
+	// row is still 'active' (optimistic lock). Returns false (no error) when no row
+	// was updated — i.e. the journey was concurrently exited (e.g. by a reply
+	// interrupt) — so the executor stops instead of clobbering the exit.
+	UpdateContactAutomationIfActive(ctx context.Context, workspaceID string, ca *ContactAutomation) (bool, error)
 	GetScheduledContactAutomations(ctx context.Context, workspaceID string, beforeTime time.Time, limit int) ([]*ContactAutomation, error)
+
+	// ExitContactJourneysOnReply marks the contact's active journeys as exited
+	// (with the given reason) when their automation has exit_on_reply enabled. When
+	// automationID is non-nil only that automation's journey is exited (Message-ID
+	// match); otherwise all of the contact's exit_on_reply journeys are exited.
+	// Only journeys entered before `before` (the reply's received time) are exited — a
+	// reply cannot pertain to a journey instance that started after it. Returns the
+	// number of journeys exited.
+	ExitContactJourneysOnReply(ctx context.Context, workspaceID, contactEmail string, automationID *string, reason string, before time.Time) (int, error)
 
 	// Global scheduling (across all workspaces with round-robin)
 	GetScheduledContactAutomationsGlobal(ctx context.Context, beforeTime time.Time, limit int) ([]*ContactAutomationWithWorkspace, error)

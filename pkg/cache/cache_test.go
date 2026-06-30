@@ -28,6 +28,99 @@ func TestInMemoryCache_BasicOperations(t *testing.T) {
 	}
 }
 
+func TestInMemoryCache_GetAndDelete_Found(t *testing.T) {
+	cache := NewInMemoryCache(10 * time.Millisecond)
+	defer cache.Stop()
+
+	cache.Set("one-time", "secret", 1*time.Second)
+
+	value, found := cache.GetAndDelete("one-time")
+	if !found {
+		t.Fatal("Expected to find the key on first GetAndDelete")
+	}
+	if value != "secret" {
+		t.Errorf("Expected 'secret', got %v", value)
+	}
+
+	// Single-use: the key must be gone after the first read.
+	_, found = cache.GetAndDelete("one-time")
+	if found {
+		t.Error("Expected key to be consumed (single-use) after first GetAndDelete")
+	}
+	if _, ok := cache.Get("one-time"); ok {
+		t.Error("Expected key to be removed from the cache after GetAndDelete")
+	}
+}
+
+func TestInMemoryCache_GetAndDelete_Missing(t *testing.T) {
+	cache := NewInMemoryCache(10 * time.Millisecond)
+	defer cache.Stop()
+
+	value, found := cache.GetAndDelete("nope")
+	if found {
+		t.Error("Expected not to find a missing key")
+	}
+	if value != nil {
+		t.Errorf("Expected nil value for missing key, got %v", value)
+	}
+}
+
+func TestInMemoryCache_GetAndDelete_Expired(t *testing.T) {
+	cache := NewInMemoryCache(time.Hour) // disable background cleanup interference
+	defer cache.Stop()
+
+	cache.Set("expire", "value", 20*time.Millisecond)
+	time.Sleep(30 * time.Millisecond)
+
+	value, found := cache.GetAndDelete("expire")
+	if found {
+		t.Error("Expected expired key to report not-found")
+	}
+	if value != nil {
+		t.Errorf("Expected nil value for expired key, got %v", value)
+	}
+	// Expired entry should have been pruned, not left behind.
+	if sz := cache.Size(); sz != 0 {
+		t.Errorf("Expected expired entry to be deleted, size=%d", sz)
+	}
+}
+
+func TestInMemoryCache_GetAndDelete_SingleUseUnderConcurrency(t *testing.T) {
+	cache := NewInMemoryCache(time.Hour)
+	defer cache.Stop()
+
+	const goroutines = 64
+	cache.Set("race", "only-once", 1*time.Second)
+
+	var wg sync.WaitGroup
+	var successCount int64
+	var mu sync.Mutex
+	start := make(chan struct{})
+
+	for i := 0; i < goroutines; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start // line everyone up to maximize contention
+			if v, ok := cache.GetAndDelete("race"); ok {
+				if v != "only-once" {
+					t.Errorf("unexpected value: %v", v)
+				}
+				mu.Lock()
+				successCount++
+				mu.Unlock()
+			}
+		}()
+	}
+
+	close(start)
+	wg.Wait()
+
+	if successCount != 1 {
+		t.Errorf("Expected exactly one goroutine to consume the code, got %d", successCount)
+	}
+}
+
 func TestInMemoryCache_Expiration(t *testing.T) {
 	cache := NewInMemoryCache(10 * time.Millisecond)
 	defer cache.Stop()

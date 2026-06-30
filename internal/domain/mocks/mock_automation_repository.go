@@ -149,6 +149,36 @@ func (mr *MockAutomationRepositoryMockRecorder) DropAutomationTrigger(arg0, arg1
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DropAutomationTrigger", reflect.TypeOf((*MockAutomationRepository)(nil).DropAutomationTrigger), arg0, arg1, arg2)
 }
 
+// ExitContactJourneysOnReply mocks base method.
+func (m *MockAutomationRepository) ExitContactJourneysOnReply(arg0 context.Context, arg1, arg2 string, arg3 *string, arg4 string, arg5 time.Time) (int, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ExitContactJourneysOnReply", arg0, arg1, arg2, arg3, arg4, arg5)
+	ret0, _ := ret[0].(int)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ExitContactJourneysOnReply indicates an expected call of ExitContactJourneysOnReply.
+func (mr *MockAutomationRepositoryMockRecorder) ExitContactJourneysOnReply(arg0, arg1, arg2, arg3, arg4, arg5 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ExitContactJourneysOnReply", reflect.TypeOf((*MockAutomationRepository)(nil).ExitContactJourneysOnReply), arg0, arg1, arg2, arg3, arg4, arg5)
+}
+
+// UpdateContactAutomationIfActive mocks base method.
+func (m *MockAutomationRepository) UpdateContactAutomationIfActive(arg0 context.Context, arg1 string, arg2 *domain.ContactAutomation) (bool, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "UpdateContactAutomationIfActive", arg0, arg1, arg2)
+	ret0, _ := ret[0].(bool)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// UpdateContactAutomationIfActive indicates an expected call of UpdateContactAutomationIfActive.
+func (mr *MockAutomationRepositoryMockRecorder) UpdateContactAutomationIfActive(arg0, arg1, arg2 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateContactAutomationIfActive", reflect.TypeOf((*MockAutomationRepository)(nil).UpdateContactAutomationIfActive), arg0, arg1, arg2)
+}
+
 // GetByID mocks base method.
 func (m *MockAutomationRepository) GetByID(arg0 context.Context, arg1, arg2 string) (*domain.Automation, error) {
 	m.ctrl.T.Helper()

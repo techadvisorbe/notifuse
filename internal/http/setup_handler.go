@@ -46,6 +46,7 @@ type StatusResponse struct {
 	APIEndpointConfigured bool `json:"api_endpoint_configured"`
 	RootEmailConfigured   bool `json:"root_email_configured"`
 	SMTPBridgeConfigured   bool `json:"smtp_bridge_configured"`
+	OIDCConfigured         bool `json:"oidc_configured"`
 }
 
 // InitializeRequest represents the setup initialization request
@@ -67,6 +68,15 @@ type InitializeRequest struct {
 	SMTPBridgePort          int    `json:"smtp_bridge_port"`
 	SMTPBridgeTLSCertBase64 string `json:"smtp_bridge_tls_cert_base64"`
 	SMTPBridgeTLSKeyBase64  string `json:"smtp_bridge_tls_key_base64"`
+	OIDCEnabled             bool   `json:"oidc_enabled"`
+	OIDCIssuerURL           string `json:"oidc_issuer_url"`
+	OIDCClientID            string `json:"oidc_client_id"`
+	OIDCClientSecret        string `json:"oidc_client_secret"`
+	OIDCRedirectURI         string `json:"oidc_redirect_uri"`
+	OIDCScopes              string `json:"oidc_scopes"`
+	OIDCButtonLabel         string `json:"oidc_button_label"`
+	OIDCAutoCreateUsers     bool   `json:"oidc_auto_create_users"`
+	OIDCAllowedDomains      string `json:"oidc_allowed_domains"`
 }
 
 // InitializeResponse represents the setup completion response
@@ -115,6 +125,7 @@ func (h *SetupHandler) Status(w http.ResponseWriter, r *http.Request) {
 		APIEndpointConfigured: configStatus.APIEndpointConfigured,
 		RootEmailConfigured:   configStatus.RootEmailConfigured,
 		SMTPBridgeConfigured:   configStatus.SMTPBridgeConfigured,
+		OIDCConfigured:         configStatus.OIDCConfigured,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -192,6 +203,15 @@ func (h *SetupHandler) Initialize(w http.ResponseWriter, r *http.Request) {
 		SMTPBridgePort:          req.SMTPBridgePort,
 		SMTPBridgeTLSCertBase64: req.SMTPBridgeTLSCertBase64,
 		SMTPBridgeTLSKeyBase64:  req.SMTPBridgeTLSKeyBase64,
+		OIDCEnabled:             req.OIDCEnabled,
+		OIDCIssuerURL:           req.OIDCIssuerURL,
+		OIDCClientID:            req.OIDCClientID,
+		OIDCClientSecret:        req.OIDCClientSecret,
+		OIDCRedirectURI:         req.OIDCRedirectURI,
+		OIDCScopes:              req.OIDCScopes,
+		OIDCButtonLabel:         req.OIDCButtonLabel,
+		OIDCAutoCreateUsers:     req.OIDCAutoCreateUsers,
+		OIDCAllowedDomains:      req.OIDCAllowedDomains,
 	}
 
 	// Initialize using service (callback will be called in service)

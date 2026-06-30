@@ -28,6 +28,24 @@ func makeEmailTemplate(subject, bodyContent string) *domain.EmailTemplate {
 	}
 }
 
+// stalePreheaderSentinel is baked into a template's mj-preview block by makeEmailTemplateWithPreview
+// to stand in for a "cloned default" inbox-preview value. A correctly-sent variant overrides it with
+// its own subject_preview at compile time, so this sentinel must never appear in a delivered email.
+const stalePreheaderSentinel = "STALE_PREHEADER_SHOULD_BE_OVERRIDDEN"
+
+// makeEmailTemplateWithPreview is like makeEmailTemplate but also sets a subject_preview field and a
+// tree whose mj-preview block carries the stale sentinel — so a send must override that block with
+// the variant's own subject_preview for the preview text to be correct.
+func makeEmailTemplateWithPreview(subject, subjectPreview, bodyContent string) *domain.EmailTemplate {
+	preview := subjectPreview
+	return &domain.EmailTemplate{
+		Subject:          subject,
+		SubjectPreview:   &preview,
+		CompiledPreview:  fmt.Sprintf(`<mjml><mj-head></mj-head><mj-body><mj-section><mj-column><mj-text>%s</mj-text></mj-column></mj-section></mj-body></mjml>`, bodyContent),
+		VisualEditorTree: testutil.CreateMJMLBlockWithContentAndPreview(bodyContent, stalePreheaderSentinel),
+	}
+}
+
 // TestTemplateTranslationIntegration tests that template translations are correctly resolved
 // across all three sending flows: transactional, broadcast, and automation.
 // Each subtest verifies a specific branch of the ResolveEmailContent fallback chain:
@@ -335,14 +353,18 @@ func TestTemplateTranslationIntegration(t *testing.T) {
 			enBody := fmt.Sprintf("Hello in English - %s", uid)
 			frBody := fmt.Sprintf("Bonjour en Francais - %s", uid)
 			esBody := fmt.Sprintf("Hola en Espanol - %s", uid)
+			enPreview := fmt.Sprintf("EN preheader %s", uid)
+			frPreview := fmt.Sprintf("FR apercu %s", uid)
+			esPreview := fmt.Sprintf("ES vistazo %s", uid)
 
 			template, err := factory.CreateTemplate(workspace.ID,
 				testutil.WithTemplateName("Broadcast Translation - Multi"),
-				testutil.WithTemplateSubject(enSubject),
-				testutil.WithTemplateEmailContent(enBody),
+				testutil.TemplateOption(func(tmpl *domain.Template) {
+					tmpl.Email = makeEmailTemplateWithPreview(enSubject, enPreview, enBody)
+				}),
 				testutil.WithTemplateTranslations(map[string]domain.TemplateTranslation{
-					"fr": {Email: makeEmailTemplate(frSubject, frBody)},
-					"es": {Email: makeEmailTemplate(esSubject, esBody)},
+					"fr": {Email: makeEmailTemplateWithPreview(frSubject, frPreview, frBody)},
+					"es": {Email: makeEmailTemplateWithPreview(esSubject, esPreview, esBody)},
 				}),
 			)
 			require.NoError(t, err)
@@ -428,6 +450,8 @@ func TestTemplateTranslationIntegration(t *testing.T) {
 			assert.Contains(t, enMsg.HTML, enBody, "EN contact should get default EN body")
 			assert.NotContains(t, enMsg.HTML, frBody, "EN contact should NOT get FR body")
 			assert.NotContains(t, enMsg.HTML, esBody, "EN contact should NOT get ES body")
+			assert.Contains(t, enMsg.HTML, enPreview, "EN contact should get default EN preview text")
+			assert.NotContains(t, enMsg.HTML, stalePreheaderSentinel, "stale preheader must be overridden")
 
 			// Verify FR contact gets FR translation
 			frMsg, err := testutil.WaitForMailpitMessageByRecipient(t, frEmail, 15*time.Second)
@@ -436,6 +460,9 @@ func TestTemplateTranslationIntegration(t *testing.T) {
 			assert.Contains(t, frMsg.Subject, frSubject, "FR contact should get FR subject")
 			assert.Contains(t, frMsg.HTML, frBody, "FR contact should get FR body")
 			assert.NotContains(t, frMsg.HTML, enBody, "FR contact should NOT get EN body")
+			assert.Contains(t, frMsg.HTML, frPreview, "FR contact should get FR preview text")
+			assert.NotContains(t, frMsg.HTML, enPreview, "FR contact should NOT get EN preview text")
+			assert.NotContains(t, frMsg.HTML, stalePreheaderSentinel, "stale preheader must be overridden")
 
 			// Verify ES contact gets ES translation
 			esMsg, err := testutil.WaitForMailpitMessageByRecipient(t, esEmail, 15*time.Second)
@@ -444,6 +471,8 @@ func TestTemplateTranslationIntegration(t *testing.T) {
 			assert.Contains(t, esMsg.Subject, esSubject, "ES contact should get ES subject")
 			assert.Contains(t, esMsg.HTML, esBody, "ES contact should get ES body")
 			assert.NotContains(t, esMsg.HTML, enBody, "ES contact should NOT get EN body")
+			assert.Contains(t, esMsg.HTML, esPreview, "ES contact should get ES preview text")
+			assert.NotContains(t, esMsg.HTML, stalePreheaderSentinel, "stale preheader must be overridden")
 		})
 
 		t.Run("falls back for contacts without matching translation", func(t *testing.T) {
@@ -559,13 +588,16 @@ func TestTemplateTranslationIntegration(t *testing.T) {
 			frSubject := fmt.Sprintf("Bienvenue FR - %s", uid)
 			enBody := fmt.Sprintf("Hello in English - %s", uid)
 			frBody := fmt.Sprintf("Bonjour en Francais - %s", uid)
+			enPreview := fmt.Sprintf("EN preheader %s", uid)
+			frPreview := fmt.Sprintf("FR apercu %s", uid)
 
 			template, err := factory.CreateTemplate(workspace.ID,
 				testutil.WithTemplateName("Auto Translation - FR Match"),
-				testutil.WithTemplateSubject(enSubject),
-				testutil.WithTemplateEmailContent(enBody),
+				testutil.TemplateOption(func(tmpl *domain.Template) {
+					tmpl.Email = makeEmailTemplateWithPreview(enSubject, enPreview, enBody)
+				}),
 				testutil.WithTemplateTranslations(map[string]domain.TemplateTranslation{
-					"fr": {Email: makeEmailTemplate(frSubject, frBody)},
+					"fr": {Email: makeEmailTemplateWithPreview(frSubject, frPreview, frBody)},
 				}),
 			)
 			require.NoError(t, err)
@@ -668,6 +700,9 @@ func TestTemplateTranslationIntegration(t *testing.T) {
 			assert.NotContains(t, msg.Subject, "Welcome EN", "Subject should NOT be default EN")
 			assert.Contains(t, msg.HTML, frBody, "Body should contain FR translation content")
 			assert.NotContains(t, msg.HTML, enBody, "Body should NOT contain default EN content")
+			assert.Contains(t, msg.HTML, frPreview, "Preview should be the FR translation's own value")
+			assert.NotContains(t, msg.HTML, enPreview, "Preview should NOT be the default EN value")
+			assert.NotContains(t, msg.HTML, stalePreheaderSentinel, "stale preheader must be overridden")
 		})
 
 		t.Run("email node falls back to default", func(t *testing.T) {
@@ -785,4 +820,110 @@ func TestTemplateTranslationIntegration(t *testing.T) {
 			assert.NotContains(t, msg.HTML, frBody, "Body should NOT contain FR content")
 		})
 	})
+}
+
+// TestTemplateTranslationSubjectPreview is an end-to-end regression test: a translated
+// email must render its OWN inbox preview text (mj-preview), not the default template's. The data
+// factory inserts templates directly via the repository (bypassing the service that stamps
+// mj-preview on save), so this exercises the render-time override wired into the send path.
+func TestTemplateTranslationSubjectPreview(t *testing.T) {
+	testutil.SkipIfShort(t)
+	testutil.SetupTestEnvironment()
+	defer testutil.CleanupTestEnvironment()
+
+	suite := testutil.NewIntegrationTestSuite(t, func(cfg *config.Config) testutil.AppInterface {
+		return app.NewApp(cfg)
+	})
+	defer suite.Cleanup()
+
+	client := suite.APIClient
+	factory := suite.DataFactory
+
+	user, err := factory.CreateUser()
+	require.NoError(t, err)
+	workspace, err := factory.CreateWorkspace(
+		testutil.WithWorkspaceDefaultLanguage("en", []string{"en", "fr"}),
+	)
+	require.NoError(t, err)
+	err = factory.AddUserToWorkspace(user.ID, workspace.ID, "owner")
+	require.NoError(t, err)
+	_, err = factory.SetupWorkspaceWithSMTPProvider(workspace.ID)
+	require.NoError(t, err)
+	err = client.Login(user.Email, "password")
+	require.NoError(t, err)
+	client.SetWorkspaceID(workspace.ID)
+
+	err = testutil.ClearMailpitMessages(t)
+	require.NoError(t, err)
+
+	uid := uuid.New().String()[:8]
+	enSubject := fmt.Sprintf("Welcome EN - %s", uid)
+	frSubject := fmt.Sprintf("Bienvenue FR - %s", uid)
+	enPreview := fmt.Sprintf("EN preview text %s", uid)
+	frPreview := fmt.Sprintf("FR texte apercu %s", uid)
+	enBody := fmt.Sprintf("Hello EN %s", uid)
+	frBody := fmt.Sprintf("Bonjour FR %s", uid)
+
+	// Code-mode source WITHOUT an mj-preview block, so the only way the preview text can appear in
+	// the rendered HTML is the send-path override injecting each variant's own SubjectPreview.
+	codeEmail := func(subject, preview, body string) *domain.EmailTemplate {
+		p := preview
+		src := fmt.Sprintf(`<mjml><mj-body><mj-section><mj-column><mj-text>%s</mj-text></mj-column></mj-section></mj-body></mjml>`, body)
+		return &domain.EmailTemplate{
+			EditorMode:      domain.EditorModeCode,
+			MjmlSource:      &src,
+			Subject:         subject,
+			SubjectPreview:  &p,
+			CompiledPreview: src,
+		}
+	}
+
+	template, err := factory.CreateTemplate(workspace.ID,
+		testutil.WithTemplateName("Preview Translation Test"),
+		testutil.TemplateOption(func(tmpl *domain.Template) {
+			tmpl.Email = codeEmail(enSubject, enPreview, enBody)
+			tmpl.Translations = map[string]domain.TemplateTranslation{
+				"fr": {Email: codeEmail(frSubject, frPreview, frBody)},
+			}
+		}),
+	)
+	require.NoError(t, err)
+
+	notifID := fmt.Sprintf("preview-fr-%s", uid)
+	notification, err := factory.CreateTransactionalNotification(workspace.ID,
+		testutil.WithTransactionalNotificationID(notifID),
+		testutil.WithTransactionalNotificationChannels(domain.ChannelTemplates{
+			domain.TransactionalChannelEmail: domain.ChannelTemplate{
+				TemplateID: template.ID,
+				Settings:   map[string]interface{}{},
+			},
+		}),
+	)
+	require.NoError(t, err)
+
+	contactEmail := fmt.Sprintf("preview-fr-%s@example.com", uid)
+	_, err = factory.CreateContact(workspace.ID,
+		testutil.WithContactEmail(contactEmail),
+		testutil.WithContactLanguage("fr"),
+	)
+	require.NoError(t, err)
+
+	resp, err := client.SendTransactionalNotification(map[string]interface{}{
+		"id":       notification.ID,
+		"contact":  map[string]interface{}{"email": contactEmail},
+		"channels": []string{"email"},
+	})
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, resp.StatusCode, "Send should succeed")
+	resp.Body.Close()
+
+	msg, err := testutil.WaitForMailpitMessageByRecipient(t, contactEmail, 15*time.Second)
+	require.NoError(t, err, "Should receive email in Mailpit")
+
+	t.Logf("Received subject: %s", msg.Subject)
+	assert.Contains(t, msg.Subject, frSubject, "Subject should be FR translation")
+	assert.Contains(t, msg.HTML, frBody, "Body should contain FR translation content")
+	// The crux of the fix: the FR translation's own preview text must render, not the default EN one.
+	assert.Contains(t, msg.HTML, frPreview, "Preview text should be the FR translation's own value")
+	assert.NotContains(t, msg.HTML, enPreview, "Preview text should NOT be the default EN value")
 }

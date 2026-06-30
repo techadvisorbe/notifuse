@@ -105,7 +105,8 @@ func (d *MessageData) Scan(value interface{}) error {
 // MessageHistory represents a record of a message sent to a contact
 type MessageHistory struct {
 	ID              string               `json:"id"`
-	ExternalID      *string              `json:"external_id,omitempty"` // For idempotency checks
+	ExternalID      *string              `json:"external_id,omitempty"`     // For idempotency checks
+	SMTPMessageID   *string              `json:"smtp_message_id,omitempty"` // Recipient-visible RFC Message-ID for reply matching; set only for exit_on_reply sends
 	ContactEmail    string               `json:"contact_email"`
 	BroadcastID     *string              `json:"broadcast_id,omitempty"`
 	AutomationID                *string `json:"automation_id,omitempty"`                  // Automation this message was sent from (nullable for broadcasts/transactional)
@@ -162,6 +163,11 @@ type MessageHistoryRepository interface {
 
 	// GetByExternalID retrieves a message history by external ID for idempotency checks
 	GetByExternalID(ctx context.Context, workspaceID string, secretKey string, externalID string) (*MessageHistory, error)
+
+	// GetBySMTPMessageID looks up a send by its recipient-visible RFC Message-ID
+	// (for matching an inbound reply's In-Reply-To). Returns (nil, nil) when there
+	// is no match. Only id, contact_email and automation_id are populated.
+	GetBySMTPMessageID(ctx context.Context, workspaceID string, smtpMessageID string) (*MessageHistory, error)
 
 	// GetByContact retrieves message history for a specific contact
 	GetByContact(ctx context.Context, workspaceID string, secretKey string, contactEmail string, limit, offset int) ([]*MessageHistory, int, error)

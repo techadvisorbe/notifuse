@@ -83,6 +83,12 @@ type EmailQueuePayload struct {
 	TemplateVersion int                    `json:"template_version"`        // Needed for message_history
 	ListID          string                 `json:"list_id,omitempty"`       // For broadcasts
 	TemplateData    map[string]interface{} `json:"template_data,omitempty"` // For message history logging
+
+	// ContactAutomationID is set only for sends from an exit_on_reply automation.
+	// When present, the worker performs the just-in-time reply guard before sending
+	// and records the recipient-visible Message-ID for reply matching. Absent for
+	// all other sends (the feature is free for everyone else).
+	ContactAutomationID *string `json:"contact_automation_id,omitempty"`
 }
 
 // ToSendEmailProviderRequest converts the payload to a SendEmailProviderRequest

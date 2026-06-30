@@ -215,3 +215,123 @@ func (mr *MockSESClientMockRecorder) UpdateConfigurationSetEventDestinationWithC
 	varargs := append([]interface{}{arg0, arg1}, arg2...)
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateConfigurationSetEventDestinationWithContext", reflect.TypeOf((*MockSESClient)(nil).UpdateConfigurationSetEventDestinationWithContext), varargs...)
 }
+
+// CreateReceiptRuleWithContext mocks base method.
+func (m *MockSESClient) CreateReceiptRuleWithContext(arg0 context.Context, arg1 *ses.CreateReceiptRuleInput, arg2 ...request.Option) (*ses.CreateReceiptRuleOutput, error) {
+	m.ctrl.T.Helper()
+	varargs := []interface{}{arg0, arg1}
+	for _, a := range arg2 {
+		varargs = append(varargs, a)
+	}
+	ret := m.ctrl.Call(m, "CreateReceiptRuleWithContext", varargs...)
+	ret0, _ := ret[0].(*ses.CreateReceiptRuleOutput)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// CreateReceiptRuleWithContext indicates an expected call of CreateReceiptRuleWithContext.
+func (mr *MockSESClientMockRecorder) CreateReceiptRuleWithContext(arg0, arg1 interface{}, arg2 ...interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	varargs := append([]interface{}{arg0, arg1}, arg2...)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateReceiptRuleWithContext", reflect.TypeOf((*MockSESClient)(nil).CreateReceiptRuleWithContext), varargs...)
+}
+
+// CreateReceiptRuleSetWithContext mocks base method.
+func (m *MockSESClient) CreateReceiptRuleSetWithContext(arg0 context.Context, arg1 *ses.CreateReceiptRuleSetInput, arg2 ...request.Option) (*ses.CreateReceiptRuleSetOutput, error) {
+	m.ctrl.T.Helper()
+	varargs := []interface{}{arg0, arg1}
+	for _, a := range arg2 {
+		varargs = append(varargs, a)
+	}
+	ret := m.ctrl.Call(m, "CreateReceiptRuleSetWithContext", varargs...)
+	ret0, _ := ret[0].(*ses.CreateReceiptRuleSetOutput)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// CreateReceiptRuleSetWithContext indicates an expected call of CreateReceiptRuleSetWithContext.
+func (mr *MockSESClientMockRecorder) CreateReceiptRuleSetWithContext(arg0, arg1 interface{}, arg2 ...interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	varargs := append([]interface{}{arg0, arg1}, arg2...)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateReceiptRuleSetWithContext", reflect.TypeOf((*MockSESClient)(nil).CreateReceiptRuleSetWithContext), varargs...)
+}
+
+// DeleteReceiptRuleWithContext mocks base method.
+func (m *MockSESClient) DeleteReceiptRuleWithContext(arg0 context.Context, arg1 *ses.DeleteReceiptRuleInput, arg2 ...request.Option) (*ses.DeleteReceiptRuleOutput, error) {
+	m.ctrl.T.Helper()
+	varargs := []interface{}{arg0, arg1}
+	for _, a := range arg2 {
+		varargs = append(varargs, a)
+	}
+	ret := m.ctrl.Call(m, "DeleteReceiptRuleWithContext", varargs...)
+	ret0, _ := ret[0].(*ses.DeleteReceiptRuleOutput)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// DeleteReceiptRuleWithContext indicates an expected call of DeleteReceiptRuleWithContext.
+func (mr *MockSESClientMockRecorder) DeleteReceiptRuleWithContext(arg0, arg1 interface{}, arg2 ...interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	varargs := append([]interface{}{arg0, arg1}, arg2...)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteReceiptRuleWithContext", reflect.TypeOf((*MockSESClient)(nil).DeleteReceiptRuleWithContext), varargs...)
+}
+
+// DescribeActiveReceiptRuleSetWithContext mocks base method.
+func (m *MockSESClient) DescribeActiveReceiptRuleSetWithContext(arg0 context.Context, arg1 *ses.DescribeActiveReceiptRuleSetInput, arg2 ...request.Option) (*ses.DescribeActiveReceiptRuleSetOutput, error) {
+	m.ctrl.T.Helper()
+	varargs := []interface{}{arg0, arg1}
+	for _, a := range arg2 {
+		varargs = append(varargs, a)
+	}
+	ret := m.ctrl.Call(m, "DescribeActiveReceiptRuleSetWithContext", varargs...)
+	ret0, _ := ret[0].(*ses.DescribeActiveReceiptRuleSetOutput)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// DescribeActiveReceiptRuleSetWithContext indicates an expected call of DescribeActiveReceiptRuleSetWithContext.
+func (mr *MockSESClientMockRecorder) DescribeActiveReceiptRuleSetWithContext(arg0, arg1 interface{}, arg2 ...interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	varargs := append([]interface{}{arg0, arg1}, arg2...)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DescribeActiveReceiptRuleSetWithContext", reflect.TypeOf((*MockSESClient)(nil).DescribeActiveReceiptRuleSetWithContext), varargs...)
+}
+
+// ListIdentitiesWithContext mocks base method.
+func (m *MockSESClient) ListIdentitiesWithContext(arg0 context.Context, arg1 *ses.ListIdentitiesInput, arg2 ...request.Option) (*ses.ListIdentitiesOutput, error) {
+	m.ctrl.T.Helper()
+	varargs := []interface{}{arg0, arg1}
+	for _, a := range arg2 {
+		varargs = append(varargs, a)
+	}
+	ret := m.ctrl.Call(m, "ListIdentitiesWithContext", varargs...)
+	ret0, _ := ret[0].(*ses.ListIdentitiesOutput)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ListIdentitiesWithContext indicates an expected call of ListIdentitiesWithContext.
+func (mr *MockSESClientMockRecorder) ListIdentitiesWithContext(arg0, arg1 interface{}, arg2 ...interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	varargs := append([]interface{}{arg0, arg1}, arg2...)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListIdentitiesWithContext", reflect.TypeOf((*MockSESClient)(nil).ListIdentitiesWithContext), varargs...)
+}
+
+// SetActiveReceiptRuleSetWithContext mocks base method.
+func (m *MockSESClient) SetActiveReceiptRuleSetWithContext(arg0 context.Context, arg1 *ses.SetActiveReceiptRuleSetInput, arg2 ...request.Option) (*ses.SetActiveReceiptRuleSetOutput, error) {
+	m.ctrl.T.Helper()
+	varargs := []interface{}{arg0, arg1}
+	for _, a := range arg2 {
+		varargs = append(varargs, a)
+	}
+	ret := m.ctrl.Call(m, "SetActiveReceiptRuleSetWithContext", varargs...)
+	ret0, _ := ret[0].(*ses.SetActiveReceiptRuleSetOutput)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// SetActiveReceiptRuleSetWithContext indicates an expected call of SetActiveReceiptRuleSetWithContext.
+func (mr *MockSESClientMockRecorder) SetActiveReceiptRuleSetWithContext(arg0, arg1 interface{}, arg2 ...interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	varargs := append([]interface{}{arg0, arg1}, arg2...)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetActiveReceiptRuleSetWithContext", reflect.TypeOf((*MockSESClient)(nil).SetActiveReceiptRuleSetWithContext), varargs...)
+}

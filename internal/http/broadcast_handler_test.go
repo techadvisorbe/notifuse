@@ -141,6 +141,57 @@ func TestHandleList(t *testing.T) {
 		assert.Contains(t, response, "total_count")
 	})
 
+	// Test multi-status filtering and name search
+	t.Run("WithStatusesAndSearch", func(t *testing.T) {
+		mockService.EXPECT().
+			ListBroadcasts(gomock.Any(), gomock.Any()).
+			DoAndReturn(func(_ context.Context, params domain.ListBroadcastsParams) (*domain.BroadcastListResponse, error) {
+				assert.Equal(t, "workspace123", params.WorkspaceID)
+				assert.Equal(t, []domain.BroadcastStatus{
+					domain.BroadcastStatusProcessing,
+					domain.BroadcastStatusPaused,
+				}, params.Statuses)
+				// Multi-status request must not leave a malformed single Status.
+				assert.Equal(t, domain.BroadcastStatus(""), params.Status)
+				assert.Equal(t, "promo", params.Search)
+				return responseWithTotal, nil
+			})
+
+		req := httptest.NewRequest(http.MethodGet, "/api/broadcasts.list?workspace_id=workspace123&status=processing,paused&search=promo", nil)
+		w := httptest.NewRecorder()
+
+		handler.HandleList(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+	})
+
+	// Empty result set must serialize broadcasts as [] (not null)
+	t.Run("EmptyResultSerializesAsArray", func(t *testing.T) {
+		mockService.EXPECT().
+			ListBroadcasts(gomock.Any(), gomock.Any()).
+			Return(&domain.BroadcastListResponse{Broadcasts: nil, TotalCount: 0}, nil)
+
+		req := httptest.NewRequest(http.MethodGet, "/api/broadcasts.list?workspace_id=workspace123&status=draft", nil)
+		w := httptest.NewRecorder()
+
+		handler.HandleList(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		// The raw body must contain an empty array, never null.
+		assert.Contains(t, w.Body.String(), `"broadcasts":[]`)
+		assert.NotContains(t, w.Body.String(), `"broadcasts":null`)
+	})
+
+	// Unknown status filter is rejected with 400 (no service call)
+	t.Run("InvalidStatusParam", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/broadcasts.list?workspace_id=workspace123&status=bogus", nil)
+		w := httptest.NewRecorder()
+
+		handler.HandleList(w, req)
+
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+	})
+
 	// Test invalid pagination parameters
 	t.Run("InvalidPaginationParams", func(t *testing.T) {
 		// Create a test request with invalid pagination parameters
@@ -1985,6 +2036,31 @@ func TestHandleRefreshGlobalFeed(t *testing.T) {
 
 		assert.Equal(t, http.StatusInternalServerError, w.Code)
 	})
+
+	t.Run("PermissionDenied", func(t *testing.T) {
+		mockService.EXPECT().
+			RefreshGlobalFeed(gomock.Any(), gomock.Any()).
+			Return(nil, domain.NewPermissionError(
+				domain.PermissionResourceBroadcasts,
+				domain.PermissionTypeWrite,
+				"Insufficient permissions: write access to broadcasts required",
+			))
+
+		reqBody := domain.RefreshGlobalFeedRequest{
+			WorkspaceID: "workspace123",
+			BroadcastID: "broadcast123",
+			URL:         "https://example.com/feed",
+			Headers:     []domain.DataFeedHeader{},
+		}
+		b, _ := json.Marshal(reqBody)
+		httpReq := httptest.NewRequest(http.MethodPost, "/api/broadcasts.refreshGlobalFeed", bytes.NewBuffer(b))
+		httpReq.Header.Set("Content-Type", "application/json")
+
+		w := httptest.NewRecorder()
+		handler.HandleRefreshGlobalFeed(w, httpReq)
+
+		assert.Equal(t, http.StatusForbidden, w.Code)
+	})
 }
 
 // TestHandleTestRecipientFeed tests the HandleTestRecipientFeed handler
@@ -2224,6 +2300,31 @@ func TestHandleTestRecipientFeed(t *testing.T) {
 
 		assert.Equal(t, http.StatusInternalServerError, w.Code)
 	})
+
+	t.Run("PermissionDenied", func(t *testing.T) {
+		mockService.EXPECT().
+			TestRecipientFeed(gomock.Any(), gomock.Any()).
+			Return(nil, domain.NewPermissionError(
+				domain.PermissionResourceBroadcasts,
+				domain.PermissionTypeWrite,
+				"Insufficient permissions: write access to broadcasts required",
+			))
+
+		reqBody := domain.TestRecipientFeedRequest{
+			WorkspaceID: "workspace123",
+			BroadcastID: "broadcast123",
+			URL:         "https://example.com/recipient-feed",
+			Headers:     []domain.DataFeedHeader{},
+		}
+		b, _ := json.Marshal(reqBody)
+		httpReq := httptest.NewRequest(http.MethodPost, "/api/broadcasts.testRecipientFeed", bytes.NewBuffer(b))
+		httpReq.Header.Set("Content-Type", "application/json")
+
+		w := httptest.NewRecorder()
+		handler.HandleTestRecipientFeed(w, httpReq)
+
+		assert.Equal(t, http.StatusForbidden, w.Code)
+	})
 }
 
 func TestMissingParameterError_Error(t *testing.T) {
@@ -2242,5 +2343,62 @@ func TestMissingParameterError_Error(t *testing.T) {
 		}
 		expected := "Missing parameter: broadcast_id"
 		assert.Equal(t, expected, err.Error())
+	})
+}
+
+// TestBroadcastHandlers_PermissionDenied verifies that broadcast handlers translate
+// a service-layer domain.PermissionError into HTTP 403. The mapping is identical
+// boilerplate across every broadcast handler; these cases cover the distinct request
+// shapes (GET read, POST write, POST send). Per-method authorization itself is proven
+// exhaustively in TestBroadcastService_PermissionEnforcement.
+func TestBroadcastHandlers_PermissionDenied(t *testing.T) {
+	permErr := domain.NewPermissionError(
+		domain.PermissionResourceBroadcasts,
+		domain.PermissionTypeWrite,
+		"Insufficient permissions: write access to broadcasts required",
+	)
+
+	t.Run("List (GET, read)", func(t *testing.T) {
+		handler, mockService, _, _, ctrl := setupBroadcastHandler(t)
+		defer ctrl.Finish()
+
+		mockService.EXPECT().ListBroadcasts(gomock.Any(), gomock.Any()).Return(nil, permErr)
+
+		req := httptest.NewRequest(http.MethodGet, "/api/broadcasts.list?workspace_id=workspace123", nil)
+		w := httptest.NewRecorder()
+		handler.HandleList(w, req)
+		assert.Equal(t, http.StatusForbidden, w.Code)
+	})
+
+	t.Run("Delete (POST, write)", func(t *testing.T) {
+		handler, mockService, _, _, ctrl := setupBroadcastHandler(t)
+		defer ctrl.Finish()
+
+		mockService.EXPECT().DeleteBroadcast(gomock.Any(), gomock.Any()).Return(permErr)
+
+		body, _ := json.Marshal(&domain.DeleteBroadcastRequest{WorkspaceID: "workspace123", ID: "broadcast123"})
+		req := httptest.NewRequest(http.MethodPost, "/api/broadcasts.delete", bytes.NewBuffer(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		handler.HandleDelete(w, req)
+		assert.Equal(t, http.StatusForbidden, w.Code)
+	})
+
+	t.Run("SendToIndividual (POST, send)", func(t *testing.T) {
+		handler, mockService, _, _, ctrl := setupBroadcastHandler(t)
+		defer ctrl.Finish()
+
+		mockService.EXPECT().SendToIndividual(gomock.Any(), gomock.Any()).Return(permErr)
+
+		body, _ := json.Marshal(&domain.SendToIndividualRequest{
+			WorkspaceID:    "workspace123",
+			BroadcastID:    "broadcast123",
+			RecipientEmail: "user@example.com",
+		})
+		req := httptest.NewRequest(http.MethodPost, "/api/broadcasts.sendToIndividual", bytes.NewBuffer(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		handler.HandleSendToIndividual(w, req)
+		assert.Equal(t, http.StatusForbidden, w.Code)
 	})
 }

@@ -1,9 +1,11 @@
 package integration
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -149,7 +151,60 @@ func TestListUnsubscribeHeaders(t *testing.T) {
 			assert.Equal(t, "List-Unsubscribe=One-Click", listUnsubscribePost[0],
 				"List-Unsubscribe-Post should be 'List-Unsubscribe=One-Click'")
 		}
+
+		// --- RFC 8058 one-click round trip (regression test for issue #362) ---
+		// A mail client POSTs the opaque "List-Unsubscribe=One-Click" token to the
+		// List-Unsubscribe URL. The endpoint must accept that body (it previously
+		// rejected it with 400 "Invalid request body") AND the URL must carry the
+		// email_hmac the service verifies (it previously omitted it). This closes the
+		// loop the original test left open: it only checked the headers were *present*,
+		// never that POSTing them actually unsubscribes the contact.
+		require.True(t, hasListUnsubscribe && len(listUnsubscribe) > 0,
+			"need a List-Unsubscribe header to exercise the one-click round trip")
+
+		oneClickResp, err := postOneClickUnsubscribe(t, suite.ServerManager.GetURL(), listUnsubscribe[0],
+			"application/x-www-form-urlencoded", "List-Unsubscribe=One-Click")
+		require.NoError(t, err)
+		defer func() { _ = oneClickResp.Body.Close() }()
+		assert.Equal(t, http.StatusOK, oneClickResp.StatusCode,
+			"RFC 8058 one-click POST must be accepted, not rejected")
+
+		// The contact must actually be unsubscribed from the list in the database.
+		// A mocked service can't catch this; only the real HMAC-verifying service can.
+		contactListRepo := suite.ServerManager.GetApp().GetContactListRepository()
+		got, err := contactListRepo.GetContactListByIDs(context.Background(), workspace.ID, contact.Email, list.ID)
+		require.NoError(t, err)
+		assert.Equal(t, domain.ContactListStatusUnsubscribed, got.Status,
+			"one-click POST must flip contact_lists.status to 'unsubscribed'")
 	})
+}
+
+// postOneClickUnsubscribe replays an RFC 8058 one-click unsubscribe the way a mail
+// client does: it takes the raw List-Unsubscribe header value (<URL>), keeps the
+// path+query, and POSTs to the test server with the given body/content-type. It uses
+// curl's User-Agent (which is in the legacy bot blocklist) to prove a real automated
+// one-click POST is no longer suppressed by bot detection (issue #362).
+func postOneClickUnsubscribe(t *testing.T, baseURL, listUnsubscribeHeader, contentType, body string) (*http.Response, error) {
+	t.Helper()
+	raw := strings.Trim(listUnsubscribeHeader, "<>")
+	u, err := url.Parse(raw)
+	if err != nil {
+		return nil, err
+	}
+	endpoint := baseURL + u.Path
+	if u.RawQuery != "" {
+		endpoint += "?" + u.RawQuery
+	}
+	req, err := http.NewRequest(http.MethodPost, endpoint, strings.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
+	}
+	req.Header.Set("User-Agent", "curl/8.4.0")
+	client := &http.Client{Timeout: 5 * time.Second}
+	return client.Do(req)
 }
 
 // waitForEmailAndGetMessage polls Mailpit for an email to the specified recipient
