@@ -836,7 +836,7 @@ msgid "anytime"
 msgstr "anytime"
 
 #: src/components/transactional/ApiCommandModal.tsx:976
-#: src/pages/TransactionalNotificationsPage.tsx:183
+#: src/pages/TransactionalNotificationsPage.tsx:193
 msgid "API Command"
 msgstr "API Command"
 
@@ -1457,7 +1457,7 @@ msgstr "Bounce Type"
 #: src/components/messages/MessageHistoryTab.tsx:171
 #: src/components/messages/MessageHistoryTable.tsx:298
 #: src/pages/ContactsPage.tsx:385
-#: src/pages/TransactionalNotificationsPage.tsx:254
+#: src/pages/TransactionalNotificationsPage.tsx:264
 msgid "Bounced"
 msgstr "Bounced"
 
@@ -1681,7 +1681,7 @@ msgstr "Button Size"
 #: src/components/templates/CreateTemplateDrawer.tsx:503
 #: src/components/templates/SendTemplateModal.tsx:268
 #: src/components/templates/TemplateTranslationsTab.tsx:254
-#: src/components/transactional/ImportExportTransactional.tsx:290
+#: src/components/transactional/ImportExportTransactional.tsx:414
 #: src/components/transactional/UpsertTransactionalNotificationDrawer.tsx:173
 #: src/pages/BroadcastsPage.tsx:525
 #: src/pages/BroadcastsPage.tsx:547
@@ -1689,7 +1689,7 @@ msgstr "Button Size"
 #: src/pages/BroadcastsPage.tsx:1592
 #: src/pages/ListsPage.tsx:318
 #: src/pages/TemplatesPage.tsx:310
-#: src/pages/TransactionalNotificationsPage.tsx:151
+#: src/pages/TransactionalNotificationsPage.tsx:161
 msgid "Cancel"
 msgstr "Cancel"
 
@@ -2337,7 +2337,7 @@ msgstr "Core Fields"
 msgid "Cost"
 msgstr "Cost"
 
-#: src/components/transactional/ImportExportTransactional.tsx:317
+#: src/components/transactional/ImportExportTransactional.tsx:441
 msgid "Could not parse the file. Please select a valid JSON export."
 msgstr "Could not parse the file. Please select a valid JSON export."
 
@@ -2442,8 +2442,8 @@ msgid "Create New Theme - {0}"
 msgstr "Create New Theme - {0}"
 
 #: src/components/transactional/UpsertTransactionalNotificationDrawer.tsx:192
-#: src/pages/TransactionalNotificationsPage.tsx:424
-#: src/pages/TransactionalNotificationsPage.tsx:491
+#: src/pages/TransactionalNotificationsPage.tsx:448
+#: src/pages/TransactionalNotificationsPage.tsx:517
 msgid "Create Notification"
 msgstr "Create Notification"
 
@@ -2488,7 +2488,7 @@ msgstr "Create Your First Category"
 msgid "Create your first list to get started"
 msgstr "Create your first list to get started"
 
-#: src/pages/TransactionalNotificationsPage.tsx:463
+#: src/pages/TransactionalNotificationsPage.tsx:489
 msgid "Create your first notification to get started"
 msgstr "Create your first notification to get started"
 
@@ -2973,7 +2973,7 @@ msgstr "Delete Template"
 msgid "Delete template?"
 msgstr "Delete template?"
 
-#: src/pages/TransactionalNotificationsPage.tsx:147
+#: src/pages/TransactionalNotificationsPage.tsx:157
 msgid "Delete the notification?"
 msgstr "Delete the notification?"
 
@@ -3030,7 +3030,7 @@ msgstr "delivered"
 #: src/components/webhooks/InboundWebhookEventsTab.tsx:67
 #: src/components/webhooks/OutgoingWebhooksTab.tsx:78
 #: src/components/webhooks/OutgoingWebhooksTab.tsx:230
-#: src/pages/TransactionalNotificationsPage.tsx:220
+#: src/pages/TransactionalNotificationsPage.tsx:230
 msgid "Delivered"
 msgstr "Delivered"
 
@@ -3047,7 +3047,7 @@ msgstr "Describe this image..."
 #: src/components/lists/ListDrawer.tsx:206
 #: src/components/transactional/UpsertTransactionalNotificationDrawer.tsx:299
 #: src/pages/ListsPage.tsx:269
-#: src/pages/TransactionalNotificationsPage.tsx:269
+#: src/pages/TransactionalNotificationsPage.tsx:279
 msgid "Description"
 msgstr "Description"
 
@@ -3310,7 +3310,7 @@ msgstr "edit"
 #: src/components/settings/Integrations.tsx:1441
 #: src/components/settings/WebhookCard.tsx:245
 #: src/pages/ContactsPage.tsx:928
-#: src/pages/TransactionalNotificationsPage.tsx:159
+#: src/pages/TransactionalNotificationsPage.tsx:169
 msgid "Edit"
 msgstr "Edit"
 
@@ -3887,7 +3887,7 @@ msgstr "Error loading automations"
 #: src/components/messages/MessageHistoryTab.tsx:603
 #: src/components/webhooks/InboundWebhookEventsTab.tsx:492
 #: src/components/webhooks/OutgoingWebhooksTab.tsx:433
-#: src/pages/TransactionalNotificationsPage.tsx:376
+#: src/pages/TransactionalNotificationsPage.tsx:391
 msgid "Error loading data"
 msgstr "Error loading data"
 
@@ -4005,7 +4005,7 @@ msgstr "Expires:"
 #: src/components/contacts/ExportContactsModal.tsx:323
 #: src/components/email_builder/MjmlCodeEditor.tsx:627
 #: src/components/templates/ImportExportButton.tsx:416
-#: src/components/transactional/ImportExportTransactional.tsx:121
+#: src/components/transactional/ImportExportTransactional.tsx:139
 #: src/pages/ContactsPage.tsx:1011
 msgid "Export"
 msgstr "Export"
@@ -4021,6 +4021,16 @@ msgstr "Export HTML"
 #: src/components/email_builder/MjmlCodeEditor.tsx:631
 msgid "Export MJML"
 msgstr "Export MJML"
+
+#. placeholder {0}: selected.length
+#: src/components/transactional/ImportExportTransactional.tsx:195
+msgid "Export selected ({0})"
+msgstr "Export selected ({0})"
+
+#. placeholder {0}: entries.length
+#: src/components/transactional/ImportExportTransactional.tsx:182
+msgid "Exported {0} notifications"
+msgstr "Exported {0} notifications"
 
 #: src/components/contacts/ExportContactsModal.tsx:340
 msgid "Exporting all contacts"
@@ -4061,7 +4071,7 @@ msgstr "failed"
 #: src/pages/BroadcastsPage.tsx:352
 #: src/pages/BroadcastsPage.tsx:419
 #: src/pages/BroadcastsPage.tsx:1445
-#: src/pages/TransactionalNotificationsPage.tsx:237
+#: src/pages/TransactionalNotificationsPage.tsx:247
 msgid "Failed"
 msgstr "Failed"
 
@@ -4181,7 +4191,7 @@ msgstr "Failed to delete invitation"
 msgid "Failed to delete list"
 msgstr "Failed to delete list"
 
-#: src/pages/TransactionalNotificationsPage.tsx:359
+#: src/pages/TransactionalNotificationsPage.tsx:374
 msgid "Failed to delete notification"
 msgstr "Failed to delete notification"
 
@@ -4230,9 +4240,13 @@ msgstr "Failed to export JSON"
 msgid "Failed to export MJML"
 msgstr "Failed to export MJML"
 
-#: src/components/transactional/ImportExportTransactional.tsx:114
+#: src/components/transactional/ImportExportTransactional.tsx:132
 msgid "Failed to export notification"
 msgstr "Failed to export notification"
+
+#: src/components/transactional/ImportExportTransactional.tsx:186
+msgid "Failed to export notifications"
+msgstr "Failed to export notifications"
 
 #. placeholder {0}: response.error
 #: src/components/broadcasts/GlobalFeedSettings.tsx:61
@@ -4268,8 +4282,8 @@ msgid "Failed to import MJML template. Please check the MJML syntax."
 msgstr "Failed to import MJML template. Please check the MJML syntax."
 
 #: src/components/transactional/ImportExportTransactional.tsx:230
-msgid "Failed to import notification"
-msgstr "Failed to import notification"
+#~ msgid "Failed to import notification"
+#~ msgstr "Failed to import notification"
 
 #: src/components/templates/ImportExportButton.tsx:191
 msgid "Failed to import template. Please check the file format."
@@ -4321,13 +4335,13 @@ msgstr "Failed to publish post"
 msgid "Failed to publish theme"
 msgstr "Failed to publish theme"
 
-#: src/components/transactional/ImportExportTransactional.tsx:257
+#: src/components/transactional/ImportExportTransactional.tsx:388
 msgid "Failed to read existing data"
 msgstr "Failed to read existing data"
 
 #: src/components/email_builder/MjmlCodeEditor.tsx:553
 #: src/components/templates/ImportExportButton.tsx:197
-#: src/components/transactional/ImportExportTransactional.tsx:321
+#: src/components/transactional/ImportExportTransactional.tsx:445
 msgid "Failed to read the file"
 msgstr "Failed to read the file"
 
@@ -5124,7 +5138,7 @@ msgstr "Icon/Favicon URL"
 #: src/components/messages/MessageHistoryTable.tsx:211
 #: src/components/webhooks/InboundWebhookEventsTab.tsx:355
 #: src/pages/ListsPage.tsx:267
-#: src/pages/TransactionalNotificationsPage.tsx:267
+#: src/pages/TransactionalNotificationsPage.tsx:277
 msgid "ID"
 msgstr "ID"
 
@@ -5240,7 +5254,7 @@ msgstr "Implicit TLS (SMTPS)"
 
 #: src/components/email_builder/MjmlCodeEditor.tsx:615
 #: src/components/templates/ImportExportButton.tsx:387
-#: src/components/transactional/ImportExportTransactional.tsx:329
+#: src/components/transactional/ImportExportTransactional.tsx:453
 #: src/pages/ContactsPage.tsx:1004
 msgid "Import"
 msgstr "Import"
@@ -5271,8 +5285,8 @@ msgstr "Import Contacts to List"
 msgid "Import Custom Font"
 msgstr "Import Custom Font"
 
-#: src/components/transactional/ImportExportTransactional.tsx:307
-#: src/components/transactional/ImportExportTransactional.tsx:316
+#: src/components/transactional/ImportExportTransactional.tsx:431
+#: src/components/transactional/ImportExportTransactional.tsx:440
 msgid "Import Failed"
 msgstr "Import Failed"
 
@@ -5318,6 +5332,10 @@ msgstr "Imported {0} contacts"
 #: src/components/contacts/ContactsCsvUploadDrawer.tsx:691
 msgid "Imported {0} contacts ({1} failed, see details below)"
 msgstr "Imported {0} contacts ({1} failed, see details below)"
+
+#: src/components/transactional/ImportExportTransactional.tsx:339
+msgid "Imported {succeeded} notification(s)"
+msgstr "Imported {succeeded} notification(s)"
 
 #: src/components/email_builder/ui/FontStyleInput.tsx:87
 msgid "Imported Fonts"
@@ -5474,7 +5492,7 @@ msgstr "Invalid email format"
 msgid "Invalid email: {0}"
 msgstr "Invalid email: {0}"
 
-#: src/components/transactional/ImportExportTransactional.tsx:308
+#: src/components/transactional/ImportExportTransactional.tsx:432
 msgid "Invalid file format"
 msgstr "Invalid file format"
 
@@ -5970,7 +5988,7 @@ msgstr "Loading webhook status..."
 #: src/pages/ListsPage.tsx:149
 #: src/pages/LogsPage.tsx:18
 #: src/pages/TemplatesPage.tsx:147
-#: src/pages/TransactionalNotificationsPage.tsx:386
+#: src/pages/TransactionalNotificationsPage.tsx:401
 msgid "Loading..."
 msgstr "Loading..."
 
@@ -6034,7 +6052,7 @@ msgstr "Manage your workspace members"
 
 #. placeholder {0}: integration.name
 #. placeholder {1}: integration.type
-#: src/pages/TransactionalNotificationsPage.tsx:136
+#: src/pages/TransactionalNotificationsPage.tsx:146
 msgid "Managed by {0} ({1} integration)"
 msgstr "Managed by {0} ({1} integration)"
 
@@ -6626,7 +6644,7 @@ msgstr "No themes yet"
 msgid "No timeline events found for this contact"
 msgstr "No timeline events found for this contact"
 
-#: src/pages/TransactionalNotificationsPage.tsx:461
+#: src/pages/TransactionalNotificationsPage.tsx:487
 msgid "No transactional notifications found"
 msgstr "No transactional notifications found"
 
@@ -6729,8 +6747,8 @@ msgid "Notes"
 msgstr "Notes"
 
 #. placeholder {0}: existingNotification.name
-#. placeholder {1}: bundle.notification.id
-#: src/components/transactional/ImportExportTransactional.tsx:265
+#. placeholder {1}: entry.notification.id
+#: src/components/transactional/ImportExportTransactional.tsx:371
 msgid "Notification \"{0}\" ({1})"
 msgstr "Notification \"{0}\" ({1})"
 
@@ -6738,13 +6756,13 @@ msgstr "Notification \"{0}\" ({1})"
 msgid "Notification created successfully"
 msgstr "Notification created successfully"
 
-#: src/components/transactional/ImportExportTransactional.tsx:111
+#: src/components/transactional/ImportExportTransactional.tsx:129
 msgid "Notification exported successfully"
 msgstr "Notification exported successfully"
 
 #: src/components/transactional/ImportExportTransactional.tsx:227
-msgid "Notification imported successfully"
-msgstr "Notification imported successfully"
+#~ msgid "Notification imported successfully"
+#~ msgstr "Notification imported successfully"
 
 #: src/components/transactional/UpsertTransactionalNotificationDrawer.tsx:255
 msgid "Notification name"
@@ -6973,7 +6991,7 @@ msgstr "Override the default sender name for this test email"
 msgid "Override the workspace default email provider for this node"
 msgstr "Override the workspace default email provider for this node"
 
-#: src/components/transactional/ImportExportTransactional.tsx:277
+#: src/components/transactional/ImportExportTransactional.tsx:400
 msgid "Overwrite existing data?"
 msgstr "Overwrite existing data?"
 
@@ -7499,7 +7517,7 @@ msgstr "Preview Mode Required"
 msgid "Preview Results"
 msgstr "Preview Results"
 
-#: src/pages/TransactionalNotificationsPage.tsx:87
+#: src/pages/TransactionalNotificationsPage.tsx:89
 msgid "Preview template"
 msgstr "Preview template"
 
@@ -8772,7 +8790,7 @@ msgstr "sent"
 #: src/components/messages/MessageHistoryTab.tsx:103
 #: src/components/messages/MessageHistoryTable.tsx:258
 #: src/pages/BroadcastsPage.tsx:1444
-#: src/pages/TransactionalNotificationsPage.tsx:203
+#: src/pages/TransactionalNotificationsPage.tsx:213
 msgid "Sent"
 msgstr "Sent"
 
@@ -9150,6 +9168,10 @@ msgstr "Social Share Title"
 msgid "Solid"
 msgstr "Solid"
 
+#: src/components/transactional/ImportExportTransactional.tsx:343
+msgid "Some imports failed"
+msgstr "Some imports failed"
+
 #: src/components/templates/SendTemplateModal.tsx:150
 msgid "Something went wrong"
 msgstr "Something went wrong"
@@ -9493,8 +9515,8 @@ msgid "Template"
 msgstr "Template"
 
 #. placeholder {0}: existingTemplate.name
-#. placeholder {1}: bundle.template!.id
-#: src/components/transactional/ImportExportTransactional.tsx:268
+#. placeholder {1}: entry.template.id
+#: src/components/transactional/ImportExportTransactional.tsx:382
 msgid "Template \"{0}\" ({1})"
 msgstr "Template \"{0}\" ({1})"
 
@@ -9600,7 +9622,7 @@ msgstr "Templating markup allowed"
 #: src/components/broadcasts/GlobalFeedSettings.tsx:122
 #: src/components/broadcasts/RecipientFeedSettings.tsx:130
 #: src/components/settings/Integrations.tsx:360
-#: src/pages/TransactionalNotificationsPage.tsx:177
+#: src/pages/TransactionalNotificationsPage.tsx:187
 msgid "Test"
 msgstr "Test"
 
@@ -9783,7 +9805,7 @@ msgstr "The email body must contain a JSON payload with your notification data. 
 msgid "The email body must contain valid JSON matching the format above"
 msgstr "The email body must contain valid JSON matching the format above"
 
-#: src/components/transactional/ImportExportTransactional.tsx:281
+#: src/components/transactional/ImportExportTransactional.tsx:405
 msgid "The following already exist and will be updated:"
 msgstr "The following already exist and will be updated:"
 
@@ -9914,7 +9936,7 @@ msgstr "This action will unsubscribe {0} contact(s)"
 msgid "This appears in browser tabs when viewing the email in a web browser and in some email clients. It's typically the same as or related to your email subject line."
 msgstr "This appears in browser tabs when viewing the email in a web browser and in some email clients. It's typically the same as or related to your email subject line."
 
-#: src/pages/TransactionalNotificationsPage.tsx:148
+#: src/pages/TransactionalNotificationsPage.tsx:158
 msgid "This cannot be undone."
 msgstr "This cannot be undone."
 
@@ -10228,11 +10250,11 @@ msgstr "Transactional Emails"
 msgid "Transactional ID"
 msgstr "Transactional ID"
 
-#: src/pages/TransactionalNotificationsPage.tsx:353
+#: src/pages/TransactionalNotificationsPage.tsx:368
 msgid "Transactional notification deleted successfully"
 msgstr "Transactional notification deleted successfully"
 
-#: src/pages/TransactionalNotificationsPage.tsx:392
+#: src/pages/TransactionalNotificationsPage.tsx:407
 msgid "Transactional Notifications"
 msgstr "Transactional Notifications"
 
@@ -11065,7 +11087,7 @@ msgid "Yes, delete"
 msgstr "Yes, delete"
 
 #: src/pages/TemplatesPage.tsx:308
-#: src/pages/TransactionalNotificationsPage.tsx:150
+#: src/pages/TransactionalNotificationsPage.tsx:160
 msgid "Yes, Delete"
 msgstr "Yes, Delete"
 
@@ -11082,7 +11104,7 @@ msgstr "Yes, resume"
 msgid "Yes, Select Winner"
 msgstr "Yes, Select Winner"
 
-#: src/components/transactional/ImportExportTransactional.tsx:289
+#: src/components/transactional/ImportExportTransactional.tsx:413
 msgid "Yes, Update"
 msgstr "Yes, Update"
 
@@ -11141,10 +11163,10 @@ msgstr "You don't have write permission for lists"
 msgid "You don't have write permission for templates"
 msgstr "You don't have write permission for templates"
 
-#: src/pages/TransactionalNotificationsPage.tsx:403
-#: src/pages/TransactionalNotificationsPage.tsx:417
-#: src/pages/TransactionalNotificationsPage.tsx:470
-#: src/pages/TransactionalNotificationsPage.tsx:484
+#: src/pages/TransactionalNotificationsPage.tsx:427
+#: src/pages/TransactionalNotificationsPage.tsx:441
+#: src/pages/TransactionalNotificationsPage.tsx:496
+#: src/pages/TransactionalNotificationsPage.tsx:510
 msgid "You don't have write permission for transactional notifications"
 msgstr "You don't have write permission for transactional notifications"
 

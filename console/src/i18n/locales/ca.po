@@ -836,7 +836,7 @@ msgid "anytime"
 msgstr "en qualsevol moment"
 
 #: src/components/transactional/ApiCommandModal.tsx:976
-#: src/pages/TransactionalNotificationsPage.tsx:183
+#: src/pages/TransactionalNotificationsPage.tsx:193
 msgid "API Command"
 msgstr "Comanda API"
 
@@ -1457,7 +1457,7 @@ msgstr "Tipus de rebot"
 #: src/components/messages/MessageHistoryTab.tsx:171
 #: src/components/messages/MessageHistoryTable.tsx:298
 #: src/pages/ContactsPage.tsx:385
-#: src/pages/TransactionalNotificationsPage.tsx:254
+#: src/pages/TransactionalNotificationsPage.tsx:264
 msgid "Bounced"
 msgstr "Rebotat"
 
@@ -1681,7 +1681,7 @@ msgstr "Mida del botó"
 #: src/components/templates/CreateTemplateDrawer.tsx:503
 #: src/components/templates/SendTemplateModal.tsx:268
 #: src/components/templates/TemplateTranslationsTab.tsx:254
-#: src/components/transactional/ImportExportTransactional.tsx:290
+#: src/components/transactional/ImportExportTransactional.tsx:414
 #: src/components/transactional/UpsertTransactionalNotificationDrawer.tsx:173
 #: src/pages/BroadcastsPage.tsx:525
 #: src/pages/BroadcastsPage.tsx:547
@@ -1689,7 +1689,7 @@ msgstr "Mida del botó"
 #: src/pages/BroadcastsPage.tsx:1592
 #: src/pages/ListsPage.tsx:318
 #: src/pages/TemplatesPage.tsx:310
-#: src/pages/TransactionalNotificationsPage.tsx:151
+#: src/pages/TransactionalNotificationsPage.tsx:161
 msgid "Cancel"
 msgstr "Cancel·lar"
 
@@ -2337,7 +2337,7 @@ msgstr "Camps principals"
 msgid "Cost"
 msgstr "Cost"
 
-#: src/components/transactional/ImportExportTransactional.tsx:317
+#: src/components/transactional/ImportExportTransactional.tsx:441
 msgid "Could not parse the file. Please select a valid JSON export."
 msgstr ""
 
@@ -2442,8 +2442,8 @@ msgid "Create New Theme - {0}"
 msgstr "Crear nou tema - {0}"
 
 #: src/components/transactional/UpsertTransactionalNotificationDrawer.tsx:192
-#: src/pages/TransactionalNotificationsPage.tsx:424
-#: src/pages/TransactionalNotificationsPage.tsx:491
+#: src/pages/TransactionalNotificationsPage.tsx:448
+#: src/pages/TransactionalNotificationsPage.tsx:517
 msgid "Create Notification"
 msgstr "Crear notificació"
 
@@ -2488,7 +2488,7 @@ msgstr "Creeu la vostra primera categoria"
 msgid "Create your first list to get started"
 msgstr "Creeu la vostra primera llista per començar"
 
-#: src/pages/TransactionalNotificationsPage.tsx:463
+#: src/pages/TransactionalNotificationsPage.tsx:489
 msgid "Create your first notification to get started"
 msgstr "Creeu la vostra primera notificació per començar"
 
@@ -2973,7 +2973,7 @@ msgstr "Eliminar plantilla"
 msgid "Delete template?"
 msgstr "Eliminar plantilla?"
 
-#: src/pages/TransactionalNotificationsPage.tsx:147
+#: src/pages/TransactionalNotificationsPage.tsx:157
 msgid "Delete the notification?"
 msgstr "Eliminar la notificació?"
 
@@ -3030,7 +3030,7 @@ msgstr "Lliurat"
 #: src/components/webhooks/InboundWebhookEventsTab.tsx:67
 #: src/components/webhooks/OutgoingWebhooksTab.tsx:78
 #: src/components/webhooks/OutgoingWebhooksTab.tsx:230
-#: src/pages/TransactionalNotificationsPage.tsx:220
+#: src/pages/TransactionalNotificationsPage.tsx:230
 msgid "Delivered"
 msgstr "Lliurat"
 
@@ -3047,7 +3047,7 @@ msgstr "Descriviu aquesta imatge..."
 #: src/components/lists/ListDrawer.tsx:206
 #: src/components/transactional/UpsertTransactionalNotificationDrawer.tsx:299
 #: src/pages/ListsPage.tsx:269
-#: src/pages/TransactionalNotificationsPage.tsx:269
+#: src/pages/TransactionalNotificationsPage.tsx:279
 msgid "Description"
 msgstr "Descripció"
 
@@ -3310,7 +3310,7 @@ msgstr "Editar"
 #: src/components/settings/Integrations.tsx:1441
 #: src/components/settings/WebhookCard.tsx:245
 #: src/pages/ContactsPage.tsx:928
-#: src/pages/TransactionalNotificationsPage.tsx:159
+#: src/pages/TransactionalNotificationsPage.tsx:169
 msgid "Edit"
 msgstr "Editar"
 
@@ -3887,7 +3887,7 @@ msgstr "Error en carregar les automatitzacions"
 #: src/components/messages/MessageHistoryTab.tsx:603
 #: src/components/webhooks/InboundWebhookEventsTab.tsx:492
 #: src/components/webhooks/OutgoingWebhooksTab.tsx:433
-#: src/pages/TransactionalNotificationsPage.tsx:376
+#: src/pages/TransactionalNotificationsPage.tsx:391
 msgid "Error loading data"
 msgstr "Error en carregar les dades"
 
@@ -4005,7 +4005,7 @@ msgstr "Caduca:"
 #: src/components/contacts/ExportContactsModal.tsx:323
 #: src/components/email_builder/MjmlCodeEditor.tsx:627
 #: src/components/templates/ImportExportButton.tsx:416
-#: src/components/transactional/ImportExportTransactional.tsx:121
+#: src/components/transactional/ImportExportTransactional.tsx:139
 #: src/pages/ContactsPage.tsx:1011
 msgid "Export"
 msgstr "Exportar"
@@ -4020,6 +4020,16 @@ msgstr ""
 
 #: src/components/email_builder/MjmlCodeEditor.tsx:631
 msgid "Export MJML"
+msgstr ""
+
+#. placeholder {0}: selected.length
+#: src/components/transactional/ImportExportTransactional.tsx:195
+msgid "Export selected ({0})"
+msgstr ""
+
+#. placeholder {0}: entries.length
+#: src/components/transactional/ImportExportTransactional.tsx:182
+msgid "Exported {0} notifications"
 msgstr ""
 
 #: src/components/contacts/ExportContactsModal.tsx:340
@@ -4061,7 +4071,7 @@ msgstr "Fallat"
 #: src/pages/BroadcastsPage.tsx:352
 #: src/pages/BroadcastsPage.tsx:419
 #: src/pages/BroadcastsPage.tsx:1445
-#: src/pages/TransactionalNotificationsPage.tsx:237
+#: src/pages/TransactionalNotificationsPage.tsx:247
 msgid "Failed"
 msgstr "Fallat"
 
@@ -4181,7 +4191,7 @@ msgstr "No s'ha pogut eliminar la invitació"
 msgid "Failed to delete list"
 msgstr "No s'ha pogut eliminar la llista"
 
-#: src/pages/TransactionalNotificationsPage.tsx:359
+#: src/pages/TransactionalNotificationsPage.tsx:374
 msgid "Failed to delete notification"
 msgstr "No s'ha pogut eliminar la notificació"
 
@@ -4230,8 +4240,12 @@ msgstr "No s'ha pogut exportar JSON"
 msgid "Failed to export MJML"
 msgstr "No s'ha pogut exportar MJML"
 
-#: src/components/transactional/ImportExportTransactional.tsx:114
+#: src/components/transactional/ImportExportTransactional.tsx:132
 msgid "Failed to export notification"
+msgstr ""
+
+#: src/components/transactional/ImportExportTransactional.tsx:186
+msgid "Failed to export notifications"
 msgstr ""
 
 #. placeholder {0}: response.error
@@ -4268,8 +4282,8 @@ msgid "Failed to import MJML template. Please check the MJML syntax."
 msgstr "No s'ha pogut importar la plantilla MJML. Si us plau, comproveu la sintaxi MJML."
 
 #: src/components/transactional/ImportExportTransactional.tsx:230
-msgid "Failed to import notification"
-msgstr ""
+#~ msgid "Failed to import notification"
+#~ msgstr ""
 
 #: src/components/templates/ImportExportButton.tsx:191
 msgid "Failed to import template. Please check the file format."
@@ -4321,13 +4335,13 @@ msgstr "No s'ha pogut publicar la publicació"
 msgid "Failed to publish theme"
 msgstr "No s'ha pogut publicar el tema"
 
-#: src/components/transactional/ImportExportTransactional.tsx:257
+#: src/components/transactional/ImportExportTransactional.tsx:388
 msgid "Failed to read existing data"
 msgstr ""
 
 #: src/components/email_builder/MjmlCodeEditor.tsx:553
 #: src/components/templates/ImportExportButton.tsx:197
-#: src/components/transactional/ImportExportTransactional.tsx:321
+#: src/components/transactional/ImportExportTransactional.tsx:445
 msgid "Failed to read the file"
 msgstr "No s'ha pogut llegir el fitxer"
 
@@ -5124,7 +5138,7 @@ msgstr "URL d'icona/favicon"
 #: src/components/messages/MessageHistoryTable.tsx:211
 #: src/components/webhooks/InboundWebhookEventsTab.tsx:355
 #: src/pages/ListsPage.tsx:267
-#: src/pages/TransactionalNotificationsPage.tsx:267
+#: src/pages/TransactionalNotificationsPage.tsx:277
 msgid "ID"
 msgstr "ID"
 
@@ -5240,7 +5254,7 @@ msgstr ""
 
 #: src/components/email_builder/MjmlCodeEditor.tsx:615
 #: src/components/templates/ImportExportButton.tsx:387
-#: src/components/transactional/ImportExportTransactional.tsx:329
+#: src/components/transactional/ImportExportTransactional.tsx:453
 #: src/pages/ContactsPage.tsx:1004
 msgid "Import"
 msgstr "Importar"
@@ -5271,8 +5285,8 @@ msgstr "Importar contactes a la llista"
 msgid "Import Custom Font"
 msgstr "Importar font personalitzada"
 
-#: src/components/transactional/ImportExportTransactional.tsx:307
-#: src/components/transactional/ImportExportTransactional.tsx:316
+#: src/components/transactional/ImportExportTransactional.tsx:431
+#: src/components/transactional/ImportExportTransactional.tsx:440
 msgid "Import Failed"
 msgstr ""
 
@@ -5318,6 +5332,10 @@ msgstr "Importats {0} contactes"
 #: src/components/contacts/ContactsCsvUploadDrawer.tsx:691
 msgid "Imported {0} contacts ({1} failed, see details below)"
 msgstr "Importats {0} contactes ({1} fallats, vegeu detalls a continuació)"
+
+#: src/components/transactional/ImportExportTransactional.tsx:339
+msgid "Imported {succeeded} notification(s)"
+msgstr ""
 
 #: src/components/email_builder/ui/FontStyleInput.tsx:87
 msgid "Imported Fonts"
@@ -5474,7 +5492,7 @@ msgstr "Format de correu invàlid"
 msgid "Invalid email: {0}"
 msgstr ""
 
-#: src/components/transactional/ImportExportTransactional.tsx:308
+#: src/components/transactional/ImportExportTransactional.tsx:432
 msgid "Invalid file format"
 msgstr ""
 
@@ -5970,7 +5988,7 @@ msgstr "Carregant estat del webhook..."
 #: src/pages/ListsPage.tsx:149
 #: src/pages/LogsPage.tsx:18
 #: src/pages/TemplatesPage.tsx:147
-#: src/pages/TransactionalNotificationsPage.tsx:386
+#: src/pages/TransactionalNotificationsPage.tsx:401
 msgid "Loading..."
 msgstr "Carregant..."
 
@@ -6034,7 +6052,7 @@ msgstr "Gestioneu els membres del vostre espai de treball"
 
 #. placeholder {0}: integration.name
 #. placeholder {1}: integration.type
-#: src/pages/TransactionalNotificationsPage.tsx:136
+#: src/pages/TransactionalNotificationsPage.tsx:146
 msgid "Managed by {0} ({1} integration)"
 msgstr "Gestionat per {0} (integració {1})"
 
@@ -6626,7 +6644,7 @@ msgstr "Encara no hi ha temes"
 msgid "No timeline events found for this contact"
 msgstr "No s'han trobat esdeveniments de cronologia per a aquest contacte"
 
-#: src/pages/TransactionalNotificationsPage.tsx:461
+#: src/pages/TransactionalNotificationsPage.tsx:487
 msgid "No transactional notifications found"
 msgstr "No s'han trobat notificacions transaccionals"
 
@@ -6729,8 +6747,8 @@ msgid "Notes"
 msgstr "Notes"
 
 #. placeholder {0}: existingNotification.name
-#. placeholder {1}: bundle.notification.id
-#: src/components/transactional/ImportExportTransactional.tsx:265
+#. placeholder {1}: entry.notification.id
+#: src/components/transactional/ImportExportTransactional.tsx:371
 msgid "Notification \"{0}\" ({1})"
 msgstr ""
 
@@ -6738,13 +6756,13 @@ msgstr ""
 msgid "Notification created successfully"
 msgstr "Notificació creada correctament"
 
-#: src/components/transactional/ImportExportTransactional.tsx:111
+#: src/components/transactional/ImportExportTransactional.tsx:129
 msgid "Notification exported successfully"
 msgstr ""
 
 #: src/components/transactional/ImportExportTransactional.tsx:227
-msgid "Notification imported successfully"
-msgstr ""
+#~ msgid "Notification imported successfully"
+#~ msgstr ""
 
 #: src/components/transactional/UpsertTransactionalNotificationDrawer.tsx:255
 msgid "Notification name"
@@ -6973,7 +6991,7 @@ msgstr "Anul·lar el nom de remitent per defecte per a aquest correu de prova"
 msgid "Override the workspace default email provider for this node"
 msgstr ""
 
-#: src/components/transactional/ImportExportTransactional.tsx:277
+#: src/components/transactional/ImportExportTransactional.tsx:400
 msgid "Overwrite existing data?"
 msgstr ""
 
@@ -7499,7 +7517,7 @@ msgstr "Cal mode de vista prèvia"
 msgid "Preview Results"
 msgstr "Resultats de la vista prèvia"
 
-#: src/pages/TransactionalNotificationsPage.tsx:87
+#: src/pages/TransactionalNotificationsPage.tsx:89
 msgid "Preview template"
 msgstr "Previsualitzar plantilla"
 
@@ -8772,7 +8790,7 @@ msgstr "Enviat"
 #: src/components/messages/MessageHistoryTab.tsx:103
 #: src/components/messages/MessageHistoryTable.tsx:258
 #: src/pages/BroadcastsPage.tsx:1444
-#: src/pages/TransactionalNotificationsPage.tsx:203
+#: src/pages/TransactionalNotificationsPage.tsx:213
 msgid "Sent"
 msgstr "Enviat"
 
@@ -9150,6 +9168,10 @@ msgstr "Títol per compartir a xarxes socials"
 msgid "Solid"
 msgstr "Sòlid"
 
+#: src/components/transactional/ImportExportTransactional.tsx:343
+msgid "Some imports failed"
+msgstr ""
+
 #: src/components/templates/SendTemplateModal.tsx:150
 msgid "Something went wrong"
 msgstr "Alguna cosa ha anat malament"
@@ -9493,8 +9515,8 @@ msgid "Template"
 msgstr "Plantilla"
 
 #. placeholder {0}: existingTemplate.name
-#. placeholder {1}: bundle.template!.id
-#: src/components/transactional/ImportExportTransactional.tsx:268
+#. placeholder {1}: entry.template.id
+#: src/components/transactional/ImportExportTransactional.tsx:382
 msgid "Template \"{0}\" ({1})"
 msgstr ""
 
@@ -9600,7 +9622,7 @@ msgstr "Marcatge de plantilles permès"
 #: src/components/broadcasts/GlobalFeedSettings.tsx:122
 #: src/components/broadcasts/RecipientFeedSettings.tsx:130
 #: src/components/settings/Integrations.tsx:360
-#: src/pages/TransactionalNotificationsPage.tsx:177
+#: src/pages/TransactionalNotificationsPage.tsx:187
 msgid "Test"
 msgstr "Provar"
 
@@ -9783,7 +9805,7 @@ msgstr "El cos del correu ha de contenir una càrrega útil JSON amb les dades d
 msgid "The email body must contain valid JSON matching the format above"
 msgstr "El cos del correu ha de contenir JSON vàlid que coincideixi amb el format anterior"
 
-#: src/components/transactional/ImportExportTransactional.tsx:281
+#: src/components/transactional/ImportExportTransactional.tsx:405
 msgid "The following already exist and will be updated:"
 msgstr ""
 
@@ -9914,7 +9936,7 @@ msgstr "Aquesta acció cancel·larà la subscripció de {0} contacte(s)"
 msgid "This appears in browser tabs when viewing the email in a web browser and in some email clients. It's typically the same as or related to your email subject line."
 msgstr "Això apareix a les pestanyes del navegador quan es visualitza el correu en un navegador web i en alguns clients de correu. Normalment és el mateix o està relacionat amb l'assumpte del correu."
 
-#: src/pages/TransactionalNotificationsPage.tsx:148
+#: src/pages/TransactionalNotificationsPage.tsx:158
 msgid "This cannot be undone."
 msgstr "Això no es pot desfer."
 
@@ -10228,11 +10250,11 @@ msgstr "Correus transaccionals"
 msgid "Transactional ID"
 msgstr "ID transaccional"
 
-#: src/pages/TransactionalNotificationsPage.tsx:353
+#: src/pages/TransactionalNotificationsPage.tsx:368
 msgid "Transactional notification deleted successfully"
 msgstr "Notificació transaccional eliminada correctament"
 
-#: src/pages/TransactionalNotificationsPage.tsx:392
+#: src/pages/TransactionalNotificationsPage.tsx:407
 msgid "Transactional Notifications"
 msgstr "Notificacions transaccionals"
 
@@ -11065,7 +11087,7 @@ msgid "Yes, delete"
 msgstr "Sí, eliminar"
 
 #: src/pages/TemplatesPage.tsx:308
-#: src/pages/TransactionalNotificationsPage.tsx:150
+#: src/pages/TransactionalNotificationsPage.tsx:160
 msgid "Yes, Delete"
 msgstr "Sí, eliminar"
 
@@ -11082,7 +11104,7 @@ msgstr "Sí, reprendre"
 msgid "Yes, Select Winner"
 msgstr "Sí, seleccionar guanyador"
 
-#: src/components/transactional/ImportExportTransactional.tsx:289
+#: src/components/transactional/ImportExportTransactional.tsx:413
 msgid "Yes, Update"
 msgstr ""
 
@@ -11141,10 +11163,10 @@ msgstr "No teniu permís d'escriptura per a llistes"
 msgid "You don't have write permission for templates"
 msgstr "No teniu permís d'escriptura per a plantilles"
 
-#: src/pages/TransactionalNotificationsPage.tsx:403
-#: src/pages/TransactionalNotificationsPage.tsx:417
-#: src/pages/TransactionalNotificationsPage.tsx:470
-#: src/pages/TransactionalNotificationsPage.tsx:484
+#: src/pages/TransactionalNotificationsPage.tsx:427
+#: src/pages/TransactionalNotificationsPage.tsx:441
+#: src/pages/TransactionalNotificationsPage.tsx:496
+#: src/pages/TransactionalNotificationsPage.tsx:510
 msgid "You don't have write permission for transactional notifications"
 msgstr "No teniu permís d'escriptura per a notificacions transaccionals"
 

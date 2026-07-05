@@ -7,6 +7,7 @@ import { I18nProvider } from '@lingui/react'
 import { i18n } from '@lingui/core'
 import {
   ExportNotificationButton,
+  ExportSelectedButton,
   ImportNotificationButton
 } from './ImportExportTransactional'
 import { transactionalNotificationsApi } from '../../services/api/transactional_notifications'
@@ -80,6 +81,9 @@ const renderWith = (ui: React.ReactNode) => {
 const makeFile = (content: string, name = 'export.json') =>
   new File([content], name, { type: 'application/json' })
 
+const sampleNotification2 = { ...sampleNotification, id: 'welcome2', name: 'Welcome Two' }
+const sampleTemplate2 = { ...sampleTemplate, id: 'tpl-welcome2', name: 'Welcome Two' }
+
 const bundleJSON = (overrides: Record<string, unknown> = {}) =>
   JSON.stringify({
     type: 'transactional-notification',
@@ -88,6 +92,18 @@ const bundleJSON = (overrides: Record<string, unknown> = {}) =>
     notification: sampleNotification,
     template: sampleTemplate,
     ...overrides
+  })
+
+// A collection file wrapping two notifications.
+const collectionJSON = () =>
+  JSON.stringify({
+    type: 'transactional-notification-collection',
+    version: '1.0',
+    exportedAt: '2026-01-01T00:00:00.000Z',
+    notifications: [
+      { notification: sampleNotification, template: sampleTemplate },
+      { notification: sampleNotification2, template: sampleTemplate2 }
+    ]
   })
 
 // Imperative Ant modals (Modal.error / modal.confirm) render into document.body
@@ -123,6 +139,58 @@ describe('ExportNotificationButton', () => {
     await waitFor(() => expect(createObjectURL).toHaveBeenCalled())
     expect(txApi.get).toHaveBeenCalledWith({ workspace_id: 'ws1', id: 'welcome' })
     expect(tplApi.get).toHaveBeenCalledWith({ workspace_id: 'ws1', id: 'tpl-welcome' })
+  })
+})
+
+describe('ExportSelectedButton', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('exports every selected notification into one collection file', async () => {
+    txApi.get.mockImplementation(({ id }: { id: string }) =>
+      Promise.resolve({
+        notification: id === 'welcome' ? sampleNotification : sampleNotification2
+      })
+    )
+    tplApi.get.mockImplementation(({ id }: { id: string }) =>
+      Promise.resolve({ template: id === 'tpl-welcome' ? sampleTemplate : sampleTemplate2 })
+    )
+
+    // Capture the JSON passed to the Blob constructor (the serialized collection).
+    let downloaded = ''
+    const RealBlob = global.Blob
+    const blobSpy = vi
+      .spyOn(global, 'Blob')
+      .mockImplementation((parts?: BlobPart[], options?: BlobPropertyBag) => {
+        if (parts && typeof parts[0] === 'string') downloaded = parts[0]
+        return new RealBlob(parts, options)
+      })
+    Object.assign(URL, { createObjectURL: vi.fn(() => 'blob:url'), revokeObjectURL: vi.fn() })
+
+    const onExported = vi.fn()
+    renderWith(
+      <ExportSelectedButton
+        workspaceId="ws1"
+        selected={[
+          { id: 'welcome', name: 'Welcome Email' },
+          { id: 'welcome2', name: 'Welcome Two' }
+        ]}
+        onExported={onExported}
+      />
+    )
+
+    fireEvent.click(screen.getByRole('button'))
+
+    await waitFor(() => expect(onExported).toHaveBeenCalled())
+    expect(txApi.get).toHaveBeenCalledWith({ workspace_id: 'ws1', id: 'welcome' })
+    expect(txApi.get).toHaveBeenCalledWith({ workspace_id: 'ws1', id: 'welcome2' })
+
+    const parsed = JSON.parse(downloaded)
+    expect(parsed.type).toBe('transactional-notification-collection')
+    expect(parsed.notifications).toHaveLength(2)
+
+    blobSpy.mockRestore()
   })
 })
 
@@ -184,6 +252,25 @@ describe('ImportNotificationButton', () => {
     await waitFor(() => expect(screen.queryByText('Yes, Update')).not.toBeInTheDocument())
     expect(txApi.update).not.toHaveBeenCalled()
     expect(tplApi.update).not.toHaveBeenCalled()
+  })
+
+  it('imports every notification from a collection file', async () => {
+    txApi.get.mockRejectedValue(notFound())
+    tplApi.get.mockRejectedValue(notFound())
+    txApi.create.mockResolvedValue({ notification: sampleNotification })
+    tplApi.create.mockResolvedValue({ template: sampleTemplate })
+
+    const { container } = renderWith(<ImportNotificationButton workspaceId="ws1" />)
+    uploadFile(container, collectionJSON())
+
+    await waitFor(() => expect(txApi.create).toHaveBeenCalledTimes(2))
+    expect(tplApi.create).toHaveBeenCalledTimes(2)
+    expect(txApi.create).toHaveBeenCalledWith(
+      expect.objectContaining({ notification: expect.objectContaining({ id: 'welcome' }) })
+    )
+    expect(txApi.create).toHaveBeenCalledWith(
+      expect.objectContaining({ notification: expect.objectContaining({ id: 'welcome2' }) })
+    )
   })
 
   it('rejects a file that is not a transactional bundle', async () => {

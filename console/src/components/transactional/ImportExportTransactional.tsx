@@ -11,16 +11,29 @@ import {
 import { templatesApi, Template } from '../../services/api/template'
 import { ApiError } from '../../services/api/client'
 
-// Bundle format written to / read from the exported JSON file.
+// Bundle format written to / read from the exported JSON file (a single notification).
 const BUNDLE_TYPE = 'transactional-notification'
+// Collection format wrapping many notifications in a single file.
+const COLLECTION_TYPE = 'transactional-notification-collection'
 const BUNDLE_VERSION = '1.0'
 
-interface TransactionalBundle {
+// A notification plus its (optional) email template, self-contained for re-import.
+interface NotificationEntry {
+  notification: TransactionalNotification
+  template: Template | null
+}
+
+interface TransactionalBundle extends NotificationEntry {
   type: typeof BUNDLE_TYPE
   version: string
   exportedAt: string
-  notification: TransactionalNotification
-  template: Template | null
+}
+
+interface TransactionalCollection {
+  type: typeof COLLECTION_TYPE
+  version: string
+  exportedAt: string
+  notifications: NotificationEntry[]
 }
 
 // Sanitize a name for use as a download filename.
@@ -59,7 +72,31 @@ const getOrNull = async <T,>(promise: Promise<T>): Promise<T | null> => {
   }
 }
 
-// === EXPORT ===
+// Fetch one notification and its email template as a self-contained entry.
+// The template is managed separately in the UI but bundled here so an import recreates both.
+const buildEntry = async (
+  workspaceId: string,
+  notificationId: string
+): Promise<NotificationEntry> => {
+  const notificationResponse = await transactionalNotificationsApi.get({
+    workspace_id: workspaceId,
+    id: notificationId
+  })
+
+  let template: Template | null = null
+  const templateId = notificationResponse.notification.channels?.email?.template_id
+  if (templateId) {
+    const templateResponse = await templatesApi.get({
+      workspace_id: workspaceId,
+      id: templateId
+    })
+    template = templateResponse.template
+  }
+
+  return { notification: notificationResponse.notification, template }
+}
+
+// === SINGLE EXPORT (per-card) ===
 
 interface ExportNotificationButtonProps {
   workspaceId: string
@@ -77,32 +114,13 @@ export const ExportNotificationButton: React.FC<ExportNotificationButtonProps> =
   const handleExport = async () => {
     setLoading(true)
     try {
-      // Fetch the freshest notification config.
-      const notificationResponse = await transactionalNotificationsApi.get({
-        workspace_id: workspaceId,
-        id: notification.id
-      })
-
-      // Bundle the email channel's template alongside the notification (managed
-      // separately in the UI, but exported together so an import recreates both).
-      let template: Template | null = null
-      const templateId = notificationResponse.notification.channels?.email?.template_id
-      if (templateId) {
-        const templateResponse = await templatesApi.get({
-          workspace_id: workspaceId,
-          id: templateId
-        })
-        template = templateResponse.template
-      }
-
+      const entry = await buildEntry(workspaceId, notification.id)
       const bundle: TransactionalBundle = {
         type: BUNDLE_TYPE,
         version: BUNDLE_VERSION,
         exportedAt: new Date().toISOString(),
-        notification: notificationResponse.notification,
-        template
+        ...entry
       }
-
       downloadFile(
         JSON.stringify(bundle, null, 2),
         `${sanitizeFilename(notification.name)}.json`,
@@ -126,6 +144,59 @@ export const ExportNotificationButton: React.FC<ExportNotificationButtonProps> =
   )
 }
 
+// === BULK EXPORT (selected notifications) ===
+
+interface ExportSelectedButtonProps {
+  workspaceId: string
+  // Notifications currently selected on the page (id + name for the filename).
+  selected: { id: string; name: string }[]
+  onExported?: () => void
+}
+
+// Exports the selected notifications into a single collection file wrapping every entry.
+export const ExportSelectedButton: React.FC<ExportSelectedButtonProps> = ({
+  workspaceId,
+  selected,
+  onExported
+}) => {
+  const { t } = useLingui()
+  const { message } = App.useApp()
+  const [loading, setLoading] = useState(false)
+
+  const handleExport = async () => {
+    setLoading(true)
+    try {
+      const entries = await Promise.all(selected.map((n) => buildEntry(workspaceId, n.id)))
+      const collection: TransactionalCollection = {
+        type: COLLECTION_TYPE,
+        version: BUNDLE_VERSION,
+        exportedAt: new Date().toISOString(),
+        notifications: entries
+      }
+      const stamp = new Date().toISOString().slice(0, 10)
+      downloadFile(
+        JSON.stringify(collection, null, 2),
+        `transactional-notifications-${stamp}.json`,
+        'application/json'
+      )
+      message.success(t`Exported ${entries.length} notifications`)
+      onExported?.()
+    } catch (error) {
+      console.error('Transactional bulk export failed:', error)
+      message.error(t`Failed to export notifications`)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <Button loading={loading} disabled={selected.length === 0} onClick={handleExport}>
+      <FontAwesomeIcon icon={faFileExport} className="mr-2" />
+      {t`Export selected (${selected.length})`}
+    </Button>
+  )
+}
+
 // === IMPORT ===
 
 interface ImportNotificationButtonProps {
@@ -133,20 +204,47 @@ interface ImportNotificationButtonProps {
   disabled?: boolean
 }
 
-// Validate the parsed file is a transactional notification bundle.
-const validateBundle = (parsed: unknown): { bundle?: TransactionalBundle; error?: string } => {
+// Validate a single notification entry (notification present with id + name).
+const isValidEntry = (raw: unknown): raw is NotificationEntry => {
+  if (!raw || typeof raw !== 'object') return false
+  const obj = raw as Record<string, unknown>
+  const notification = obj.notification as TransactionalNotification | undefined
+  return (
+    !!notification &&
+    typeof notification.id === 'string' &&
+    typeof notification.name === 'string'
+  )
+}
+
+// Parse a file's content into one or more entries. Accepts a single bundle or a
+// collection wrapping many notifications.
+const parseEntries = (parsed: unknown): { entries?: NotificationEntry[]; error?: string } => {
   if (!parsed || typeof parsed !== 'object') {
     return { error: 'Invalid file: not a JSON object' }
   }
   const obj = parsed as Record<string, unknown>
-  if (obj.type !== BUNDLE_TYPE) {
-    return { error: 'Invalid file: not a transactional notification export' }
+
+  // Collection file: { type: 'transactional-notification-collection', notifications: [...] }
+  if (obj.type === COLLECTION_TYPE || Array.isArray(obj.notifications)) {
+    const rawList = obj.notifications
+    if (!Array.isArray(rawList) || rawList.length === 0) {
+      return { error: 'Invalid file: collection has no notifications' }
+    }
+    if (!rawList.every(isValidEntry)) {
+      return { error: 'Invalid file: a notification entry is malformed' }
+    }
+    return { entries: rawList }
   }
-  const notification = obj.notification as TransactionalNotification | undefined
-  if (!notification || typeof notification.id !== 'string' || typeof notification.name !== 'string') {
-    return { error: 'Invalid file: missing notification data' }
+
+  // Single bundle file: { type: 'transactional-notification', notification, template }
+  if (obj.type === BUNDLE_TYPE) {
+    if (!isValidEntry(obj)) {
+      return { error: 'Invalid file: missing notification data' }
+    }
+    return { entries: [{ notification: obj.notification, template: (obj.template as Template) ?? null }] }
   }
-  return { bundle: obj as unknown as TransactionalBundle }
+
+  return { error: 'Invalid file: not a transactional notification export' }
 }
 
 export const ImportNotificationButton: React.FC<ImportNotificationButtonProps> = ({
@@ -161,96 +259,129 @@ export const ImportNotificationButton: React.FC<ImportNotificationButtonProps> =
 
   const triggerFilePicker = () => fileInputRef.current?.click()
 
-  // Upsert the template (if bundled) then the notification. Template first so the
-  // notification's channel reference points at an existing template.
-  const performImport = async (bundle: TransactionalBundle) => {
-    setLoading(true)
-    try {
-      if (bundle.template) {
-        const tpl = bundle.template
-        const existing = await getOrNull(
-          templatesApi.get({ workspace_id: workspaceId, id: tpl.id })
-        )
-        const templatePayload = {
-          workspace_id: workspaceId,
-          id: tpl.id,
-          name: tpl.name,
-          channel: tpl.channel,
-          email: tpl.email,
-          web: tpl.web,
-          category: tpl.category,
-          template_macro_id: tpl.template_macro_id,
-          test_data: tpl.test_data,
-          settings: tpl.settings,
-          translations: tpl.translations
-        }
-        if (existing) {
-          await templatesApi.update(templatePayload)
-        } else {
-          await templatesApi.create(templatePayload)
-        }
+  // Upsert one entry: template first (so the notification's channel reference is valid),
+  // then the notification. Uses update when the id already exists, create otherwise.
+  const importEntry = async (entry: NotificationEntry) => {
+    if (entry.template) {
+      const tpl = entry.template
+      const existing = await getOrNull(templatesApi.get({ workspace_id: workspaceId, id: tpl.id }))
+      const templatePayload = {
+        workspace_id: workspaceId,
+        id: tpl.id,
+        name: tpl.name,
+        channel: tpl.channel,
+        email: tpl.email,
+        web: tpl.web,
+        category: tpl.category,
+        template_macro_id: tpl.template_macro_id,
+        test_data: tpl.test_data,
+        settings: tpl.settings,
+        translations: tpl.translations
       }
-
-      const n = bundle.notification
-      const existingNotification = await getOrNull(
-        transactionalNotificationsApi.get({ workspace_id: workspaceId, id: n.id })
-      )
-      if (existingNotification) {
-        await transactionalNotificationsApi.update({
-          workspace_id: workspaceId,
-          id: n.id,
-          updates: {
-            name: n.name,
-            description: n.description,
-            channels: n.channels,
-            tracking_settings: n.tracking_settings,
-            metadata: n.metadata
-          }
-        })
+      if (existing) {
+        await templatesApi.update(templatePayload)
       } else {
-        await transactionalNotificationsApi.create({
-          workspace_id: workspaceId,
-          notification: {
-            id: n.id,
-            name: n.name,
-            description: n.description,
-            // Integration-managed notifications import as plain notifications;
-            // integration_id is intentionally dropped (cannot be reattached here).
-            channels: n.channels,
-            tracking_settings: n.tracking_settings,
-            metadata: n.metadata
-          }
-        })
+        await templatesApi.create(templatePayload)
       }
+    }
 
-      queryClient.invalidateQueries({ queryKey: ['transactional-notifications', workspaceId] })
-      message.success(t`Notification imported successfully`)
-    } catch (error) {
-      console.error('Transactional import failed:', error)
-      message.error(t`Failed to import notification`)
-    } finally {
-      setLoading(false)
+    const n = entry.notification
+    const existingNotification = await getOrNull(
+      transactionalNotificationsApi.get({ workspace_id: workspaceId, id: n.id })
+    )
+    if (existingNotification) {
+      await transactionalNotificationsApi.update({
+        workspace_id: workspaceId,
+        id: n.id,
+        updates: {
+          name: n.name,
+          description: n.description,
+          channels: n.channels,
+          tracking_settings: n.tracking_settings,
+          metadata: n.metadata
+        }
+      })
+    } else {
+      await transactionalNotificationsApi.create({
+        workspace_id: workspaceId,
+        notification: {
+          id: n.id,
+          name: n.name,
+          description: n.description,
+          // Integration-managed notifications import as plain notifications;
+          // integration_id is intentionally dropped (cannot be reattached here).
+          channels: n.channels,
+          tracking_settings: n.tracking_settings,
+          metadata: n.metadata
+        }
+      })
     }
   }
 
-  // Check for existing notification / template by ID and confirm before overwriting.
-  const confirmAndImport = async (bundle: TransactionalBundle) => {
+  // Import every entry sequentially, reporting a per-batch success/failure summary.
+  const performImport = async (entries: NotificationEntry[]) => {
     setLoading(true)
-    let existingNotification: TransactionalNotification | null = null
-    let existingTemplate: Template | null = null
-    try {
-      existingNotification = (
-        await getOrNull(
-          transactionalNotificationsApi.get({ workspace_id: workspaceId, id: bundle.notification.id })
-        )
-      )?.notification ?? null
+    let succeeded = 0
+    const failed: string[] = []
+    for (const entry of entries) {
+      try {
+        await importEntry(entry)
+        succeeded++
+      } catch (error) {
+        console.error('Transactional import failed for', entry.notification.id, error)
+        failed.push(entry.notification.name || entry.notification.id)
+      }
+    }
+    setLoading(false)
 
-      if (bundle.template) {
-        existingTemplate = (
+    if (succeeded > 0) {
+      queryClient.invalidateQueries({ queryKey: ['transactional-notifications', workspaceId] })
+      message.success(t`Imported ${succeeded} notification(s)`)
+    }
+    if (failed.length > 0) {
+      Modal.error({
+        title: t`Some imports failed`,
+        content: (
+          <ul className="mt-2 ml-4 list-disc">
+            {failed.map((name, i) => (
+              <li key={i}>{name}</li>
+            ))}
+          </ul>
+        )
+      })
+    }
+  }
+
+  // Detect existing notifications/templates across all entries and confirm before overwriting.
+  const confirmAndImport = async (entries: NotificationEntry[]) => {
+    setLoading(true)
+    const conflicts: string[] = []
+    try {
+      for (const entry of entries) {
+        const existingNotification = (
           await getOrNull(
-            templatesApi.get({ workspace_id: workspaceId, id: bundle.template.id })
+            transactionalNotificationsApi.get({
+              workspace_id: workspaceId,
+              id: entry.notification.id
+            })
           )
-        )?.template ?? null
+        )?.notification
+        if (existingNotification) {
+          conflicts.push(
+            t`Notification "${existingNotification.name}" (${entry.notification.id})`
+          )
+        }
+
+        if (entry.template) {
+          const existingTemplate = (
+            await getOrNull(
+              templatesApi.get({ workspace_id: workspaceId, id: entry.template.id })
+            )
+          )?.template
+          if (existingTemplate) {
+            conflicts.push(t`Template "${existingTemplate.name}" (${entry.template.id})`)
+          }
+        }
       }
     } catch (error) {
       console.error('Transactional import conflict check failed:', error)
@@ -260,26 +391,19 @@ export const ImportNotificationButton: React.FC<ImportNotificationButtonProps> =
     }
     setLoading(false)
 
-    const conflicts: string[] = []
-    if (existingNotification) {
-      conflicts.push(t`Notification "${existingNotification.name}" (${bundle.notification.id})`)
-    }
-    if (existingTemplate) {
-      conflicts.push(t`Template "${existingTemplate.name}" (${bundle.template!.id})`)
-    }
-
     if (conflicts.length === 0) {
-      await performImport(bundle)
+      await performImport(entries)
       return
     }
 
     modal.confirm({
       title: t`Overwrite existing data?`,
       icon: <FontAwesomeIcon icon={faTriangleExclamation} className="text-orange-500 mr-2" />,
+      width: 520,
       content: (
         <div>
           <p>{t`The following already exist and will be updated:`}</p>
-          <ul className="mt-2 ml-4 list-disc">
+          <ul className="mt-2 ml-4 list-disc max-h-60 overflow-y-auto">
             {conflicts.map((c, i) => (
               <li key={i}>{c}</li>
             ))}
@@ -288,7 +412,7 @@ export const ImportNotificationButton: React.FC<ImportNotificationButtonProps> =
       ),
       okText: t`Yes, Update`,
       cancelText: t`Cancel`,
-      onOk: () => performImport(bundle)
+      onOk: () => performImport(entries)
     })
   }
 
@@ -301,15 +425,15 @@ export const ImportNotificationButton: React.FC<ImportNotificationButtonProps> =
     reader.onload = (e) => {
       try {
         const parsed = JSON.parse(e.target?.result as string)
-        const { bundle, error } = validateBundle(parsed)
-        if (error || !bundle) {
+        const { entries, error } = parseEntries(parsed)
+        if (error || !entries) {
           Modal.error({
             title: t`Import Failed`,
             content: error || t`Invalid file format`
           })
           return
         }
-        confirmAndImport(bundle)
+        confirmAndImport(entries)
       } catch (err) {
         console.error('Failed to parse import file:', err)
         Modal.error({
