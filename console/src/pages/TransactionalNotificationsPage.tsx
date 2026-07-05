@@ -40,6 +40,10 @@ import TemplatePreviewDrawer from '../components/templates/TemplatePreviewDrawer
 import { templatesApi } from '../services/api/template'
 import { Workspace, UserPermissions } from '../services/api/types'
 import { ApiCommandModal } from '../components/transactional/ApiCommandModal'
+import {
+  ExportNotificationButton,
+  ImportNotificationButton
+} from '../components/transactional/ImportExportTransactional'
 import { analyticsService } from '../services/api/analytics'
 
 const { Title, Paragraph } = Typography
@@ -181,6 +185,7 @@ const TransactionalNotificationCard: React.FC<{
               <FontAwesomeIcon icon={faTerminal} style={{ opacity: 0.7 }} />
             </Button>
           </Tooltip>
+          <ExportNotificationButton workspaceId={workspace.id} notification={notification} />
         </Space>
       }
     >
@@ -400,6 +405,20 @@ export function TransactionalNotificationsPage() {
               }
             >
               <div>
+                <ImportNotificationButton
+                  workspaceId={workspaceId as string}
+                  disabled={!permissions?.transactional?.write}
+                />
+              </div>
+            </Tooltip>
+            <Tooltip
+              title={
+                !permissions?.transactional?.write
+                  ? t`You don't have write permission for transactional notifications`
+                  : undefined
+              }
+            >
+              <div>
                 <UpsertTransactionalNotificationDrawer
                   workspace={currentWorkspace}
                   buttonContent={t`Create Notification`}
@@ -444,24 +463,40 @@ export function TransactionalNotificationsPage() {
           <Paragraph type="secondary">{t`Create your first notification to get started`}</Paragraph>
           <div className="mt-4">
             {currentWorkspace && (
-              <Tooltip
-                title={
-                  !permissions?.transactional?.write
-                    ? t`You don't have write permission for transactional notifications`
-                    : undefined
-                }
-              >
-                <div>
-                  <UpsertTransactionalNotificationDrawer
-                    workspace={currentWorkspace}
-                    buttonContent={t`Create Notification`}
-                    buttonProps={{
-                      type: 'primary',
-                      disabled: !permissions?.transactional?.write
-                    }}
-                  />
-                </div>
-              </Tooltip>
+              <Space>
+                <Tooltip
+                  title={
+                    !permissions?.transactional?.write
+                      ? t`You don't have write permission for transactional notifications`
+                      : undefined
+                  }
+                >
+                  <div>
+                    <ImportNotificationButton
+                      workspaceId={workspaceId as string}
+                      disabled={!permissions?.transactional?.write}
+                    />
+                  </div>
+                </Tooltip>
+                <Tooltip
+                  title={
+                    !permissions?.transactional?.write
+                      ? t`You don't have write permission for transactional notifications`
+                      : undefined
+                  }
+                >
+                  <div>
+                    <UpsertTransactionalNotificationDrawer
+                      workspace={currentWorkspace}
+                      buttonContent={t`Create Notification`}
+                      buttonProps={{
+                        type: 'primary',
+                        disabled: !permissions?.transactional?.write
+                      }}
+                    />
+                  </div>
+                </Tooltip>
+              </Space>
             )}
           </div>
         </div>
