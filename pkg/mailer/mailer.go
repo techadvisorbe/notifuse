@@ -3,7 +3,6 @@ package mailer
 import (
 	"fmt"
 	"log"
-	"os"
 	"strings"
 	"time"
 
@@ -64,12 +63,6 @@ func (m *SMTPMailer) SendWorkspaceInvitation(email, workspaceName, inviterName, 
 
 	// Strip trailing slash from API endpoint to avoid double slashes in URL
 	endpoint := strings.TrimSuffix(m.config.APIEndpoint, "/")
-	// if console is hide take from other endpoint env variable
-	alternative := os.Getenv("INVITE_ENDPOINT")
-	if alternative != "" {
-		endpoint = strings.TrimSuffix(alternative, "/")
-	}
-
 	inviteURL := fmt.Sprintf("%s/console/accept-invitation?token=%s", endpoint, token)
 
 	// Create a new message

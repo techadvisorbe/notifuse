@@ -77,16 +77,13 @@ func NewRootHandler(
 
 func (h *RootHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	// 1. Handle /config.js
-
-	hideConsole := os.Getenv("NO_CONSOLE") == "true"
-
-	if r.URL.Path == "/config.js" && !hideConsole {
+	if r.URL.Path == "/config.js" {
 		h.serveConfigJS(w, r)
 		return
 	}
 
 	// 2. Handle /console/* - serve console SPA
-	if strings.HasPrefix(r.URL.Path, "/console") && !hideConsole {
+	if strings.HasPrefix(r.URL.Path, "/console") {
 		h.serveConsole(w, r)
 		return
 	}
@@ -124,12 +121,7 @@ func (h *RootHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 6. ROOT PATH LOGIC: Default behavior is to redirect to console
-	if !hideConsole {
-		http.Redirect(w, r, "/console", http.StatusTemporaryRedirect)
-	}
-
-	// return 404 for any other paths to avoid unintended redirects
-	http.NotFound(w, r)
+	http.Redirect(w, r, "/console", http.StatusTemporaryRedirect)
 }
 
 // serveConfigJS generates and serves the config.js file with environment variables
