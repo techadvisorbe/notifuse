@@ -34,12 +34,18 @@ type Config struct {
 	RootEmail           string
 	Environment         string
 	APIEndpoint         string
-	WebhookEndpoint     string
-	LogLevel            string
-	Version             string
-	IsInstalled         bool // NEW: Indicates if setup wizard has been completed
-	MaxUsers            int  // 0 = unlimited (backward compat for self-hosted)
-	MaxWorkspaces       int  // 0 = unlimited (backward compat for self-hosted)
+	// ConsoleEndpoint is the URL where the console is reachable (env CONSOLE_ENDPOINT,
+	// never from DB since it is per-instance). Defaults to APIEndpoint. Used for
+	// console-facing URLs (workspace invitation emails, OIDC sign-in redirects,
+	// the endpoint the console SPA calls) so a split deployment can keep
+	// APIEndpoint on the public instance and the console on an intranet URL.
+	ConsoleEndpoint string
+	WebhookEndpoint string
+	LogLevel        string
+	Version         string
+	IsInstalled     bool // NEW: Indicates if setup wizard has been completed
+	MaxUsers        int  // 0 = unlimited (backward compat for self-hosted)
+	MaxWorkspaces   int  // 0 = unlimited (backward compat for self-hosted)
 
 	// Track which values came from actual environment variables (not database, not generated)
 	EnvValues EnvValues
@@ -84,10 +90,25 @@ type DemoConfig struct {
 	FileManagerSecretKey string
 }
 
+// Server exposure modes. "all" serves the console and the full API (intranet /
+// single-instance deployments). "public" serves only the end-user-facing
+// endpoints (tracking, unsubscribe/preferences, notification center, inbound
+// provider webhooks, health) so the instance can be safely exposed to the
+// internet while the console runs on a separate "all" instance.
+const (
+	ServerModeAll    = "all"
+	ServerModePublic = "public"
+)
+
 type ServerConfig struct {
 	Port int
 	Host string
 	SSL  SSLConfig
+	// Mode controls which endpoints this instance exposes: ServerModeAll or ServerModePublic
+	Mode string
+	// PublicExtraPaths are additional paths served in public mode
+	// (entries ending with "/" are treated as prefixes)
+	PublicExtraPaths []string
 }
 
 type DatabaseConfig struct {
@@ -413,6 +434,7 @@ func LoadWithOptions(opts LoadOptions) (*Config, error) {
 	// Set default values
 	v.SetDefault("SERVER_PORT", 8080)
 	v.SetDefault("SERVER_HOST", "0.0.0.0")
+	v.SetDefault("SERVER_MODE", ServerModeAll)
 	v.SetDefault("DB_HOST", "localhost")
 	v.SetDefault("DB_PORT", 5432)
 	v.SetDefault("DB_USER", "postgres")
@@ -836,18 +858,45 @@ func LoadWithOptions(opts LoadOptions) (*Config, error) {
 	// Sanitize API endpoint - strip trailing slashes to prevent double-slash URL issues
 	apiEndpoint = strings.TrimRight(apiEndpoint, "/")
 
-	// Resolve OIDC config (env-wins-else-DB). Built AFTER the apiEndpoint trim so the
+	// Console endpoint: env-only (per-instance, never from DB), defaults to the API
+	// endpoint so single-instance deployments are unchanged.
+	consoleEndpoint := strings.TrimRight(strings.TrimSpace(v.GetString("CONSOLE_ENDPOINT")), "/")
+	if consoleEndpoint == "" {
+		consoleEndpoint = apiEndpoint
+	}
+
+	// Resolve OIDC config (env-wins-else-DB). Built AFTER the endpoint trims so the
 	// derived redirect URI uses the final endpoint, and validated to fail boot fast
 	// on static misconfiguration (issuer reachability is a runtime concern).
-	oidcConfig := resolveOIDCConfig(envVals, systemSettings, isInstalled, apiEndpoint)
+	// The redirect URI is derived from the console endpoint: the OIDC callback is a
+	// management route, served by the instance the console user's browser talks to.
+	oidcConfig := resolveOIDCConfig(envVals, systemSettings, isInstalled, consoleEndpoint)
 	if err := oidcConfig.Validate(); err != nil {
 		return nil, err
 	}
 
+	serverMode := strings.ToLower(strings.TrimSpace(v.GetString("SERVER_MODE")))
+	if serverMode != ServerModeAll && serverMode != ServerModePublic {
+		return nil, fmt.Errorf("invalid SERVER_MODE %q: must be %q or %q", serverMode, ServerModeAll, ServerModePublic)
+	}
+	var publicExtraPaths []string
+	for _, p := range strings.Split(v.GetString("SERVER_PUBLIC_EXTRA_PATHS"), ",") {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		if !strings.HasPrefix(p, "/") {
+			p = "/" + p
+		}
+		publicExtraPaths = append(publicExtraPaths, p)
+	}
+
 	config := &Config{
 		Server: ServerConfig{
-			Port: v.GetInt("SERVER_PORT"),
-			Host: v.GetString("SERVER_HOST"),
+			Port:             v.GetInt("SERVER_PORT"),
+			Host:             v.GetString("SERVER_HOST"),
+			Mode:             serverMode,
+			PublicExtraPaths: publicExtraPaths,
 			SSL: SSLConfig{
 				Enabled:  v.GetBool("SSL_ENABLED"),
 				CertFile: v.GetString("SSL_CERT_FILE"),
@@ -922,6 +971,7 @@ func LoadWithOptions(opts LoadOptions) (*Config, error) {
 		RootEmail:       rootEmail,
 		Environment:     v.GetString("ENVIRONMENT"),
 		APIEndpoint:     apiEndpoint,
+		ConsoleEndpoint: consoleEndpoint,
 		WebhookEndpoint: v.GetString("WEBHOOK_ENDPOINT"),
 		LogLevel:        v.GetString("LOG_LEVEL"),
 		Version:         v.GetString("VERSION"),
@@ -979,6 +1029,11 @@ func resolveSMTPBridgeTLSMode(cfg SMTPBridgeConfig, environment string) (string,
 	}
 
 	return smtp_bridge.ModeOff, nil
+}
+
+// IsPublicMode returns true if this instance only exposes end-user-facing endpoints
+func (c *Config) IsPublicMode() bool {
+	return c.Server.Mode == ServerModePublic
 }
 
 // IsDevelopment returns true if the environment is set to development

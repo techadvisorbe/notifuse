@@ -72,7 +72,7 @@ export const llmApi = {
     if (defaultOrigin.includes('notifusedev.com')) {
       defaultOrigin = 'https://localapi.notifuse.com:4000'
     }
-    const apiEndpoint = window.API_ENDPOINT?.trim() || defaultOrigin
+    const apiEndpoint = (window.CONSOLE_API_ENDPOINT || window.API_ENDPOINT)?.trim() || defaultOrigin
 
     try {
       const response = await fetch(`${apiEndpoint}/api/llm.chat`, {

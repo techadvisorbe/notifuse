@@ -96,6 +96,21 @@ describe('oidcExchange', () => {
   afterEach(() => {
     vi.restoreAllMocks()
     ;(window as unknown as { API_ENDPOINT?: string }).API_ENDPOINT = undefined
+    window.CONSOLE_API_ENDPOINT = undefined
+  })
+
+  it('prefers CONSOLE_API_ENDPOINT over API_ENDPOINT (split intranet/internet deployment)', async () => {
+    window.CONSOLE_API_ENDPOINT = 'https://intranet.example.com/'
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ token: 'jwt-x' })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await authService.oidcExchange('AbC123')
+
+    const [url] = fetchMock.mock.calls[0]
+    expect(url).toBe('https://intranet.example.com/api/user.oidc.exchange')
   })
 
   it('POSTs the code in the body to /api/user.oidc.exchange with no credentials', async () => {

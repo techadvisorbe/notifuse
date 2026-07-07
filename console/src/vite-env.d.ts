@@ -3,6 +3,9 @@
 declare global {
   interface Window {
     API_ENDPOINT: string
+    // Endpoint the console sends API calls to. Equals API_ENDPOINT unless the
+    // server is deployed split (console on intranet, public API on internet).
+    CONSOLE_API_ENDPOINT?: string
     IS_INSTALLED: boolean
     VERSION: string
     ROOT_EMAIL: string

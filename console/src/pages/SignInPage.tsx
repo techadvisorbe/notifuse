@@ -228,7 +228,9 @@ export function SignInPage() {
                     block
                     onClick={() => {
                       const base =
-                        window.API_ENDPOINT?.trim().replace(/\/+$/, '') || window.location.origin
+                        (window.CONSOLE_API_ENDPOINT || window.API_ENDPOINT)
+                          ?.trim()
+                          .replace(/\/+$/, '') || window.location.origin
                       // Full-page navigation: /api/user.oidc.start sets the AEAD flow
                       // cookie and 302s to the IdP, so it must be a real navigation.
                       window.location.assign(`${base}/api/user.oidc.start`)

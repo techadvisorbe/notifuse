@@ -379,15 +379,16 @@ func (a *App) InitMailer() error {
 	} else {
 		// Use SMTP mailer in production
 		mailerConfig := &mailer.Config{
-			SMTPHost:     a.config.SMTP.Host,
-			SMTPPort:     a.config.SMTP.Port,
-			SMTPUsername: a.config.SMTP.Username,
-			SMTPPassword: a.config.SMTP.Password,
-			FromEmail:    a.config.SMTP.FromEmail,
-			FromName:     a.config.SMTP.FromName,
-			APIEndpoint:  a.config.APIEndpoint,
-			UseTLS:       a.config.SMTP.UseTLS,
-			EHLOHostname: a.config.SMTP.EHLOHostname,
+			SMTPHost:        a.config.SMTP.Host,
+			SMTPPort:        a.config.SMTP.Port,
+			SMTPUsername:    a.config.SMTP.Username,
+			SMTPPassword:    a.config.SMTP.Password,
+			FromEmail:       a.config.SMTP.FromEmail,
+			FromName:        a.config.SMTP.FromName,
+			APIEndpoint:     a.config.APIEndpoint,
+			ConsoleEndpoint: a.config.ConsoleEndpoint,
+			UseTLS:          a.config.SMTP.UseTLS,
+			EHLOHostname:    a.config.SMTP.EHLOHostname,
 		}
 
 		a.mailer = mailer.NewSMTPMailer(mailerConfig)
@@ -573,7 +574,7 @@ func (a *App) InitServices() error {
 		// the root-account privilege-escalation guard in resolveOrProvisionUser.
 		IsRootEmail:  a.config.IsRootEmailInsensitive,
 		IsProduction: a.config.IsProduction(),
-		Logger:                a.logger,
+		Logger:       a.logger,
 	})
 
 	// Initialize template service
@@ -1130,6 +1131,7 @@ func (a *App) InitHandlers() error {
 		"notification_center/dist",
 		a.logger,
 		a.config.APIEndpoint,
+		a.config.ConsoleEndpoint,
 		a.config.Version,
 		a.config.RootEmail,
 		&a.isInstalled,
@@ -1277,6 +1279,15 @@ func (a *App) InitHandlers() error {
 func (a *App) Start() error {
 	// Create server with wrapped handler for CORS and tracing
 	var handler http.Handler = a.mux
+
+	// In public mode, only expose end-user-facing endpoints (tracking,
+	// unsubscribe/preferences, notification center, inbound webhooks, health).
+	// The console and management API answer 404 so this instance can face the internet.
+	if a.config.IsPublicMode() {
+		handler = middleware.PublicEndpointFilter(a.config.Server.PublicExtraPaths)(handler)
+		a.logger.WithField("extra_paths", a.config.Server.PublicExtraPaths).
+			Info("Server running in public mode: console and management API are disabled")
+	}
 
 	// Apply graceful shutdown middleware first (outermost)
 	handler = a.gracefulShutdownMiddleware(handler)

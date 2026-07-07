@@ -62,8 +62,14 @@ func (h *OIDCHandler) flowCookieName() string {
 }
 
 // signinBase is the fixed internal console sign-in URL the callback redirects to.
+// It uses the console endpoint, which differs from the API endpoint in split
+// intranet/internet deployments (Config defaults it to APIEndpoint otherwise).
 func (h *OIDCHandler) signinBase() string {
-	return strings.TrimRight(h.config.APIEndpoint, "/") + "/console/signin"
+	base := h.config.ConsoleEndpoint
+	if base == "" {
+		base = h.config.APIEndpoint
+	}
+	return strings.TrimRight(base, "/") + "/console/signin"
 }
 
 // redirectSigninError 302s to the sign-in page with a fixed enumerated error reason.

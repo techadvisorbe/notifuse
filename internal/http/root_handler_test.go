@@ -33,6 +33,7 @@ func TestNewRootHandler(t *testing.T) {
 		"notification_center_test",
 		testLogger,
 		"https://api.example.com",
+		"",
 		"1.0",
 		"root@example.com",
 		&isInstalled,
@@ -57,7 +58,7 @@ func TestServeConfigJS_OIDC(t *testing.T) {
 	newHandler := func(enabled bool, label string) *RootHandler {
 		return NewRootHandler(
 			"console_test", "notification_center_test", logger.NewLogger(),
-			"https://api.example.com", "1.0", "root@example.com", &isInstalled,
+			"https://api.example.com", "", "1.0", "root@example.com", &isInstalled,
 			false, "", 0, "off",
 			nil, nil, nil,
 			enabled, label,
@@ -88,6 +89,39 @@ func TestServeConfigJS_OIDC(t *testing.T) {
 	})
 }
 
+func TestServeConfigJS_ConsoleAPIEndpoint(t *testing.T) {
+	isInstalled := true
+	newHandler := func(consoleEndpoint string) *RootHandler {
+		return NewRootHandler(
+			"console_test", "notification_center_test", logger.NewLogger(),
+			"https://api.example.com", consoleEndpoint, "1.0", "root@example.com", &isInstalled,
+			false, "", 0, "off",
+			nil, nil, nil,
+			false, "",
+		)
+	}
+
+	t.Run("defaults to the API endpoint", func(t *testing.T) {
+		h := newHandler("")
+		rec := httptest.NewRecorder()
+		h.serveConfigJS(rec, httptest.NewRequest("GET", "/config.js", nil))
+		body := rec.Body.String()
+		assert.Contains(t, body, `window.API_ENDPOINT = "https://api.example.com";`)
+		assert.Contains(t, body, `window.CONSOLE_API_ENDPOINT = "https://api.example.com";`)
+	})
+
+	t.Run("split deployment: console calls the intranet endpoint", func(t *testing.T) {
+		h := newHandler("https://intranet.example.com")
+		rec := httptest.NewRecorder()
+		h.serveConfigJS(rec, httptest.NewRequest("GET", "/config.js", nil))
+		body := rec.Body.String()
+		// API_ENDPOINT stays public (used to display tracking/webhook URLs)...
+		assert.Contains(t, body, `window.API_ENDPOINT = "https://api.example.com";`)
+		// ...while the SPA sends its API calls to the console endpoint.
+		assert.Contains(t, body, `window.CONSOLE_API_ENDPOINT = "https://intranet.example.com";`)
+	})
+}
+
 func TestRootHandler_Handle(t *testing.T) {
 	// Create a test logger
 	testLogger := logger.NewLogger()
@@ -97,6 +131,7 @@ func TestRootHandler_Handle(t *testing.T) {
 		"notification_center_test",
 		testLogger,
 		"https://api.example.com",
+		"",
 		"1.0",
 		"root@example.com",
 		&isInstalled,
@@ -141,6 +176,7 @@ func TestRootHandler_RegisterRoutes(t *testing.T) {
 		"notification_center_test",
 		testLogger,
 		"https://api.example.com",
+		"",
 		"1.0",
 		"root@example.com",
 		&isInstalled,
@@ -191,6 +227,7 @@ func TestRootHandler_RegisterRoutesWithNotificationCenter(t *testing.T) {
 		"notification_center_test",
 		testLogger,
 		"https://api.example.com",
+		"",
 		"1.0",
 		"root@example.com",
 		&isInstalled,
@@ -234,6 +271,7 @@ func TestRootHandler_ServeConfigJS(t *testing.T) {
 		"notification_center_test",
 		testLogger,
 		testAPIEndpoint,
+		"",
 		"1.0",
 		"root@example.com",
 		&isInstalled,
@@ -292,6 +330,7 @@ func TestRootHandler_Handle_ConfigJS(t *testing.T) {
 		"notification_center_test",
 		testLogger,
 		testAPIEndpoint,
+		"",
 		"1.0",
 		"root@example.com",
 		&isInstalled,
@@ -353,6 +392,7 @@ func TestRootHandler_ServeNotificationCenter(t *testing.T) {
 		tempDir,
 		testLogger,
 		"https://api.example.com",
+		"",
 		"1.0",
 		"root@example.com",
 		&isInstalled,
@@ -432,6 +472,7 @@ func TestRootHandler_ServeConsole(t *testing.T) {
 		"notification_center_test",
 		testLogger,
 		"https://api.example.com",
+		"",
 		"1.0",
 		"root@example.com",
 		&isInstalled,
@@ -527,6 +568,7 @@ func TestRootHandler_Handle_Comprehensive(t *testing.T) {
 		notificationCenterDir,
 		testLogger,
 		"https://api.example.com",
+		"",
 		"1.0",
 		"root@example.com",
 		&isInstalled,
@@ -647,6 +689,7 @@ func TestRootHandler_CacheIntegration(t *testing.T) {
 			"notification_center_test",
 			testLogger,
 			"https://api.example.com",
+			"",
 			"1.0",
 			"root@example.com",
 			&isInstalled,
@@ -716,6 +759,7 @@ func setupBlogHandlerTest(t *testing.T) (*mocks.MockBlogService, *pkgmocks.MockL
 		"notification_center_test",
 		mockLogger,
 		"https://api.example.com",
+		"",
 		"1.0",
 		"root@example.com",
 		&isInstalled,

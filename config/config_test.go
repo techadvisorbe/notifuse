@@ -110,6 +110,113 @@ func TestLoad_DataFeedSSRFProtectionDefault(t *testing.T) {
 	})
 }
 
+func TestLoad_ServerMode(t *testing.T) {
+	// SECRET_KEY is required for the config to load successfully.
+	_ = os.Setenv("SECRET_KEY", "test-secret-key-1234567890123456")
+	defer func() { _ = os.Unsetenv("SECRET_KEY") }()
+
+	t.Run("defaults to all", func(t *testing.T) {
+		_ = os.Unsetenv("SERVER_MODE")
+
+		cfg, err := LoadWithOptions(LoadOptions{})
+		require.NoError(t, err)
+		assert.Equal(t, ServerModeAll, cfg.Server.Mode)
+		assert.False(t, cfg.IsPublicMode())
+	})
+
+	t.Run("public mode", func(t *testing.T) {
+		_ = os.Setenv("SERVER_MODE", "public")
+		defer func() { _ = os.Unsetenv("SERVER_MODE") }()
+
+		cfg, err := LoadWithOptions(LoadOptions{})
+		require.NoError(t, err)
+		assert.Equal(t, ServerModePublic, cfg.Server.Mode)
+		assert.True(t, cfg.IsPublicMode())
+	})
+
+	t.Run("mode is case-insensitive and trimmed", func(t *testing.T) {
+		_ = os.Setenv("SERVER_MODE", " Public ")
+		defer func() { _ = os.Unsetenv("SERVER_MODE") }()
+
+		cfg, err := LoadWithOptions(LoadOptions{})
+		require.NoError(t, err)
+		assert.True(t, cfg.IsPublicMode())
+	})
+
+	t.Run("invalid mode fails boot", func(t *testing.T) {
+		_ = os.Setenv("SERVER_MODE", "console")
+		defer func() { _ = os.Unsetenv("SERVER_MODE") }()
+
+		_, err := LoadWithOptions(LoadOptions{})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "SERVER_MODE")
+	})
+
+	t.Run("extra public paths are parsed and normalized", func(t *testing.T) {
+		_ = os.Setenv("SERVER_MODE", "public")
+		_ = os.Setenv("SERVER_PUBLIC_EXTRA_PATHS", "/api/cron, api/transactional.send ,, /custom/")
+		defer func() {
+			_ = os.Unsetenv("SERVER_MODE")
+			_ = os.Unsetenv("SERVER_PUBLIC_EXTRA_PATHS")
+		}()
+
+		cfg, err := LoadWithOptions(LoadOptions{})
+		require.NoError(t, err)
+		assert.Equal(t, []string{"/api/cron", "/api/transactional.send", "/custom/"}, cfg.Server.PublicExtraPaths)
+	})
+}
+
+func TestLoad_ConsoleEndpoint(t *testing.T) {
+	// SECRET_KEY is required for the config to load successfully.
+	_ = os.Setenv("SECRET_KEY", "test-secret-key-1234567890123456")
+	_ = os.Setenv("API_ENDPOINT", "https://public.example.com")
+	defer func() {
+		_ = os.Unsetenv("SECRET_KEY")
+		_ = os.Unsetenv("API_ENDPOINT")
+	}()
+
+	t.Run("defaults to the API endpoint", func(t *testing.T) {
+		_ = os.Unsetenv("CONSOLE_ENDPOINT")
+
+		cfg, err := LoadWithOptions(LoadOptions{})
+		require.NoError(t, err)
+		assert.Equal(t, "https://public.example.com", cfg.ConsoleEndpoint)
+	})
+
+	t.Run("env override with trailing slash trimmed", func(t *testing.T) {
+		_ = os.Setenv("CONSOLE_ENDPOINT", "https://intranet.example.com/")
+		defer func() { _ = os.Unsetenv("CONSOLE_ENDPOINT") }()
+
+		cfg, err := LoadWithOptions(LoadOptions{})
+		require.NoError(t, err)
+		assert.Equal(t, "https://intranet.example.com", cfg.ConsoleEndpoint)
+		// API endpoint is untouched (still used for public-facing URLs)
+		assert.Equal(t, "https://public.example.com", cfg.APIEndpoint)
+	})
+
+	t.Run("OIDC redirect URI derives from the console endpoint", func(t *testing.T) {
+		// The OIDC callback is a management route served by the instance the
+		// console user's browser talks to, so the derived redirect URI must use
+		// the console endpoint in a split deployment.
+		_ = os.Setenv("CONSOLE_ENDPOINT", "https://intranet.example.com")
+		_ = os.Setenv("OIDC_ENABLED", "true")
+		_ = os.Setenv("OIDC_ISSUER_URL", "https://idp.example.com")
+		_ = os.Setenv("OIDC_CLIENT_ID", "client-id")
+		_ = os.Setenv("OIDC_CLIENT_SECRET", "client-secret")
+		defer func() {
+			_ = os.Unsetenv("CONSOLE_ENDPOINT")
+			_ = os.Unsetenv("OIDC_ENABLED")
+			_ = os.Unsetenv("OIDC_ISSUER_URL")
+			_ = os.Unsetenv("OIDC_CLIENT_ID")
+			_ = os.Unsetenv("OIDC_CLIENT_SECRET")
+		}()
+
+		cfg, err := LoadWithOptions(LoadOptions{})
+		require.NoError(t, err)
+		assert.Equal(t, "https://intranet.example.com/api/user.oidc.callback", cfg.OIDC.RedirectURI)
+	})
+}
+
 func TestInvalidKeysHandling(t *testing.T) {
 	t.Run("missing_secret_key", func(t *testing.T) {
 		// Clear any existing environment variables

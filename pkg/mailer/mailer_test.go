@@ -333,6 +333,36 @@ func TestSMTPMailer_SendWorkspaceInvitation(t *testing.T) {
 	}
 }
 
+func TestSMTPMailer_SendWorkspaceInvitation_ConsoleEndpoint(t *testing.T) {
+	// In split intranet/internet deployments the console lives on a different URL
+	// than the public API endpoint; the invite link must open the console.
+	config := &Config{
+		SMTPHost:        "smtp.example.com",
+		SMTPPort:        587,
+		FromEmail:       "noreply@example.com",
+		FromName:        "Notifuse",
+		APIEndpoint:     "https://public.example.com",
+		ConsoleEndpoint: "https://intranet.example.com/",
+	}
+	mailer := NewTestSMTPMailer(config)
+
+	logOutput := captureLog(func() {
+		err := mailer.SendWorkspaceInvitation("test@example.com", "Test Workspace", "Inviter", "tok-123", "en")
+		if err != nil {
+			t.Fatalf("Expected no error, got %v", err)
+		}
+	})
+
+	// Trailing slash is stripped and the console endpoint wins over the API endpoint
+	expected := "Invitation URL: https://intranet.example.com/console/accept-invitation?token=tok-123"
+	if !strings.Contains(logOutput, expected) {
+		t.Errorf("Expected log to contain '%s', but it didn't. Log: %s", expected, logOutput)
+	}
+	if strings.Contains(logOutput, "public.example.com") {
+		t.Errorf("Invite URL must not use the public API endpoint. Log: %s", logOutput)
+	}
+}
+
 func TestSMTPMailer_WithEdgeCases(t *testing.T) {
 	testCases := []struct {
 		name          string

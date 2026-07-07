@@ -31,8 +31,11 @@ type Config struct {
 	FromEmail    string
 	FromName     string
 	APIEndpoint  string
-	UseTLS       bool
-	EHLOHostname string
+	// ConsoleEndpoint is the URL where the console is reachable; used for links
+	// that open the console (e.g. invitation emails). Falls back to APIEndpoint.
+	ConsoleEndpoint string
+	UseTLS          bool
+	EHLOHostname    string
 }
 
 // SMTPMailer implements the Mailer interface using SMTP
@@ -61,8 +64,14 @@ func NewTestSMTPMailer(config *Config) *SMTPMailer {
 func (m *SMTPMailer) SendWorkspaceInvitation(email, workspaceName, inviterName, token, language string) error {
 	t := GetTranslations(language)
 
-	// Strip trailing slash from API endpoint to avoid double slashes in URL
-	endpoint := strings.TrimSuffix(m.config.APIEndpoint, "/")
+	// The invitation link opens the console, which may live on a different URL
+	// than the public API endpoint (split intranet/internet deployments)
+	endpoint := m.config.ConsoleEndpoint
+	if endpoint == "" {
+		endpoint = m.config.APIEndpoint
+	}
+	// Strip trailing slash from the endpoint to avoid double slashes in URL
+	endpoint = strings.TrimSuffix(endpoint, "/")
 	inviteURL := fmt.Sprintf("%s/console/accept-invitation?token=%s", endpoint, token)
 
 	// Create a new message

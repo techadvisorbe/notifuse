@@ -22,6 +22,7 @@ type RootHandler struct {
 	notificationCenterDir string
 	logger                logger.Logger
 	apiEndpoint           string
+	consoleEndpoint       string // endpoint the console SPA calls (defaults to apiEndpoint)
 	version               string
 	rootEmail             string
 	isInstalledPtr        *bool // Pointer to installation status that updates dynamically
@@ -42,6 +43,7 @@ func NewRootHandler(
 	notificationCenterDir string,
 	logger logger.Logger,
 	apiEndpoint string,
+	consoleEndpoint string,
 	version string,
 	rootEmail string,
 	isInstalledPtr *bool,
@@ -60,6 +62,7 @@ func NewRootHandler(
 		notificationCenterDir: notificationCenterDir,
 		logger:                logger,
 		apiEndpoint:           apiEndpoint,
+		consoleEndpoint:       consoleEndpoint,
 		version:               version,
 		rootEmail:             rootEmail,
 		isInstalledPtr:        isInstalledPtr,
@@ -163,9 +166,18 @@ func (h *RootHandler) serveConfigJS(w http.ResponseWriter, r *http.Request) {
 		oidcButtonLabel = "Sign in with SSO"
 	}
 
+	// CONSOLE_API_ENDPOINT is where the console SPA sends its API calls; it equals
+	// API_ENDPOINT unless CONSOLE_ENDPOINT is set (split intranet/internet deployment).
+	// API_ENDPOINT stays the public endpoint used to display tracking/webhook URLs.
+	consoleAPIEndpoint := h.consoleEndpoint
+	if consoleAPIEndpoint == "" {
+		consoleAPIEndpoint = h.apiEndpoint
+	}
+
 	configJS := fmt.Sprintf(
-		"window.API_ENDPOINT = %q;\nwindow.VERSION = %q;\nwindow.ROOT_EMAIL = %q;\nwindow.IS_INSTALLED = %s;\nwindow.TIMEZONES = %s;\nwindow.SMTP_BRIDGE_ENABLED = %s;\nwindow.SMTP_BRIDGE_DOMAIN = %q;\nwindow.SMTP_BRIDGE_PORT = %d;\nwindow.SMTP_BRIDGE_TLS_MODE = %q;\nwindow.OIDC_ENABLED = %s;\nwindow.OIDC_BUTTON_LABEL = %q;",
+		"window.API_ENDPOINT = %q;\nwindow.CONSOLE_API_ENDPOINT = %q;\nwindow.VERSION = %q;\nwindow.ROOT_EMAIL = %q;\nwindow.IS_INSTALLED = %s;\nwindow.TIMEZONES = %s;\nwindow.SMTP_BRIDGE_ENABLED = %s;\nwindow.SMTP_BRIDGE_DOMAIN = %q;\nwindow.SMTP_BRIDGE_PORT = %d;\nwindow.SMTP_BRIDGE_TLS_MODE = %q;\nwindow.OIDC_ENABLED = %s;\nwindow.OIDC_BUTTON_LABEL = %q;",
 		h.apiEndpoint,
+		consoleAPIEndpoint,
 		h.version,
 		h.rootEmail,
 		isInstalledStr,

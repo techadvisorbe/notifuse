@@ -91,8 +91,9 @@ func normalizeDomains(domains []string) []string {
 // resolveOIDCConfig resolves the effective OIDC configuration with env-wins-else-DB
 // precedence, mirroring the SMTP-bridge resolution semantics. DB settings are only
 // consulted when the instance is installed. The redirect URI is derived from the
-// final (post-overlay, post-trim) apiEndpoint when neither env nor DB supplies one.
-func resolveOIDCConfig(env EnvValues, ss *SystemSettings, isInstalled bool, apiEndpoint string) OIDCConfig {
+// final (post-overlay, post-trim) console endpoint when neither env nor DB supplies one
+// (the callback is served by the instance the console user's browser talks to).
+func resolveOIDCConfig(env EnvValues, ss *SystemSettings, isInstalled bool, consoleEndpoint string) OIDCConfig {
 	hasDB := isInstalled && ss != nil
 
 	c := OIDCConfig{
@@ -167,9 +168,9 @@ func resolveOIDCConfig(env EnvValues, ss *SystemSettings, isInstalled bool, apiE
 		c.ButtonLabel = defaultOIDCButtonLabel
 	}
 
-	// Derive the redirect URI from the final apiEndpoint when empty.
-	if c.RedirectURI == "" && apiEndpoint != "" {
-		c.RedirectURI = strings.TrimRight(apiEndpoint, "/") + oidcCallbackPath
+	// Derive the redirect URI from the final console endpoint when empty.
+	if c.RedirectURI == "" && consoleEndpoint != "" {
+		c.RedirectURI = strings.TrimRight(consoleEndpoint, "/") + oidcCallbackPath
 	}
 
 	return c

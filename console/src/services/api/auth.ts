@@ -75,7 +75,9 @@ async function oidcExchange(code: string): Promise<VerifyResponse> {
   if (defaultOrigin.includes('notifusedev.com')) {
     defaultOrigin = 'https://localapi.notifuse.com:4000'
   }
-  const apiEndpoint = window.API_ENDPOINT?.trim().replace(/\/+$/, '') || defaultOrigin
+  const apiEndpoint =
+    (window.CONSOLE_API_ENDPOINT || window.API_ENDPOINT)?.trim().replace(/\/+$/, '') ||
+    defaultOrigin
 
   const response = await fetch(`${apiEndpoint}/api/user.oidc.exchange`, {
     method: 'POST',
