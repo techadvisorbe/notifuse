@@ -36,8 +36,8 @@ msgstr "(Annulé)"
 
 #. placeholder {0}: record.email.reply_to
 #. placeholder {0}: templateSender?.name || defaultSender?.name
-#: src/components/templates/TemplatePreviewDrawer.tsx:259
-#: src/components/templates/TemplatePreviewDrawer.tsx:295
+#: src/components/templates/TemplatePreviewDrawer.tsx:274
+#: src/components/templates/TemplatePreviewDrawer.tsx:310
 msgid "(original: {0})"
 msgstr "(original : {0})"
 
@@ -1260,7 +1260,7 @@ msgstr "Authentification basique (nom d utilisateur/mot de passe)"
 msgid "Basic Information"
 msgstr "Informations de base"
 
-#: src/components/templates/TemplatePreviewDrawer.tsx:329
+#: src/components/templates/TemplatePreviewDrawer.tsx:344
 msgid "BCC"
 msgstr "CCI"
 
@@ -1765,7 +1765,7 @@ msgstr "Catégorie mise à jour avec succès"
 msgid "Category:"
 msgstr "Catégorie :"
 
-#: src/components/templates/TemplatePreviewDrawer.tsx:317
+#: src/components/templates/TemplatePreviewDrawer.tsx:332
 msgid "CC"
 msgstr "CC"
 
@@ -2767,6 +2767,10 @@ msgstr "Dashboard"
 #: src/components/email_builder/ui/BorderInput.tsx:57
 msgid "Dashed"
 msgstr "Pointillé"
+
+#: src/components/templates/TemplatePreviewDrawer.tsx:241
+msgid "Data"
+msgstr ""
 
 #: src/components/blog/PublishModal.tsx:131
 #: src/components/broadcasts/SendOrScheduleModal.tsx:207
@@ -3841,7 +3845,7 @@ msgstr "Entrez l adresse email de réponse"
 msgid "Enter spacing"
 msgstr "Entrez l espacement"
 
-#: src/pages/SignInPage.tsx:244
+#: src/pages/SignInPage.tsx:246
 msgid "Enter the 6-digit code sent to {email}"
 msgstr "Entrez le code à 6 chiffres envoyé à {email}"
 
@@ -3891,7 +3895,7 @@ msgstr "Erreur lors du chargement des automations"
 msgid "Error loading data"
 msgstr "Erreur lors du chargement des données"
 
-#: src/components/templates/TemplatePreviewDrawer.tsx:361
+#: src/components/templates/TemplatePreviewDrawer.tsx:376
 msgid "Error loading preview"
 msgstr "Erreur lors du chargement de l aperçu"
 
@@ -4811,7 +4815,7 @@ msgstr "Modifications non enregistrées trouvées depuis {0}"
 msgid "Frequency"
 msgstr "Fréquence"
 
-#: src/components/templates/TemplatePreviewDrawer.tsx:250
+#: src/components/templates/TemplatePreviewDrawer.tsx:265
 msgid "From"
 msgstr "De"
 
@@ -5683,7 +5687,7 @@ msgstr "L étiquette doit faire au maximum 100 caractères"
 #: src/components/contacts/ContactsCsvUploadDrawer.tsx:96
 #: src/components/contacts/ExportContactsModal.tsx:68
 #: src/components/templates/SendTemplateModal.tsx:326
-#: src/components/templates/TemplatePreviewDrawer.tsx:340
+#: src/components/templates/TemplatePreviewDrawer.tsx:355
 #: src/pages/ContactsPage.tsx:365
 #: src/pages/ContactsPage.tsx:421
 #: src/pages/ContactsPage.tsx:696
@@ -5801,7 +5805,7 @@ msgstr "Ligne"
 #. placeholder {0}: detail.line
 #. placeholder {1}: detail.tagName
 #. placeholder {2}: detail.message
-#: src/components/templates/TemplatePreviewDrawer.tsx:376
+#: src/components/templates/TemplatePreviewDrawer.tsx:391
 msgid "Line {0} ({1}): {2}"
 msgstr "Ligne {0} ({1}) : {2}"
 
@@ -6151,6 +6155,10 @@ msgstr "Méta description"
 msgid "Meta Title"
 msgstr "Méta titre"
 
+#: src/components/templates/TemplatePreviewDrawer.tsx:237
+msgid "Metadata"
+msgstr ""
+
 #: src/components/settings/Integrations.tsx:1639
 msgid "Microsoft 365 / Office 365"
 msgstr "Microsoft 365 / Office 365"
@@ -6204,7 +6212,7 @@ msgid "MJML compilation completed successfully with no warnings or errors."
 msgstr "Compilation MJML terminée avec succès sans avertissements ni erreurs."
 
 #. placeholder {0}: mjmlError.message
-#: src/components/templates/TemplatePreviewDrawer.tsx:368
+#: src/components/templates/TemplatePreviewDrawer.tsx:383
 msgid "MJML Compilation Error: {0}"
 msgstr "Erreur de compilation MJML : {0}"
 
@@ -6486,7 +6494,7 @@ msgstr "Aucune donnée disponible"
 msgid "No data returned"
 msgstr ""
 
-#: src/components/templates/TemplatePreviewDrawer.tsx:280
+#: src/components/templates/TemplatePreviewDrawer.tsx:295
 msgid "No default sender configured"
 msgstr "Aucun expéditeur par défaut configuré"
 
@@ -6494,7 +6502,7 @@ msgstr "Aucun expéditeur par défaut configuré"
 msgid "No draft posts"
 msgstr "Pas d articles en brouillon"
 
-#: src/components/templates/TemplatePreviewDrawer.tsx:255
+#: src/components/templates/TemplatePreviewDrawer.tsx:270
 msgid "no email"
 msgstr "pas d email"
 
@@ -6574,7 +6582,7 @@ msgstr "Pas d articles dans cette catégorie"
 msgid "No posts yet"
 msgstr "Pas encore d articles"
 
-#: src/components/templates/TemplatePreviewDrawer.tsx:405
+#: src/components/templates/TemplatePreviewDrawer.tsx:420
 msgid "No preview available or template is empty."
 msgstr "Aucun aperçu disponible ou le modèle est vide."
 
@@ -6618,7 +6626,7 @@ msgstr "Aucun paramètre disponible pour le conteneur d attributs."
 msgid "No settings available for the head element."
 msgstr "Aucun paramètre disponible pour l élément head."
 
-#: src/components/templates/TemplatePreviewDrawer.tsx:381
+#: src/components/templates/TemplatePreviewDrawer.tsx:396
 msgid "No specific details provided."
 msgstr "Aucun détail spécifique fourni."
 
@@ -6726,7 +6734,7 @@ msgstr "Pas dans la liste"
 #: src/components/settings/GeneralSettings.tsx:126
 #: src/components/settings/SMTPBridgeSettings.tsx:42
 #: src/components/settings/SMTPBridgeSettings.tsx:46
-#: src/components/templates/TemplatePreviewDrawer.tsx:300
+#: src/components/templates/TemplatePreviewDrawer.tsx:315
 msgid "Not set"
 msgstr "Non défini"
 
@@ -7211,7 +7219,7 @@ msgstr "Veuillez entrer un slug"
 msgid "Please enter a URL"
 msgstr "Veuillez entrer une URL"
 
-#: src/pages/SignInPage.tsx:252
+#: src/pages/SignInPage.tsx:254
 msgid "Please enter a valid 6-digit code!"
 msgstr "Veuillez entrer un code à 6 chiffres valide !"
 
@@ -7285,7 +7293,7 @@ msgstr "Veuillez entrer le nom de l espace de travail"
 msgid "Please enter your API key"
 msgstr "Veuillez entrer votre clé API"
 
-#: src/pages/SignInPage.tsx:249
+#: src/pages/SignInPage.tsx:251
 msgid "Please input the magic code!"
 msgstr "Veuillez entrer le code magique !"
 
@@ -7943,7 +7951,7 @@ msgstr ""
 #~ msgstr ""
 
 #: src/components/templates/CreateTemplateDrawer.tsx:819
-#: src/components/templates/TemplatePreviewDrawer.tsx:289
+#: src/components/templates/TemplatePreviewDrawer.tsx:304
 msgid "Reply to"
 msgstr "Répondre à"
 
@@ -7990,7 +7998,7 @@ msgstr ""
 msgid "Requires a padding"
 msgstr "Nécessite un espacement"
 
-#: src/pages/SignInPage.tsx:283
+#: src/pages/SignInPage.tsx:285
 msgid "Resend code"
 msgstr "Renvoyer le code"
 
@@ -8976,7 +8984,7 @@ msgstr "Connexion"
 
 #: src/components/settings/SystemSettingsDrawer.tsx:602
 #: src/pages/SetupWizard.tsx:747
-#: src/pages/SignInPage.tsx:237
+#: src/pages/SignInPage.tsx:239
 msgid "Sign in with SSO"
 msgstr ""
 
@@ -9310,7 +9318,7 @@ msgstr "Style"
 msgid "Style Attributes"
 msgstr "Attributs de style"
 
-#: src/components/templates/TemplatePreviewDrawer.tsx:305
+#: src/components/templates/TemplatePreviewDrawer.tsx:320
 #: src/components/templates/TemplateTranslationsTab.tsx:212
 #: src/pages/BroadcastsPage.tsx:725
 #: src/pages/TemplatesPage.tsx:202
@@ -9319,7 +9327,7 @@ msgstr "Sujet"
 
 #: src/components/email_builder/blocks/MjPreviewBlock.tsx:33
 #: src/components/templates/CreateTemplateDrawer.tsx:798
-#: src/components/templates/TemplatePreviewDrawer.tsx:310
+#: src/components/templates/TemplatePreviewDrawer.tsx:325
 #: src/components/templates/TemplateTranslationsTab.tsx:220
 msgid "Subject preview"
 msgstr "Aperçu du sujet"
@@ -9548,7 +9556,7 @@ msgid "Template created successfully"
 msgstr "Modèle d'email créé avec succès"
 
 #: src/components/email_builder/panels/Preview.tsx:336
-#: src/components/templates/TemplatePreviewDrawer.tsx:231
+#: src/components/templates/TemplatePreviewDrawer.tsx:232
 msgid "Template Data"
 msgstr "Données du modèle"
 
@@ -10579,7 +10587,7 @@ msgstr "URL :"
 msgid "Use"
 msgstr "Utiliser"
 
-#: src/pages/SignInPage.tsx:275
+#: src/pages/SignInPage.tsx:277
 msgid "Use a different email"
 msgstr "Utiliser un autre email"
 
@@ -10717,7 +10725,7 @@ msgstr "Nom de la variante"
 msgid "Variations"
 msgstr "Variations"
 
-#: src/pages/SignInPage.tsx:265
+#: src/pages/SignInPage.tsx:267
 msgid "Verify Code"
 msgstr "Vérifier le code"
 

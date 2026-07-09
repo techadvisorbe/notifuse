@@ -36,8 +36,8 @@ msgstr "(キャンセル済み)"
 
 #. placeholder {0}: record.email.reply_to
 #. placeholder {0}: templateSender?.name || defaultSender?.name
-#: src/components/templates/TemplatePreviewDrawer.tsx:259
-#: src/components/templates/TemplatePreviewDrawer.tsx:295
+#: src/components/templates/TemplatePreviewDrawer.tsx:274
+#: src/components/templates/TemplatePreviewDrawer.tsx:310
 msgid "(original: {0})"
 msgstr "(元: {0})"
 
@@ -1260,7 +1260,7 @@ msgstr "Basic認証 (ユーザー名/パスワード)"
 msgid "Basic Information"
 msgstr "基本情報"
 
-#: src/components/templates/TemplatePreviewDrawer.tsx:329
+#: src/components/templates/TemplatePreviewDrawer.tsx:344
 msgid "BCC"
 msgstr "BCC"
 
@@ -1765,7 +1765,7 @@ msgstr "カテゴリを更新しました"
 msgid "Category:"
 msgstr "カテゴリ:"
 
-#: src/components/templates/TemplatePreviewDrawer.tsx:317
+#: src/components/templates/TemplatePreviewDrawer.tsx:332
 msgid "CC"
 msgstr "CC"
 
@@ -2767,6 +2767,10 @@ msgstr "ダッシュボード"
 #: src/components/email_builder/ui/BorderInput.tsx:57
 msgid "Dashed"
 msgstr "破線"
+
+#: src/components/templates/TemplatePreviewDrawer.tsx:241
+msgid "Data"
+msgstr ""
 
 #: src/components/blog/PublishModal.tsx:131
 #: src/components/broadcasts/SendOrScheduleModal.tsx:207
@@ -3841,7 +3845,7 @@ msgstr "返信先メールアドレスを入力"
 msgid "Enter spacing"
 msgstr "間隔を入力"
 
-#: src/pages/SignInPage.tsx:244
+#: src/pages/SignInPage.tsx:246
 msgid "Enter the 6-digit code sent to {email}"
 msgstr "{email}に送信された6桁のコードを入力"
 
@@ -3891,7 +3895,7 @@ msgstr "オートメーションの読み込みエラー"
 msgid "Error loading data"
 msgstr "データの読み込みエラー"
 
-#: src/components/templates/TemplatePreviewDrawer.tsx:361
+#: src/components/templates/TemplatePreviewDrawer.tsx:376
 msgid "Error loading preview"
 msgstr "プレビューの読み込みエラー"
 
@@ -4811,7 +4815,7 @@ msgstr "{0}からの未保存の変更が見つかりました"
 msgid "Frequency"
 msgstr "頻度"
 
-#: src/components/templates/TemplatePreviewDrawer.tsx:250
+#: src/components/templates/TemplatePreviewDrawer.tsx:265
 msgid "From"
 msgstr "差出人"
 
@@ -5683,7 +5687,7 @@ msgstr "ラベルは100文字以下である必要があります"
 #: src/components/contacts/ContactsCsvUploadDrawer.tsx:96
 #: src/components/contacts/ExportContactsModal.tsx:68
 #: src/components/templates/SendTemplateModal.tsx:326
-#: src/components/templates/TemplatePreviewDrawer.tsx:340
+#: src/components/templates/TemplatePreviewDrawer.tsx:355
 #: src/pages/ContactsPage.tsx:365
 #: src/pages/ContactsPage.tsx:421
 #: src/pages/ContactsPage.tsx:696
@@ -5801,7 +5805,7 @@ msgstr "行"
 #. placeholder {0}: detail.line
 #. placeholder {1}: detail.tagName
 #. placeholder {2}: detail.message
-#: src/components/templates/TemplatePreviewDrawer.tsx:376
+#: src/components/templates/TemplatePreviewDrawer.tsx:391
 msgid "Line {0} ({1}): {2}"
 msgstr "行 {0} ({1}): {2}"
 
@@ -6151,6 +6155,10 @@ msgstr "メタ説明"
 msgid "Meta Title"
 msgstr "メタタイトル"
 
+#: src/components/templates/TemplatePreviewDrawer.tsx:237
+msgid "Metadata"
+msgstr ""
+
 #: src/components/settings/Integrations.tsx:1639
 msgid "Microsoft 365 / Office 365"
 msgstr "Microsoft 365 / Office 365"
@@ -6204,7 +6212,7 @@ msgid "MJML compilation completed successfully with no warnings or errors."
 msgstr "MJMLコンパイルが警告やエラーなしで正常に完了しました。"
 
 #. placeholder {0}: mjmlError.message
-#: src/components/templates/TemplatePreviewDrawer.tsx:368
+#: src/components/templates/TemplatePreviewDrawer.tsx:383
 msgid "MJML Compilation Error: {0}"
 msgstr "MJMLコンパイルエラー: {0}"
 
@@ -6486,7 +6494,7 @@ msgstr "データがありません"
 msgid "No data returned"
 msgstr ""
 
-#: src/components/templates/TemplatePreviewDrawer.tsx:280
+#: src/components/templates/TemplatePreviewDrawer.tsx:295
 msgid "No default sender configured"
 msgstr "デフォルトの差出人が設定されていません"
 
@@ -6494,7 +6502,7 @@ msgstr "デフォルトの差出人が設定されていません"
 msgid "No draft posts"
 msgstr "下書き投稿がありません"
 
-#: src/components/templates/TemplatePreviewDrawer.tsx:255
+#: src/components/templates/TemplatePreviewDrawer.tsx:270
 msgid "no email"
 msgstr "メールなし"
 
@@ -6574,7 +6582,7 @@ msgstr "このカテゴリに投稿がありません"
 msgid "No posts yet"
 msgstr "投稿がまだありません"
 
-#: src/components/templates/TemplatePreviewDrawer.tsx:405
+#: src/components/templates/TemplatePreviewDrawer.tsx:420
 msgid "No preview available or template is empty."
 msgstr "プレビューが利用できないか、テンプレートが空です。"
 
@@ -6618,7 +6626,7 @@ msgstr "属性コンテナの設定はありません。"
 msgid "No settings available for the head element."
 msgstr "head要素の設定はありません。"
 
-#: src/components/templates/TemplatePreviewDrawer.tsx:381
+#: src/components/templates/TemplatePreviewDrawer.tsx:396
 msgid "No specific details provided."
 msgstr "詳細が提供されていません。"
 
@@ -6726,7 +6734,7 @@ msgstr "リストに含まれない"
 #: src/components/settings/GeneralSettings.tsx:126
 #: src/components/settings/SMTPBridgeSettings.tsx:42
 #: src/components/settings/SMTPBridgeSettings.tsx:46
-#: src/components/templates/TemplatePreviewDrawer.tsx:300
+#: src/components/templates/TemplatePreviewDrawer.tsx:315
 msgid "Not set"
 msgstr "未設定"
 
@@ -7211,7 +7219,7 @@ msgstr "スラッグを入力してください"
 msgid "Please enter a URL"
 msgstr "URLを入力してください"
 
-#: src/pages/SignInPage.tsx:252
+#: src/pages/SignInPage.tsx:254
 msgid "Please enter a valid 6-digit code!"
 msgstr "有効な6桁のコードを入力してください！"
 
@@ -7285,7 +7293,7 @@ msgstr "ワークスペース名を入力してください"
 msgid "Please enter your API key"
 msgstr "APIキーを入力してください"
 
-#: src/pages/SignInPage.tsx:249
+#: src/pages/SignInPage.tsx:251
 msgid "Please input the magic code!"
 msgstr "マジックコードを入力してください！"
 
@@ -7943,7 +7951,7 @@ msgstr ""
 #~ msgstr ""
 
 #: src/components/templates/CreateTemplateDrawer.tsx:819
-#: src/components/templates/TemplatePreviewDrawer.tsx:289
+#: src/components/templates/TemplatePreviewDrawer.tsx:304
 msgid "Reply to"
 msgstr "返信先"
 
@@ -7990,7 +7998,7 @@ msgstr ""
 msgid "Requires a padding"
 msgstr "パディングが必要です"
 
-#: src/pages/SignInPage.tsx:283
+#: src/pages/SignInPage.tsx:285
 msgid "Resend code"
 msgstr "コードを再送"
 
@@ -8976,7 +8984,7 @@ msgstr "サインイン"
 
 #: src/components/settings/SystemSettingsDrawer.tsx:602
 #: src/pages/SetupWizard.tsx:747
-#: src/pages/SignInPage.tsx:237
+#: src/pages/SignInPage.tsx:239
 msgid "Sign in with SSO"
 msgstr ""
 
@@ -9310,7 +9318,7 @@ msgstr "スタイル"
 msgid "Style Attributes"
 msgstr "スタイル属性"
 
-#: src/components/templates/TemplatePreviewDrawer.tsx:305
+#: src/components/templates/TemplatePreviewDrawer.tsx:320
 #: src/components/templates/TemplateTranslationsTab.tsx:212
 #: src/pages/BroadcastsPage.tsx:725
 #: src/pages/TemplatesPage.tsx:202
@@ -9319,7 +9327,7 @@ msgstr "件名"
 
 #: src/components/email_builder/blocks/MjPreviewBlock.tsx:33
 #: src/components/templates/CreateTemplateDrawer.tsx:798
-#: src/components/templates/TemplatePreviewDrawer.tsx:310
+#: src/components/templates/TemplatePreviewDrawer.tsx:325
 #: src/components/templates/TemplateTranslationsTab.tsx:220
 msgid "Subject preview"
 msgstr "件名プレビュー"
@@ -9548,7 +9556,7 @@ msgid "Template created successfully"
 msgstr "テンプレートが正常に作成されました"
 
 #: src/components/email_builder/panels/Preview.tsx:336
-#: src/components/templates/TemplatePreviewDrawer.tsx:231
+#: src/components/templates/TemplatePreviewDrawer.tsx:232
 msgid "Template Data"
 msgstr "テンプレートデータ"
 
@@ -10579,7 +10587,7 @@ msgstr "URL:"
 msgid "Use"
 msgstr "使用"
 
-#: src/pages/SignInPage.tsx:275
+#: src/pages/SignInPage.tsx:277
 msgid "Use a different email"
 msgstr "別のメールを使用"
 
@@ -10717,7 +10725,7 @@ msgstr "バリアント名"
 msgid "Variations"
 msgstr "バリエーション"
 
-#: src/pages/SignInPage.tsx:265
+#: src/pages/SignInPage.tsx:267
 msgid "Verify Code"
 msgstr "コードを確認"
 

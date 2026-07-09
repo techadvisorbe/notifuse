@@ -226,10 +226,25 @@ const TemplatePreviewDrawer: React.FC<TemplatePreviewDrawerProps> = ({
   // server rendered with (includes the injected workspace object); fall back to the
   // local data before the first compile resolves.
   const testData = effectiveTestData || templateData || record.test_data || {}
+  const messageMetadata = messageHistory?.message_data?.metadata
   items.push({
     key: '3',
     label: t`Template Data`,
-    children: <JsonDataViewer data={testData} />
+    children:
+      messageMetadata && Object.keys(messageMetadata).length > 0 ? (
+        <Space direction="vertical" size="middle" className="w-full">
+          <div>
+            <Text strong className="block mb-1">{t`Metadata`}</Text>
+            <JsonDataViewer data={messageMetadata} />
+          </div>
+          <div>
+            <Text strong className="block mb-1">{t`Data`}</Text>
+            <JsonDataViewer data={testData} />
+          </div>
+        </Space>
+      ) : (
+        <JsonDataViewer data={testData} />
+      )
   })
 
   const emailProvider = workspace.integrations?.find(

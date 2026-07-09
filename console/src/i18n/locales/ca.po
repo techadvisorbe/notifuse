@@ -36,8 +36,8 @@ msgstr "(Cancel·lat)"
 
 #. placeholder {0}: record.email.reply_to
 #. placeholder {0}: templateSender?.name || defaultSender?.name
-#: src/components/templates/TemplatePreviewDrawer.tsx:259
-#: src/components/templates/TemplatePreviewDrawer.tsx:295
+#: src/components/templates/TemplatePreviewDrawer.tsx:274
+#: src/components/templates/TemplatePreviewDrawer.tsx:310
 msgid "(original: {0})"
 msgstr "(original: {0})"
 
@@ -1260,7 +1260,7 @@ msgstr "Autenticació bàsica (Usuari/Contrasenya)"
 msgid "Basic Information"
 msgstr "Informació bàsica"
 
-#: src/components/templates/TemplatePreviewDrawer.tsx:329
+#: src/components/templates/TemplatePreviewDrawer.tsx:344
 msgid "BCC"
 msgstr "CCO"
 
@@ -1765,7 +1765,7 @@ msgstr "Categoria actualitzada correctament"
 msgid "Category:"
 msgstr "Categoria:"
 
-#: src/components/templates/TemplatePreviewDrawer.tsx:317
+#: src/components/templates/TemplatePreviewDrawer.tsx:332
 msgid "CC"
 msgstr "CC"
 
@@ -2767,6 +2767,10 @@ msgstr "Dashboard"
 #: src/components/email_builder/ui/BorderInput.tsx:57
 msgid "Dashed"
 msgstr "Discontinu"
+
+#: src/components/templates/TemplatePreviewDrawer.tsx:241
+msgid "Data"
+msgstr ""
 
 #: src/components/blog/PublishModal.tsx:131
 #: src/components/broadcasts/SendOrScheduleModal.tsx:207
@@ -3841,7 +3845,7 @@ msgstr "Introduïu adreça de correu de resposta"
 msgid "Enter spacing"
 msgstr "Introduïu espaiat"
 
-#: src/pages/SignInPage.tsx:244
+#: src/pages/SignInPage.tsx:246
 msgid "Enter the 6-digit code sent to {email}"
 msgstr "Introdueix el codi de 6 dígits enviat a {email}"
 
@@ -3891,7 +3895,7 @@ msgstr "Error en carregar les automatitzacions"
 msgid "Error loading data"
 msgstr "Error en carregar les dades"
 
-#: src/components/templates/TemplatePreviewDrawer.tsx:361
+#: src/components/templates/TemplatePreviewDrawer.tsx:376
 msgid "Error loading preview"
 msgstr "Error en carregar la previsualització"
 
@@ -4811,7 +4815,7 @@ msgstr "Trobats canvis sense desar de {0}"
 msgid "Frequency"
 msgstr "Freqüència"
 
-#: src/components/templates/TemplatePreviewDrawer.tsx:250
+#: src/components/templates/TemplatePreviewDrawer.tsx:265
 msgid "From"
 msgstr "Des de"
 
@@ -5683,7 +5687,7 @@ msgstr "L'etiqueta ha de tenir com a màxim 100 caràcters"
 #: src/components/contacts/ContactsCsvUploadDrawer.tsx:96
 #: src/components/contacts/ExportContactsModal.tsx:68
 #: src/components/templates/SendTemplateModal.tsx:326
-#: src/components/templates/TemplatePreviewDrawer.tsx:340
+#: src/components/templates/TemplatePreviewDrawer.tsx:355
 #: src/pages/ContactsPage.tsx:365
 #: src/pages/ContactsPage.tsx:421
 #: src/pages/ContactsPage.tsx:696
@@ -5801,7 +5805,7 @@ msgstr "Línia"
 #. placeholder {0}: detail.line
 #. placeholder {1}: detail.tagName
 #. placeholder {2}: detail.message
-#: src/components/templates/TemplatePreviewDrawer.tsx:376
+#: src/components/templates/TemplatePreviewDrawer.tsx:391
 msgid "Line {0} ({1}): {2}"
 msgstr "Línia {0} ({1}): {2}"
 
@@ -6151,6 +6155,10 @@ msgstr "Meta descripció"
 msgid "Meta Title"
 msgstr "Meta títol"
 
+#: src/components/templates/TemplatePreviewDrawer.tsx:237
+msgid "Metadata"
+msgstr ""
+
 #: src/components/settings/Integrations.tsx:1639
 msgid "Microsoft 365 / Office 365"
 msgstr "Microsoft 365 / Office 365"
@@ -6204,7 +6212,7 @@ msgid "MJML compilation completed successfully with no warnings or errors."
 msgstr "La compilació MJML s'ha completat correctament sense avisos ni errors."
 
 #. placeholder {0}: mjmlError.message
-#: src/components/templates/TemplatePreviewDrawer.tsx:368
+#: src/components/templates/TemplatePreviewDrawer.tsx:383
 msgid "MJML Compilation Error: {0}"
 msgstr "Error de compilació MJML: {0}"
 
@@ -6486,7 +6494,7 @@ msgstr "No hi ha dades disponibles"
 msgid "No data returned"
 msgstr ""
 
-#: src/components/templates/TemplatePreviewDrawer.tsx:280
+#: src/components/templates/TemplatePreviewDrawer.tsx:295
 msgid "No default sender configured"
 msgstr "No s'ha configurat cap remitent per defecte"
 
@@ -6494,7 +6502,7 @@ msgstr "No s'ha configurat cap remitent per defecte"
 msgid "No draft posts"
 msgstr "No hi ha publicacions en esborrany"
 
-#: src/components/templates/TemplatePreviewDrawer.tsx:255
+#: src/components/templates/TemplatePreviewDrawer.tsx:270
 msgid "no email"
 msgstr "sense correu"
 
@@ -6574,7 +6582,7 @@ msgstr "No hi ha publicacions a aquesta categoria"
 msgid "No posts yet"
 msgstr "Encara no hi ha publicacions"
 
-#: src/components/templates/TemplatePreviewDrawer.tsx:405
+#: src/components/templates/TemplatePreviewDrawer.tsx:420
 msgid "No preview available or template is empty."
 msgstr "No hi ha previsualització disponible o la plantilla és buida."
 
@@ -6618,7 +6626,7 @@ msgstr "No hi ha configuració disponible per al contenidor d'atributs."
 msgid "No settings available for the head element."
 msgstr "No hi ha configuració disponible per a l'element de capçalera."
 
-#: src/components/templates/TemplatePreviewDrawer.tsx:381
+#: src/components/templates/TemplatePreviewDrawer.tsx:396
 msgid "No specific details provided."
 msgstr "No s'han proporcionat detalls específics."
 
@@ -6726,7 +6734,7 @@ msgstr "No és a la llista"
 #: src/components/settings/GeneralSettings.tsx:126
 #: src/components/settings/SMTPBridgeSettings.tsx:42
 #: src/components/settings/SMTPBridgeSettings.tsx:46
-#: src/components/templates/TemplatePreviewDrawer.tsx:300
+#: src/components/templates/TemplatePreviewDrawer.tsx:315
 msgid "Not set"
 msgstr "No establert"
 
@@ -7211,7 +7219,7 @@ msgstr "Si us plau, introduïu un slug"
 msgid "Please enter a URL"
 msgstr "Si us plau, introduïu una URL"
 
-#: src/pages/SignInPage.tsx:252
+#: src/pages/SignInPage.tsx:254
 msgid "Please enter a valid 6-digit code!"
 msgstr "Si us plau, introdueix un codi de 6 dígits vàlid!"
 
@@ -7285,7 +7293,7 @@ msgstr "Si us plau, introduïu el nom de l'espai de treball"
 msgid "Please enter your API key"
 msgstr "Si us plau, introduïu la vostra clau API"
 
-#: src/pages/SignInPage.tsx:249
+#: src/pages/SignInPage.tsx:251
 msgid "Please input the magic code!"
 msgstr "Si us plau, introdueix el codi màgic!"
 
@@ -7943,7 +7951,7 @@ msgstr ""
 #~ msgstr ""
 
 #: src/components/templates/CreateTemplateDrawer.tsx:819
-#: src/components/templates/TemplatePreviewDrawer.tsx:289
+#: src/components/templates/TemplatePreviewDrawer.tsx:304
 msgid "Reply to"
 msgstr "Respondre a"
 
@@ -7990,7 +7998,7 @@ msgstr ""
 msgid "Requires a padding"
 msgstr "Requereix un farciment"
 
-#: src/pages/SignInPage.tsx:283
+#: src/pages/SignInPage.tsx:285
 msgid "Resend code"
 msgstr "Reenviar codi"
 
@@ -8976,7 +8984,7 @@ msgstr "Iniciar sessió"
 
 #: src/components/settings/SystemSettingsDrawer.tsx:602
 #: src/pages/SetupWizard.tsx:747
-#: src/pages/SignInPage.tsx:237
+#: src/pages/SignInPage.tsx:239
 msgid "Sign in with SSO"
 msgstr ""
 
@@ -9310,7 +9318,7 @@ msgstr "Estil"
 msgid "Style Attributes"
 msgstr "Atributs d'estil"
 
-#: src/components/templates/TemplatePreviewDrawer.tsx:305
+#: src/components/templates/TemplatePreviewDrawer.tsx:320
 #: src/components/templates/TemplateTranslationsTab.tsx:212
 #: src/pages/BroadcastsPage.tsx:725
 #: src/pages/TemplatesPage.tsx:202
@@ -9319,7 +9327,7 @@ msgstr "Assumpte"
 
 #: src/components/email_builder/blocks/MjPreviewBlock.tsx:33
 #: src/components/templates/CreateTemplateDrawer.tsx:798
-#: src/components/templates/TemplatePreviewDrawer.tsx:310
+#: src/components/templates/TemplatePreviewDrawer.tsx:325
 #: src/components/templates/TemplateTranslationsTab.tsx:220
 msgid "Subject preview"
 msgstr "Vista prèvia de l'assumpte"
@@ -9548,7 +9556,7 @@ msgid "Template created successfully"
 msgstr "Plantilla creada correctament"
 
 #: src/components/email_builder/panels/Preview.tsx:336
-#: src/components/templates/TemplatePreviewDrawer.tsx:231
+#: src/components/templates/TemplatePreviewDrawer.tsx:232
 msgid "Template Data"
 msgstr "Dades de la plantilla"
 
@@ -10579,7 +10587,7 @@ msgstr "URL:"
 msgid "Use"
 msgstr "Utilitzar"
 
-#: src/pages/SignInPage.tsx:275
+#: src/pages/SignInPage.tsx:277
 msgid "Use a different email"
 msgstr "Utilitzar un altre correu"
 
@@ -10717,7 +10725,7 @@ msgstr "Nom de la variant"
 msgid "Variations"
 msgstr "Variacions"
 
-#: src/pages/SignInPage.tsx:265
+#: src/pages/SignInPage.tsx:267
 msgid "Verify Code"
 msgstr "Verificar codi"
 
