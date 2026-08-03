@@ -86,6 +86,10 @@ type EnvValues struct {
 	// and is parsed at the config edge with GetBool semantics (unset == false).
 	// See OIDCConfig.AllowUnverifiedEmail.
 	OIDCAllowUnverifiedEmail bool
+
+	// OIDCAllowRootEmailLink is env-only: no DB fallback, parsed at the config edge
+	// with GetBool semantics (unset == false). See OIDCConfig.AllowRootEmailLink.
+	OIDCAllowRootEmailLink bool
 }
 
 type DemoConfig struct {
@@ -673,6 +677,7 @@ func LoadWithOptions(opts LoadOptions) (*Config, error) {
 		OIDCAllowedDomains:  v.GetString("OIDC_ALLOWED_DOMAINS"),
 
 		OIDCAllowUnverifiedEmail: v.GetBool("OIDC_ALLOW_UNVERIFIED_EMAIL"),
+		OIDCAllowRootEmailLink:   v.GetBool("OIDC_ALLOW_ROOT_EMAIL_LINK"),
 	}
 
 	// Derive JWT secret from SECRET_KEY

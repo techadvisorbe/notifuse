@@ -26,6 +26,15 @@ type OIDCConfig struct {
 	// An explicit email_verified=false is always rejected regardless of this flag.
 	// Env-only (OIDC_ALLOW_UNVERIFIED_EMAIL): no DB setting exists.
 	AllowUnverifiedEmail bool
+
+	// AllowRootEmailLink disables the privilege-escalation guard that otherwise
+	// refuses to link or JIT-create a federated identity for a ROOT_EMAIL account.
+	// Off by default: a configured ROOT_EMAIL is synthesized owner of every
+	// workspace, so bypassing the guard means any identity your IdP asserts for
+	// that email becomes full platform-admin. Only enable this if you trust the
+	// IdP to gate that email as tightly as you would gate the root password.
+	// Env-only (OIDC_ALLOW_ROOT_EMAIL_LINK): no DB setting exists.
+	AllowRootEmailLink bool
 }
 
 // oidcCallbackPath is the fixed callback route registered at the IdP. It must match
@@ -153,6 +162,9 @@ func resolveOIDCConfig(env EnvValues, ss *SystemSettings, isInstalled bool, cons
 	// AllowUnverifiedEmail is env-only (no DB setting): parsed at the config edge
 	// with viper GetBool semantics (true/1/T/TRUE...), unset simply means false.
 	c.AllowUnverifiedEmail = env.OIDCAllowUnverifiedEmail
+
+	// AllowRootEmailLink is env-only (no DB setting), same GetBool semantics.
+	c.AllowRootEmailLink = env.OIDCAllowRootEmailLink
 
 	// String fields: env value, else DB.
 	if hasDB {

@@ -480,6 +480,24 @@ func TestResolve_Bridge_RootEmailGuard_CaseInsensitive(t *testing.T) {
 	assert.ErrorIs(t, err, domain.ErrOIDCAccountNotProvisioned)
 }
 
+func TestResolve_Bridge_RootEmailGuard_BypassedWhenAllowed(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	cfg := enabledCfg()
+	cfg.AllowRootEmailLink = true // explicit operator opt-out
+	svc, m := newTestOIDCService(t, ctrl, cfg, func(e string) bool { return strings.EqualFold(e, "root@corp.com") })
+
+	m.fedRepo.EXPECT().GetByIssuerSubject(gomock.Any(), testIssuer, "trusted-sub").Return(nil, notFoundFI())
+	m.userRepo.EXPECT().GetUserByEmailInsensitive(gomock.Any(), "root@corp.com").
+		Return(&domain.User{ID: "root-id", Email: "root@corp.com"}, nil)
+	m.fedRepo.EXPECT().GetByUserAndIssuer(gomock.Any(), "root-id", testIssuer).Return(nil, notFoundFI())
+	m.fedRepo.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil)
+
+	u, err := svc.resolveOrProvisionUser(context.Background(), testIssuer, "trusted-sub", "root@corp.com", boolPtr(true), "")
+	require.NoError(t, err, "OIDC_ALLOW_ROOT_EMAIL_LINK=true must permit first-time linking a ROOT_EMAIL account")
+	assert.Equal(t, "root-id", u.ID)
+}
+
 func TestResolve_Bridge_AlreadyLinkedRoot_AllowsReLogin(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -511,6 +529,29 @@ func TestResolve_JIT_RootEmailGuard_Refused(t *testing.T) {
 
 	_, err := svc.resolveOrProvisionUser(context.Background(), testIssuer, "sub-1", "root@corp.com", boolPtr(true), "")
 	assert.ErrorIs(t, err, domain.ErrOIDCAccountNotProvisioned)
+}
+
+func TestResolve_JIT_RootEmailGuard_BypassedWhenAllowed(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	cfg := enabledCfg()
+	cfg.AutoCreateUsers = true
+	cfg.AllowedDomains = []string{"corp.com"}
+	cfg.AllowRootEmailLink = true
+	svc, m := newTestOIDCService(t, ctrl, cfg, func(e string) bool { return e == "root@corp.com" })
+
+	m.fedRepo.EXPECT().GetByIssuerSubject(gomock.Any(), testIssuer, "sub-1").Return(nil, notFoundFI())
+	m.userRepo.EXPECT().GetUserByEmailInsensitive(gomock.Any(), "root@corp.com").Return(nil, notFoundUsr())
+	m.userRepo.EXPECT().CreateUser(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, u *domain.User) error {
+			assert.Equal(t, "root@corp.com", u.Email)
+			return nil
+		})
+	m.fedRepo.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil)
+
+	u, err := svc.resolveOrProvisionUser(context.Background(), testIssuer, "sub-1", "root@corp.com", boolPtr(true), "")
+	require.NoError(t, err, "OIDC_ALLOW_ROOT_EMAIL_LINK=true must permit JIT-creating a ROOT_EMAIL account")
+	assert.Equal(t, "root@corp.com", u.Email)
 }
 
 func TestResolve_JIT_DomainNotAllowed(t *testing.T) {

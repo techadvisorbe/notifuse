@@ -260,6 +260,42 @@ func TestLoadWithOptions_OIDCAllowUnverifiedEmailSpellings(t *testing.T) {
 	assert.False(t, cfg.OIDC.AllowUnverifiedEmail, "unset must stay false")
 }
 
+func TestResolveOIDCConfig_AllowRootEmailLink(t *testing.T) {
+	ss := &SystemSettings{
+		OIDCEnabled:      true,
+		OIDCIssuerURL:    "https://db-idp.example.com",
+		OIDCClientID:     "db-client",
+		OIDCClientSecret: "db-secret",
+	}
+
+	c := resolveOIDCConfig(EnvValues{OIDCAllowRootEmailLink: true}, ss, true, "https://app.example.com")
+	assert.True(t, c.AllowRootEmailLink)
+
+	c = resolveOIDCConfig(EnvValues{}, ss, true, "https://app.example.com")
+	assert.False(t, c.AllowRootEmailLink,
+		"env-only flag: unset must stay false even when installed with DB-backed OIDC config")
+}
+
+func TestLoadWithOptions_OIDCAllowRootEmailLinkSpellings(t *testing.T) {
+	// The flag is parsed with GetBool semantics: operators writing TRUE or 1
+	// (e.g. docker-compose YAML integer mapping) must not silently get false.
+	for _, spelling := range []string{"true", "TRUE", "True", "1"} {
+		cleanup := setOIDCBaseEnv(t, map[string]string{
+			"OIDC_ALLOW_ROOT_EMAIL_LINK": spelling,
+		})
+		cfg, err := LoadWithOptions(LoadOptions{})
+		cleanup()
+		require.NoError(t, err)
+		assert.True(t, cfg.OIDC.AllowRootEmailLink, "spelling %q must enable the flag", spelling)
+	}
+
+	cleanup := setOIDCBaseEnv(t, map[string]string{})
+	cfg, err := LoadWithOptions(LoadOptions{})
+	cleanup()
+	require.NoError(t, err)
+	assert.False(t, cfg.OIDC.AllowRootEmailLink, "unset must stay false")
+}
+
 func TestNormalizeScopesForStorage(t *testing.T) {
 	tests := []struct {
 		name string

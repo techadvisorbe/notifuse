@@ -412,11 +412,14 @@ func (s *OIDCService) resolveOrProvisionUser(
 		// is handled by the (issuer,sub) branch above and still re-logs-in, so an
 		// operator who intentionally provisioned root SSO is unaffected. The match is
 		// on the stored account email via a case-insensitive matcher (app.go wires
-		// config.IsRootEmailInsensitive).
-		if s.isRootEmail != nil && s.isRootEmail(existing.Email) {
+		// config.IsRootEmailInsensitive). OIDC_ALLOW_ROOT_EMAIL_LINK is an explicit,
+		// off-by-default operator opt-out for deployments that trust their IdP to gate
+		// this email as tightly as the root password.
+		if !s.cfg.AllowRootEmailLink && s.isRootEmail != nil && s.isRootEmail(existing.Email) {
 			if s.logger != nil {
 				s.logger.WithField("email", existing.Email).WithField("oidc_sub", sub).WithField("issuer", issuer).
-					Error("OIDC refused: first-time link to a ROOT_EMAIL account is forbidden (privilege escalation)")
+					Error("OIDC refused: first-time link to a ROOT_EMAIL account is forbidden (privilege escalation); " +
+						"set OIDC_ALLOW_ROOT_EMAIL_LINK=true to allow")
 			}
 			return nil, domain.ErrOIDCAccountNotProvisioned
 		}
@@ -445,11 +448,13 @@ func (s *OIDCService) resolveOrProvisionUser(
 	}
 	// ROOT_EMAIL guard: NEVER JIT-create a user whose email matches a configured
 	// ROOT_EMAIL — it is synthesized owner of ALL workspaces, so auto-minting it
-	// would be privilege escalation. Force the invite path.
-	if s.isRootEmail != nil && s.isRootEmail(email) {
+	// would be privilege escalation. Force the invite path. OIDC_ALLOW_ROOT_EMAIL_LINK
+	// opts out, same as the bridge-path guard above.
+	if !s.cfg.AllowRootEmailLink && s.isRootEmail != nil && s.isRootEmail(email) {
 		if s.logger != nil {
 			s.logger.WithField("email", email).WithField("oidc_sub", sub).
-				Error("OIDC JIT refused: email matches ROOT_EMAIL (would be privilege escalation); invite path required")
+				Error("OIDC JIT refused: email matches ROOT_EMAIL (would be privilege escalation); " +
+					"invite path required, or set OIDC_ALLOW_ROOT_EMAIL_LINK=true to allow")
 		}
 		return nil, domain.ErrOIDCAccountNotProvisioned
 	}
