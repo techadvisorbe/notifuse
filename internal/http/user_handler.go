@@ -32,6 +32,7 @@ type UserServiceInterface interface {
 type UserHandler struct {
 	userService      UserServiceInterface
 	workspaceService domain.WorkspaceServiceInterface
+	oidcService      domain.OIDCServiceInterface
 	config           *config.Config
 	getJWTSecret     func() ([]byte, error)
 	logger           logger.Logger
@@ -48,10 +49,11 @@ func extractEmailDomain(email string) string {
 	return ""
 }
 
-func NewUserHandler(userService UserServiceInterface, workspaceService domain.WorkspaceServiceInterface, cfg *config.Config, getJWTSecret func() ([]byte, error), logger logger.Logger) *UserHandler {
+func NewUserHandler(userService UserServiceInterface, workspaceService domain.WorkspaceServiceInterface, oidcService domain.OIDCServiceInterface, cfg *config.Config, getJWTSecret func() ([]byte, error), logger logger.Logger) *UserHandler {
 	return &UserHandler{
 		userService:      userService,
 		workspaceService: workspaceService,
+		oidcService:      oidcService,
 		config:           cfg,
 		getJWTSecret:     getJWTSecret,
 		logger:           logger,
@@ -307,11 +309,21 @@ func (h *UserHandler) Logout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// RP-initiated logout: if this user signed in via OIDC, also end their session
+	// at the IdP so a subsequent "Sign in with SSO" click doesn't silently re-auth
+	// them without a prompt. Never blocks/fails local logout — "" means nothing to do.
+	response := map[string]string{
+		"message": "Logged out successfully",
+	}
+	if h.oidcService != nil {
+		if logoutURL := h.oidcService.LogoutRedirectURL(ctx, userID); logoutURL != "" {
+			response["oidc_logout_url"] = logoutURL
+		}
+	}
+
 	// Return success response
 	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(map[string]string{
-		"message": "Logged out successfully",
-	})
+	_ = json.NewEncoder(w).Encode(response)
 }
 
 // UpdateLanguage updates the authenticated user's preferred language for the

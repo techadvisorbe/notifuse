@@ -94,6 +94,20 @@ func (mr *MockOIDCServiceInterfaceMockRecorder) IsEnabled() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsEnabled", reflect.TypeOf((*MockOIDCServiceInterface)(nil).IsEnabled))
 }
 
+// LogoutRedirectURL mocks base method.
+func (m *MockOIDCServiceInterface) LogoutRedirectURL(arg0 context.Context, arg1 string) string {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "LogoutRedirectURL", arg0, arg1)
+	ret0, _ := ret[0].(string)
+	return ret0
+}
+
+// LogoutRedirectURL indicates an expected call of LogoutRedirectURL.
+func (mr *MockOIDCServiceInterfaceMockRecorder) LogoutRedirectURL(arg0, arg1 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "LogoutRedirectURL", reflect.TypeOf((*MockOIDCServiceInterface)(nil).LogoutRedirectURL), arg0, arg1)
+}
+
 // OpenFlowState mocks base method.
 func (m *MockOIDCServiceInterface) OpenFlowState(arg0 string) (domain.OIDCFlowState, error) {
 	m.ctrl.T.Helper()

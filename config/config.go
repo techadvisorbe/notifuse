@@ -72,15 +72,16 @@ type EnvValues struct {
 
 	// OIDC env values. Enabled/AutoCreateUsers use the string "tri-state" pattern
 	// ("true"/"false"/"") so an explicit env value can lock out the DB setting.
-	OIDCEnabled         string // "true"/"false"/"" (unset → DB may set)
-	OIDCIssuerURL       string
-	OIDCClientID        string
-	OIDCClientSecret    string
-	OIDCRedirectURI     string
-	OIDCScopes          string // raw space/comma/semicolon-separated
-	OIDCButtonLabel     string
-	OIDCAutoCreateUsers string // "true"/"false"/""
-	OIDCAllowedDomains  string // raw comma/semicolon/space list
+	OIDCEnabled               string // "true"/"false"/"" (unset → DB may set)
+	OIDCIssuerURL             string
+	OIDCClientID              string
+	OIDCClientSecret          string
+	OIDCRedirectURI           string
+	OIDCPostLogoutRedirectURI string
+	OIDCScopes                string // raw space/comma/semicolon-separated
+	OIDCButtonLabel           string
+	OIDCAutoCreateUsers       string // "true"/"false"/""
+	OIDCAllowedDomains        string // raw comma/semicolon/space list
 
 	// OIDCAllowUnverifiedEmail is env-only: no DB fallback, so it is NOT tri-state
 	// and is parsed at the config edge with GetBool semantics (unset == false).
@@ -666,15 +667,16 @@ func LoadWithOptions(opts LoadOptions) (*Config, error) {
 		SMTPBridgeTLSKeyBase64:  smtpBridgeTLSKeyBase64,
 		SMTPBridgeTLSMode:       smtpBridgeTLSMode,
 
-		OIDCEnabled:         oidcEnabledStr,
-		OIDCIssuerURL:       v.GetString("OIDC_ISSUER_URL"),
-		OIDCClientID:        v.GetString("OIDC_CLIENT_ID"),
-		OIDCClientSecret:    v.GetString("OIDC_CLIENT_SECRET"),
-		OIDCRedirectURI:     v.GetString("OIDC_REDIRECT_URI"),
-		OIDCScopes:          v.GetString("OIDC_SCOPES"),
-		OIDCButtonLabel:     v.GetString("OIDC_BUTTON_LABEL"),
-		OIDCAutoCreateUsers: oidcAutoCreateStr,
-		OIDCAllowedDomains:  v.GetString("OIDC_ALLOWED_DOMAINS"),
+		OIDCEnabled:               oidcEnabledStr,
+		OIDCIssuerURL:             v.GetString("OIDC_ISSUER_URL"),
+		OIDCClientID:              v.GetString("OIDC_CLIENT_ID"),
+		OIDCClientSecret:          v.GetString("OIDC_CLIENT_SECRET"),
+		OIDCRedirectURI:           v.GetString("OIDC_REDIRECT_URI"),
+		OIDCPostLogoutRedirectURI: v.GetString("OIDC_POST_LOGOUT_REDIRECT_URI"),
+		OIDCScopes:                v.GetString("OIDC_SCOPES"),
+		OIDCButtonLabel:           v.GetString("OIDC_BUTTON_LABEL"),
+		OIDCAutoCreateUsers:       oidcAutoCreateStr,
+		OIDCAllowedDomains:        v.GetString("OIDC_ALLOWED_DOMAINS"),
 
 		OIDCAllowUnverifiedEmail: v.GetBool("OIDC_ALLOW_UNVERIFIED_EMAIL"),
 		OIDCAllowRootEmailLink:   v.GetBool("OIDC_ALLOW_ROOT_EMAIL_LINK"),

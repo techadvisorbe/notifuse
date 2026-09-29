@@ -76,9 +76,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   const signout = async () => {
+    let oidcLogoutUrl: string | undefined
     try {
       // Call backend to invalidate all sessions
-      await authService.logout()
+      const response = await authService.logout()
+      oidcLogoutUrl = response.oidc_logout_url
     } catch (error) {
       // Even if backend call fails, we still logout locally
       console.error('Failed to logout on backend:', error)
@@ -90,6 +92,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // Clear user data
     setUser(null)
     setWorkspaces([])
+
+    // RP-initiated logout: if the user signed in via OIDC, also end their session
+    // at the IdP so a subsequent "Sign in with SSO" doesn't silently re-auth them
+    // without a prompt. The IdP redirects back to the configured post-logout URL.
+    if (oidcLogoutUrl) {
+      window.location.href = oidcLogoutUrl
+    }
   }
 
   const refreshWorkspaces = async () => {

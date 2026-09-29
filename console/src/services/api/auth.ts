@@ -57,6 +57,10 @@ export function isRootUser(userEmail?: string): boolean {
 
 export interface LogoutResponse {
   message: string
+  // Present only when the user signed in via OIDC and the issuer supports
+  // RP-initiated logout: the browser must be redirected here after local
+  // logout to also end the session at the IdP.
+  oidc_logout_url?: string
 }
 
 export interface UpdateLanguageResponse {

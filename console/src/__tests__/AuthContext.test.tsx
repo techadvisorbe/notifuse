@@ -29,7 +29,8 @@ vi.mock('../services/api/auth', () => ({
     getCurrentUser: vi.fn().mockResolvedValue({
       user: { id: '123', email: 'test@example.com' },
       workspaces: [{ id: 'workspace1', name: 'Test Workspace' }]
-    })
+    }),
+    logout: vi.fn().mockResolvedValue({ message: 'Logged out successfully' })
   }
 }))
 
@@ -127,6 +128,40 @@ describe('AuthContext', () => {
     // User should be signed out
     expect(screen.getByTestId('authenticated')).toHaveTextContent('Not Authenticated')
     expect(screen.getByTestId('user')).toHaveTextContent('No User')
+  })
+
+  it('redirects to the IdP when logout returns oidc_logout_url', async () => {
+    const oidcLogoutUrl = 'https://idp.example.com/logout?client_id=abc'
+    vi.mocked(authService.logout).mockResolvedValueOnce({
+      message: 'Logged out successfully',
+      oidc_logout_url: oidcLogoutUrl
+    })
+
+    // jsdom throws "not implemented" on real navigation; stub the setter so we can
+    // assert on it without actually navigating.
+    const originalLocation = window.location
+    const hrefSetter = vi.fn()
+    // @ts-expect-error -- test-only reassignment of a readonly global
+    delete window.location
+    window.location = { ...originalLocation, set href(value: string) {
+      hrefSetter(value)
+    } } as unknown as Location
+
+    localStorageMock.setItem('auth_token', 'fake-token')
+    render(<TestComponent />, { wrapper })
+
+    await waitFor(() => {
+      expect(screen.getByTestId('authenticated')).toHaveTextContent('Authenticated')
+    })
+
+    await act(async () => {
+      screen.getByTestId('signout').click()
+    })
+
+    expect(localStorageMock.getItem('auth_token')).toBeNull()
+    expect(hrefSetter).toHaveBeenCalledWith(oidcLogoutUrl)
+
+    window.location = originalLocation
   })
 
   it('checks for token on initialization', async () => {

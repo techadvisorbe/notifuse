@@ -1118,6 +1118,7 @@ func (a *App) InitHandlers() error {
 	userHandler := httpHandler.NewUserHandler(
 		a.userService,
 		a.workspaceService,
+		a.oidcService,
 		a.config,
 		getJWTSecret,
 		a.logger)

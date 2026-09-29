@@ -21,6 +21,12 @@ type OIDCConfig struct {
 	AutoCreateUsers bool
 	AllowedDomains  []string // lower-cased; gates JIT provisioning
 
+	// PostLogoutRedirectURI is where the IdP sends the browser back after
+	// RP-initiated logout (end_session_endpoint). Env-only (OIDC_POST_LOGOUT_
+	// REDIRECT_URI): no DB setting exists. Defaults to "<console endpoint>/console/
+	// signin" when empty, mirroring RedirectURI's console-endpoint derivation.
+	PostLogoutRedirectURI string
+
 	// AllowUnverifiedEmail tolerates an id_token whose email_verified claim is
 	// ABSENT (some IdPs — Microsoft Entra ID, Cloudflare Access — never emit it).
 	// An explicit email_verified=false is always rejected regardless of this flag.
@@ -40,6 +46,10 @@ type OIDCConfig struct {
 // oidcCallbackPath is the fixed callback route registered at the IdP. It must match
 // the route registered by the OIDC HTTP handler.
 const oidcCallbackPath = "/api/user.oidc.callback"
+
+// oidcSigninPath is the console sign-in route the OIDC callback (success or error)
+// and, by default, RP-initiated logout redirect back to.
+const oidcSigninPath = "/console/signin"
 
 // DefaultOIDCScopes is used when neither env nor DB supplies scopes. Write paths
 // (setup wizard, settings update) must persist it when the submitted value is
@@ -128,11 +138,12 @@ func resolveOIDCConfig(env EnvValues, ss *SystemSettings, isInstalled bool, cons
 	hasDB := isInstalled && ss != nil
 
 	c := OIDCConfig{
-		IssuerURL:    env.OIDCIssuerURL,
-		ClientID:     env.OIDCClientID,
-		ClientSecret: env.OIDCClientSecret,
-		RedirectURI:  env.OIDCRedirectURI,
-		ButtonLabel:  env.OIDCButtonLabel,
+		IssuerURL:             env.OIDCIssuerURL,
+		ClientID:              env.OIDCClientID,
+		ClientSecret:          env.OIDCClientSecret,
+		RedirectURI:           env.OIDCRedirectURI,
+		ButtonLabel:           env.OIDCButtonLabel,
+		PostLogoutRedirectURI: env.OIDCPostLogoutRedirectURI,
 	}
 
 	// Enabled: explicit env wins; "" → DB (only when installed).
@@ -209,6 +220,12 @@ func resolveOIDCConfig(env EnvValues, ss *SystemSettings, isInstalled bool, cons
 	// Derive the redirect URI from the final console endpoint when empty.
 	if c.RedirectURI == "" && consoleEndpoint != "" {
 		c.RedirectURI = strings.TrimRight(consoleEndpoint, "/") + oidcCallbackPath
+	}
+
+	// Derive the post-logout redirect from the final console endpoint when empty:
+	// the same sign-in page the callback itself redirects to on success/error.
+	if c.PostLogoutRedirectURI == "" && consoleEndpoint != "" {
+		c.PostLogoutRedirectURI = strings.TrimRight(consoleEndpoint, "/") + oidcSigninPath
 	}
 
 	return c

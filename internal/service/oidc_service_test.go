@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -686,4 +687,133 @@ func TestEnsureProvider_UnreachableIssuer_SelfHealRetryWindow(t *testing.T) {
 	err = svc.ensureProvider(context.Background())
 	assert.ErrorIs(t, err, domain.ErrOIDCNotConfigured)
 	assert.True(t, svc.lastAttempt.After(first), "must re-attempt after the retry window elapses")
+}
+
+// --- LogoutRedirectURL -------------------------------------------------------
+
+// newDiscoveryIdP spins up a minimal OIDC discovery server. endSessionEndpoint
+// may be "" to simulate an issuer that doesn't advertise RP-initiated logout.
+func newDiscoveryIdP(t *testing.T, endSessionEndpoint string) *httptest.Server {
+	t.Helper()
+	var idp *httptest.Server
+	idp = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/.well-known/openid-configuration" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		doc := map[string]interface{}{
+			"issuer":                 idp.URL,
+			"authorization_endpoint": idp.URL + "/authorize",
+			"token_endpoint":         idp.URL + "/token",
+			"jwks_uri":               idp.URL + "/jwks",
+		}
+		if endSessionEndpoint != "" {
+			doc["end_session_endpoint"] = endSessionEndpoint
+		}
+		_ = json.NewEncoder(w).Encode(doc)
+	}))
+	return idp
+}
+
+func TestLogoutRedirectURL_Disabled_ReturnsEmpty(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	svc, m := newTestOIDCService(t, ctrl, config.OIDCConfig{Enabled: false}, nil)
+	// No fedRepo/provider calls expected when disabled.
+	_ = m
+	assert.Equal(t, "", svc.LogoutRedirectURL(context.Background(), "u1"))
+}
+
+func TestLogoutRedirectURL_UserNeverLinked_ReturnsEmpty(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	cfg := enabledCfg()
+	svc, m := newTestOIDCService(t, ctrl, cfg, nil)
+
+	m.fedRepo.EXPECT().GetByUserAndIssuer(gomock.Any(), "u1", testIssuer).Return(nil, notFoundFI())
+
+	assert.Equal(t, "", svc.LogoutRedirectURL(context.Background(), "u1"),
+		"a user with no federated identity for this issuer must skip the IdP round-trip entirely")
+}
+
+func TestLogoutRedirectURL_IssuerUnreachable_ReturnsEmpty(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	cfg := enabledCfg()
+	cfg.IssuerURL = "http://127.0.0.1:1/oidc" // connection refused
+	svc, m := newTestOIDCService(t, ctrl, cfg, nil)
+
+	m.fedRepo.EXPECT().GetByUserAndIssuer(gomock.Any(), "u1", cfg.IssuerURL).
+		Return(&domain.FederatedIdentity{UserID: "u1", IDPIssuer: cfg.IssuerURL, IDPSub: "sub-1"}, nil)
+
+	assert.Equal(t, "", svc.LogoutRedirectURL(context.Background(), "u1"),
+		"an unreachable IdP must degrade to no redirect, never block local logout")
+}
+
+func TestLogoutRedirectURL_NoEndSessionEndpoint_ReturnsEmpty(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	idp := newDiscoveryIdP(t, "") // no end_session_endpoint advertised
+	defer idp.Close()
+
+	cfg := enabledCfg()
+	cfg.IssuerURL = idp.URL
+	svc, m := newTestOIDCService(t, ctrl, cfg, nil)
+
+	m.fedRepo.EXPECT().GetByUserAndIssuer(gomock.Any(), "u1", idp.URL).
+		Return(&domain.FederatedIdentity{UserID: "u1", IDPIssuer: idp.URL, IDPSub: "sub-1"}, nil)
+
+	assert.Equal(t, "", svc.LogoutRedirectURL(context.Background(), "u1"),
+		"an issuer without end_session_endpoint must not support RP-initiated logout")
+}
+
+func TestLogoutRedirectURL_BuildsURLWithClientIDAndPostLogoutRedirect(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	idp := newDiscoveryIdP(t, "https://idp.example.com/logout")
+	defer idp.Close()
+
+	cfg := enabledCfg()
+	cfg.IssuerURL = idp.URL
+	cfg.PostLogoutRedirectURI = "https://console.example.com/console/signin"
+	svc, m := newTestOIDCService(t, ctrl, cfg, nil)
+
+	m.fedRepo.EXPECT().GetByUserAndIssuer(gomock.Any(), "u1", idp.URL).
+		Return(&domain.FederatedIdentity{UserID: "u1", IDPIssuer: idp.URL, IDPSub: "sub-1"}, nil)
+
+	got := svc.LogoutRedirectURL(context.Background(), "u1")
+	require.NotEmpty(t, got)
+
+	parsed, err := url.Parse(got)
+	require.NoError(t, err)
+	assert.Equal(t, "https://idp.example.com/logout", parsed.Scheme+"://"+parsed.Host+parsed.Path)
+	assert.Equal(t, testClientID, parsed.Query().Get("client_id"))
+	assert.Equal(t, "https://console.example.com/console/signin", parsed.Query().Get("post_logout_redirect_uri"))
+}
+
+func TestLogoutRedirectURL_NoPostLogoutRedirectConfigured_OmitsParam(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	idp := newDiscoveryIdP(t, "https://idp.example.com/logout")
+	defer idp.Close()
+
+	cfg := enabledCfg()
+	cfg.IssuerURL = idp.URL
+	// PostLogoutRedirectURI left empty.
+	svc, m := newTestOIDCService(t, ctrl, cfg, nil)
+
+	m.fedRepo.EXPECT().GetByUserAndIssuer(gomock.Any(), "u1", idp.URL).
+		Return(&domain.FederatedIdentity{UserID: "u1", IDPIssuer: idp.URL, IDPSub: "sub-1"}, nil)
+
+	got := svc.LogoutRedirectURL(context.Background(), "u1")
+	require.NotEmpty(t, got)
+
+	parsed, err := url.Parse(got)
+	require.NoError(t, err)
+	assert.Equal(t, testClientID, parsed.Query().Get("client_id"))
+	assert.Empty(t, parsed.Query().Get("post_logout_redirect_uri"))
 }

@@ -224,6 +224,20 @@ func TestResolveOIDCConfig_RedirectDefaultScopesAndLabel(t *testing.T) {
 	assert.Equal(t, "Sign in with SSO", c.ButtonLabel, "default button label")
 }
 
+func TestResolveOIDCConfig_PostLogoutRedirectURI(t *testing.T) {
+	t.Run("defaults to console endpoint + /console/signin when empty", func(t *testing.T) {
+		env := EnvValues{OIDCEnabled: "true"}
+		c := resolveOIDCConfig(env, nil, false, "https://console.example.com")
+		assert.Equal(t, "https://console.example.com/console/signin", c.PostLogoutRedirectURI)
+	})
+
+	t.Run("env value wins over the derived default", func(t *testing.T) {
+		env := EnvValues{OIDCEnabled: "true", OIDCPostLogoutRedirectURI: "https://custom.example.com/bye"}
+		c := resolveOIDCConfig(env, nil, false, "https://console.example.com")
+		assert.Equal(t, "https://custom.example.com/bye", c.PostLogoutRedirectURI)
+	})
+}
+
 func TestResolveOIDCConfig_AllowUnverifiedEmail(t *testing.T) {
 	ss := &SystemSettings{
 		OIDCEnabled:      true,

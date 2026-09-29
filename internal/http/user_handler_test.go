@@ -34,7 +34,7 @@ func setupUserHandlerTest(t *testing.T) (*UserHandler, *mocks.MockUserServiceInt
 	// Create key pair for testing
 	jwtSecret := []byte("test-jwt-secret-key-for-testing-32bytes")
 	mockLogger := &pkgmocks.MockLogger{}
-	handler := NewUserHandler(mockUserSvc, mockWorkspaceSvc, cfg, func() ([]byte, error) { return jwtSecret, nil }, mockLogger)
+	handler := NewUserHandler(mockUserSvc, mockWorkspaceSvc, nil, cfg, func() ([]byte, error) { return jwtSecret, nil }, mockLogger)
 
 	return handler, mockUserSvc, mockWorkspaceSvc, jwtSecret
 }
@@ -48,8 +48,8 @@ func TestUserHandler_SignIn(t *testing.T) {
 
 	// Create handlers with different configs
 	getJWTSecret := func() ([]byte, error) { return jwtSecret, nil }
-	devHandler := NewUserHandler(mockUserSvc, mockWorkspaceSvc, devConfig, getJWTSecret, &pkgmocks.MockLogger{})
-	prodHandler := NewUserHandler(mockUserSvc, mockWorkspaceSvc, prodConfig, getJWTSecret, &pkgmocks.MockLogger{})
+	devHandler := NewUserHandler(mockUserSvc, mockWorkspaceSvc, nil, devConfig, getJWTSecret, &pkgmocks.MockLogger{})
+	prodHandler := NewUserHandler(mockUserSvc, mockWorkspaceSvc, nil, prodConfig, getJWTSecret, &pkgmocks.MockLogger{})
 
 	tests := []struct {
 		name         string
@@ -512,6 +512,57 @@ func TestUserHandler_Logout(t *testing.T) {
 		handler.Logout(rec, req)
 
 		assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	})
+
+	t.Run("includes oidc_logout_url when the OIDC service returns one", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		mockUserSvc2 := mocks.NewMockUserServiceInterface(ctrl)
+		mockOIDCSvc := mocks.NewMockOIDCServiceInterface(ctrl)
+		h := NewUserHandler(mockUserSvc2, mocks.NewMockWorkspaceServiceInterface(ctrl), mockOIDCSvc, &config.Config{}, func() ([]byte, error) { return []byte("secret"), nil }, &pkgmocks.MockLogger{})
+
+		userID := "sso-user"
+		mockUserSvc2.EXPECT().Logout(gomock.Any(), userID).Return(nil)
+		mockOIDCSvc.EXPECT().LogoutRedirectURL(gomock.Any(), userID).
+			Return("https://idp.example.com/logout?client_id=abc&post_logout_redirect_uri=https%3A%2F%2Fconsole.example.com%2Fconsole%2Fsignin")
+
+		req := httptest.NewRequest(http.MethodPost, "/api/user.logout", nil)
+		req = req.WithContext(context.WithValue(req.Context(), domain.UserIDKey, userID))
+		rec := httptest.NewRecorder()
+
+		h.Logout(rec, req)
+
+		assert.Equal(t, http.StatusOK, rec.Code)
+		var response map[string]string
+		require.NoError(t, json.NewDecoder(rec.Body).Decode(&response))
+		assert.Equal(t, "Logged out successfully", response["message"])
+		assert.Equal(t, "https://idp.example.com/logout?client_id=abc&post_logout_redirect_uri=https%3A%2F%2Fconsole.example.com%2Fconsole%2Fsignin", response["oidc_logout_url"])
+	})
+
+	t.Run("omits oidc_logout_url for a local-only user", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		mockUserSvc2 := mocks.NewMockUserServiceInterface(ctrl)
+		mockOIDCSvc := mocks.NewMockOIDCServiceInterface(ctrl)
+		h := NewUserHandler(mockUserSvc2, mocks.NewMockWorkspaceServiceInterface(ctrl), mockOIDCSvc, &config.Config{}, func() ([]byte, error) { return []byte("secret"), nil }, &pkgmocks.MockLogger{})
+
+		userID := "local-user"
+		mockUserSvc2.EXPECT().Logout(gomock.Any(), userID).Return(nil)
+		mockOIDCSvc.EXPECT().LogoutRedirectURL(gomock.Any(), userID).Return("")
+
+		req := httptest.NewRequest(http.MethodPost, "/api/user.logout", nil)
+		req = req.WithContext(context.WithValue(req.Context(), domain.UserIDKey, userID))
+		rec := httptest.NewRecorder()
+
+		h.Logout(rec, req)
+
+		assert.Equal(t, http.StatusOK, rec.Code)
+		var response map[string]string
+		require.NoError(t, json.NewDecoder(rec.Body).Decode(&response))
+		_, present := response["oidc_logout_url"]
+		assert.False(t, present, "oidc_logout_url must be omitted, not empty-stringed, when there is nothing to do")
 	})
 }
 

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -567,6 +568,56 @@ func (s *OIDCService) ExchangeCode(ctx context.Context, oneTimeCode string) (*do
 		return nil, fmt.Errorf("oidc exchange: corrupt cache entry")
 	}
 	return authResp, nil
+}
+
+// LogoutRedirectURL returns the IdP's RP-initiated logout URL for this user, or ""
+// when there is nothing to do there (OIDC disabled, this user never linked an
+// identity for our issuer, or the issuer doesn't advertise end_session_endpoint).
+// Never returns an error to the caller: any failure here must fall back to a plain
+// local logout rather than block it, so all failure paths degrade to "".
+// The redirect carries no id_token_hint (stateless by design — no ID token is
+// retained past HandleCallback), so it relies on client_id + post_logout_redirect_uri,
+// which modern IdPs (Keycloak, Auth0, Okta, Entra ID) accept.
+func (s *OIDCService) LogoutRedirectURL(ctx context.Context, userID string) string {
+	ctx, span := s.tracer.StartServiceSpan(ctx, "OIDCService", "LogoutRedirectURL")
+	defer span.End()
+
+	if !s.cfg.Enabled {
+		return ""
+	}
+	// Only worth the provider round-trip if this user actually has a federated
+	// identity for our configured issuer — plain magic-code-only users skip it.
+	if _, err := s.fedRepo.GetByUserAndIssuer(ctx, userID, s.cfg.IssuerURL); err != nil {
+		return ""
+	}
+	if err := s.ensureProvider(ctx); err != nil {
+		if s.logger != nil {
+			s.logger.WithField("user_id", userID).WithField("error", err.Error()).
+				Warn("OIDC logout: provider unavailable, skipping IdP logout redirect")
+		}
+		return ""
+	}
+	var discovery struct {
+		EndSessionEndpoint string `json:"end_session_endpoint"`
+	}
+	if err := s.provider.Claims(&discovery); err != nil || discovery.EndSessionEndpoint == "" {
+		return "" // issuer doesn't support RP-initiated logout
+	}
+	endSessionURL, err := url.Parse(discovery.EndSessionEndpoint)
+	if err != nil {
+		if s.logger != nil {
+			s.logger.WithField("end_session_endpoint", discovery.EndSessionEndpoint).WithField("error", err.Error()).
+				Warn("OIDC logout: malformed end_session_endpoint from discovery")
+		}
+		return ""
+	}
+	q := endSessionURL.Query()
+	q.Set("client_id", s.cfg.ClientID)
+	if s.cfg.PostLogoutRedirectURI != "" {
+		q.Set("post_logout_redirect_uri", s.cfg.PostLogoutRedirectURI)
+	}
+	endSessionURL.RawQuery = q.Encode()
+	return endSessionURL.String()
 }
 
 // SealFlowState AEAD-encrypts the per-login flow state into an opaque hex blob for

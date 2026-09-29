@@ -68,4 +68,8 @@ type OIDCServiceInterface interface {
 	SealFlowState(fs OIDCFlowState) (string, error)
 	// OpenFlowState decrypts and parses a sealed flow-state blob.
 	OpenFlowState(enc string) (OIDCFlowState, error)
+	// LogoutRedirectURL returns the IdP's RP-initiated logout URL for this user, or ""
+	// when there's nothing to do there (OIDC disabled, user never linked an identity
+	// for our issuer, or the issuer doesn't support RP-initiated logout). Never errors.
+	LogoutRedirectURL(ctx context.Context, userID string) string
 }
