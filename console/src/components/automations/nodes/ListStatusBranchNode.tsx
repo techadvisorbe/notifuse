@@ -3,17 +3,17 @@ import { Handle, Position, useConnection, type NodeProps } from '@xyflow/react'
 import { ListChecks } from 'lucide-react'
 import { useLingui } from '@lingui/react/macro'
 import { BaseNode } from './BaseNode'
-import { nodeTypeColors } from './constants'
+import { nodeTypeColors, getNodeDescription } from './constants'
 import { useAutomation } from '../context'
-import type { AutomationNodeData } from '../utils/flowConverter'
+import type { AutomationFlowNode, Structural } from '../utils/flowConverter'
 import type { ListStatusBranchNodeConfig } from '../../../services/api/automation'
 
-type ListStatusBranchNodeProps = NodeProps<AutomationNodeData>
+type ListStatusBranchNodeProps = NodeProps<AutomationFlowNode>
 
 export const ListStatusBranchNode: React.FC<ListStatusBranchNodeProps> = ({ data, selected }) => {
   const { t } = useLingui()
   const { lists } = useAutomation()
-  const config = data.config as ListStatusBranchNodeConfig
+  const config = data.config as Structural<ListStatusBranchNodeConfig>
   const listName = lists.find((l) => l.id === config?.list_id)?.name
 
   const connection = useConnection()
@@ -36,6 +36,7 @@ export const ListStatusBranchNode: React.FC<ListStatusBranchNodeProps> = ({ data
       <BaseNode
         type="list_status_branch"
         label={t`List Status`}
+        description={getNodeDescription(data.config)}
         icon={
           <ListChecks
             size={14}

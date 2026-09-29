@@ -557,6 +557,14 @@ func (r *UpsertContactRequest) Validate() (contact *Contact, workspaceID string,
 type BatchImportContactsResponse struct {
 	Operations []*UpsertContactOperation `json:"operations"`
 	Error      string                    `json:"error,omitempty"`
+
+	// Err carries the typed error behind Error when the import was refused — for
+	// lack of a permission, or because the credential could not be authenticated
+	// at all. Error is prose, so a typed error set there alone cannot be reached
+	// by errors.As and the handler has nothing to answer 401 or 403 with, leaving
+	// a revoked key reported as a client mistake. Not serialized: Error stays the
+	// wire form every client already reads.
+	Err error `json:"-"`
 }
 
 const (
@@ -577,6 +585,25 @@ type UpsertContactOperation struct {
 	Email  string `json:"email"`
 	Action string `json:"action"` // create or update or error
 	Error  string `json:"error,omitempty"`
+
+	// Contact is the stored row read back after the write. An upsert merges field
+	// by field, so what the caller sent is not what the database now holds: the
+	// resolved external_id, the timezone, the custom fields as merged and the
+	// timestamps the database assigned are all unknowable from the request alone,
+	// and an automation step chaining off this response has nothing else to map.
+	//
+	// omitempty because this is additive: a client that predates the field sees
+	// the exact wire shape it saw before. It is also why a failed read-back leaves
+	// this nil rather than failing the operation — the write has already committed,
+	// and reporting an error there would invite a retry of a successful upsert.
+	Contact *Contact `json:"contact,omitempty"`
+
+	// Err carries the typed error behind Error when the upsert was refused — for
+	// lack of a permission or for a failed authentication — for the same reason as
+	// on BatchImportContactsResponse. A genuine per-contact failure (invalid
+	// contact, repository error) leaves it nil and keeps reporting through Error
+	// alone.
+	Err error `json:"-"`
 }
 
 // ContactService provides operations for managing contacts
@@ -625,6 +652,12 @@ type ContactRepository interface {
 
 	// UpsertContact creates or updates a contact
 	UpsertContact(ctx context.Context, workspaceID string, contact *Contact) (bool, error)
+
+	// CreateContactIfAbsent inserts the contact and reports whether it landed,
+	// leaving an existing row untouched. For callers that may only ever ADD a
+	// contact, never modify one — an unauthenticated caller must not be able to
+	// rewrite a stored profile by naming its address.
+	CreateContactIfAbsent(ctx context.Context, workspaceID string, contact *Contact) (bool, error)
 
 	// BulkUpsertContacts creates or updates multiple contacts in a single operation
 	BulkUpsertContacts(ctx context.Context, workspaceID string, contacts []*Contact) ([]BulkUpsertResult, error)
@@ -795,11 +828,20 @@ func FromJSON(data interface{}) (*Contact, error) {
 				continue
 			}
 
-			// make sure the value is a valid JSON object or array
-			if !value.IsObject() && !value.IsArray() {
-				return nil, fmt.Errorf("invalid JSON value for custom_json_%d, got %s", i, value.Type)
-			}
-
+			// Any JSON value is stored, not objects and arrays alone.
+			//
+			// The column is jsonb, which holds a scalar perfectly well, and the
+			// other endpoint that writes these slots already did: lists.subscribe
+			// decodes its contact through encoding/json into NullableJSON, whose
+			// UnmarshalJSON takes whatever parses. So the two endpoints disagreed
+			// about the same five columns — the same body storing "gold" through
+			// lists.subscribe and answering 400 through contacts.upsert or
+			// contacts.import — and only this branch made them differ.
+			//
+			// Widening rather than tightening the other side because the strict
+			// reading was never enforceable: the value is only ever read back with
+			// jsonb subscripting and ->>, which answer NULL on a scalar rather
+			// than raising.
 			// Set the custom JSON field
 			switch i {
 			case 1:

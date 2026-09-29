@@ -143,9 +143,10 @@ describe('AuthContext', () => {
     const hrefSetter = vi.fn()
     // @ts-expect-error -- test-only reassignment of a readonly global
     delete window.location
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- test-only stub of a branded DOM global
     window.location = { ...originalLocation, set href(value: string) {
       hrefSetter(value)
-    } } as unknown as Location
+    } } as any
 
     localStorageMock.setItem('auth_token', 'fake-token')
     render(<TestComponent />, { wrapper })
@@ -161,7 +162,8 @@ describe('AuthContext', () => {
     expect(localStorageMock.getItem('auth_token')).toBeNull()
     expect(hrefSetter).toHaveBeenCalledWith(oidcLogoutUrl)
 
-    window.location = originalLocation
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- test-only restore of a branded DOM global
+    window.location = originalLocation as any
   })
 
   it('checks for token on initialization', async () => {

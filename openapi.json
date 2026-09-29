@@ -23,6 +23,831 @@
     }
   ],
   "paths": {
+    "/track": {
+      "post": {
+        "summary": "Ingest a web analytics beat",
+        "description": "Public collect endpoint used by the Notifuse Analytics browser SDK. Each beat carries the full cumulative session state (all pageviews and goals), so the server can rebuild the session from any single payload. Beats are typically sent as text/plain to avoid CORS preflights; the body is JSON regardless of Content-Type. Silently-dropped traffic (disabled feature, disallowed origin, bot user agents) still receives success responses.\n\nThe endpoint is public and unauthenticated, so the identity fields (contact_email + contact_email_hmac, or identify_token) are claims until they verify against the workspace secret. One that does not verify is not an error: the beat is recorded anonymously. A single malformed action is dropped the same way, leaving the rest of the beat intact.\n\nVerifying the credential is the FIRST of three gates, not the only one. An address that clears all three is attached to the session; failing any of them costs the identity alone, silently — the beat is still stored and the response is still a 200 with no error. Success and every failure are therefore indistinguishable on the wire:\n\n1. Signature (or token decryption) must verify against the workspace secret. The recipe is in the contact_email_hmac schema; getting the domain-separation prefix wrong is the usual cause.\n\n2. Rate limits, applied to the IDENTIFIED path only (anonymous traffic is the normal firehose and stays unthrottled) and before the contact lookup, so an abusive caller cannot spend database reads: 120 identified beats per minute per workspace + address, and 600 per minute per client IP (that one counted across all workspaces, since an office shares one IP) — both sized around the SDK's 10-30s heartbeat. Exceeding either is deliberately never a 429, which the SDK would only queue for a retry that cannot fix it.\n\n3. The address must ALREADY be a contact in the workspace. A signature proves who the caller is, never that the address belongs to anyone, so without this gate a workspace's own signing key could store the email of people who are not contacts, and erasure would be unenforceable — a deleted contact's next beat would re-stamp the address. The answer is cached for 60 seconds, so a freshly created contact can stay unidentified and a deleted one keep resolving for about that long.\n\nThis is why a correctly-signed beat for an address that is not a contact is indistinguishable from a bad signature: both return 200 and record the session anonymously.\n",
+        "operationId": "trackWebAnalyticsBeat",
+        "tags": [
+          "Web Analytics"
+        ],
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "text/plain": {
+              "schema": {
+                "$ref": "#/components/schemas/WebTrackPayload"
+              }
+            },
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebTrackPayload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Beat accepted (or silently dropped)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed payload. The full set of causes: an unparseable body; a missing or blank workspace_id; a session_id that is not a UUIDv7 or whose embedded timestamp falls outside [now-48h, now+24h]; an updated_at more than 24h from server time; a negative seq; more actions than the schema's maxItems; a custom_1..custom_10 dimension value over 256 characters; or more than 50 dimension entries. Row building re-derives the session date from session_id and surfaces any failure the same way, which today can only be that same session_id rule.\n\nNever returned for an unverifiable, throttled or unknown identity, and never for a single out-of-range ACTION — that one action is dropped and the beat is kept. An oversized actions ARRAY is a different rule and IS a 400: see maxItems on the actions property.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "error": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Body over 1 MB. Distinguished from a 400 because it is the one failure the client can act on: actions[] only grows, so every later beat of that session fails too until it trims its oldest actions or rotates the session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "error": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/workspaces.setWebAnalyticsSettings": {
+      "post": {
+        "summary": "Replace the workspace's web analytics settings",
+        "description": "Gated by the web_analytics write permission (like blog settings, members manage the feature without workspace write access). The attribution filters version is recomputed server-side. Passing null settings clears the configuration.\n\nWriting an identified visitor's goals and navigation to their contact timeline is not configured here and has no setting: calling identify() with an HMAC is the opt-in, because minting that credential requires the workspace secret.\n",
+        "operationId": "setWebAnalyticsSettings",
+        "tags": [
+          "Web Analytics"
+        ],
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "workspace_id"
+                ],
+                "properties": {
+                  "workspace_id": {
+                    "type": "string"
+                  },
+                  "settings": {
+                    "$ref": "#/components/schemas/WebAnalyticsSettings"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Settings updated"
+          },
+          "400": {
+            "description": "Validation failed"
+          },
+          "403": {
+            "description": "The caller lacks web_analytics write, returned with the missing resource named in the error message."
+          }
+        }
+      }
+    },
+    "/api/webAnalytics.backfillStart": {
+      "post": {
+        "summary": "Start an attribution backfill",
+        "description": "Rewrites historical web_sessions and web_goals rows with the current attribution rules, one monthly partition per step. Fails while a run is already pending or running.\n",
+        "operationId": "webAnalyticsBackfillStart",
+        "tags": [
+          "Web Analytics"
+        ],
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebAnalyticsBackfillRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Backfill task created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebAnalyticsBackfillResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A backfill is already in progress"
+          },
+          "403": {
+            "description": "Missing web_analytics write permission"
+          }
+        }
+      }
+    },
+    "/api/webAnalytics.backfillStatus": {
+      "post": {
+        "summary": "Get the latest backfill run",
+        "operationId": "webAnalyticsBackfillStatus",
+        "tags": [
+          "Web Analytics"
+        ],
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebAnalyticsBackfillRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Latest run (null when none exists)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebAnalyticsBackfillResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/webAnalytics.backfillCancel": {
+      "post": {
+        "summary": "Cancel the in-flight backfill run",
+        "operationId": "webAnalyticsBackfillCancel",
+        "tags": [
+          "Web Analytics"
+        ],
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebAnalyticsBackfillRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Run cancelled"
+          },
+          "400": {
+            "description": "No backfill in progress"
+          }
+        }
+      }
+    },
+    "/api/annotations.list": {
+      "get": {
+        "summary": "List annotations",
+        "description": "Returns the workspace's annotations, most recent moment first. Every filter is optional; with none the most recent 100 rows come back.\n\nGated by the web_analytics read permission, like the rest of the web analytics surface.\n",
+        "operationId": "listAnnotations",
+        "tags": [
+          "Web Analytics"
+        ],
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "workspace_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The ID of the workspace",
+            "example": "ws_1234567890"
+          },
+          {
+            "name": "start",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "description": "Only annotations at or after this instant. Must be RFC3339; a malformed value is a 400 rather than a dropped filter.",
+            "example": "2026-08-01T00:00:00Z"
+          },
+          {
+            "name": "end",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "description": "Only annotations at or before this instant. Must be RFC3339.",
+            "example": "2026-08-31T23:59:59Z"
+          },
+          {
+            "name": "sources",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Comma-separated list of sources to keep. Any value outside `manual`/`broadcast` is a 400.",
+            "example": "manual,broadcast"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 100,
+              "maximum": 1000
+            },
+            "description": "Maximum rows to return. Values above the maximum are clamped to it rather than refused.",
+            "example": 100
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Annotations matching the filters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListAnnotationsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request - invalid query parameters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "missingWorkspaceId": {
+                    "value": {
+                      "error": "workspace_id is required"
+                    }
+                  },
+                  "malformedStart": {
+                    "value": {
+                      "error": "start must be an RFC3339 timestamp"
+                    }
+                  },
+                  "endBeforeStart": {
+                    "value": {
+                      "error": "invalid request: end must not be before start"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized - invalid or missing authentication token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden - missing required permission",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": "Insufficient permissions: read access to web analytics required"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": "Failed to list annotations"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/annotations.get": {
+      "get": {
+        "summary": "Get an annotation",
+        "description": "Retrieves a single annotation by ID. Requires the web_analytics read permission.",
+        "operationId": "getAnnotation",
+        "tags": [
+          "Web Analytics"
+        ],
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "workspace_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The ID of the workspace",
+            "example": "ws_1234567890"
+          },
+          {
+            "name": "id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The ID of the annotation",
+            "example": "3f2504e04f8911d39a0c0305e82c3301"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The annotation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnnotationResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request - missing query parameters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": "id is required"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized - invalid or missing authentication token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden - missing required permission",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": "Insufficient permissions: read access to web analytics required"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No annotation with that ID in this workspace",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": "annotation not found with ID: 3f2504e04f8911d39a0c0305e82c3301"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": "Failed to get annotation"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/annotations.create": {
+      "post": {
+        "summary": "Create an annotation",
+        "description": "Creates a manual annotation. Requires the web_analytics write permission.\n\n`source` is always stored as `manual` and `source_id` is always empty: only the platform writes automatic rows, so there is no way to attach a caller-supplied key to one. **This endpoint is therefore not idempotent** — a retried call (a CI job re-running a deploy marker, for instance) writes a second annotation. De-duplicate on the caller's side, or delete the extra row.\n\nOmitted `color` and `timezone` are filled in server-side: the default colour, and the workspace timezone falling back to UTC.\n",
+        "operationId": "createAnnotation",
+        "tags": [
+          "Web Analytics"
+        ],
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateAnnotationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Annotation created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnnotationResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request - unparseable body, validation failed, or the instance runs in demo mode, where every mutating endpoint is closed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "invalidBody": {
+                    "value": {
+                      "error": "Invalid request body"
+                    }
+                  },
+                  "missingTitle": {
+                    "value": {
+                      "error": "invalid request: title is required"
+                    }
+                  },
+                  "invalidColor": {
+                    "value": {
+                      "error": "invalid request: color must be a hex color like #3b82f6"
+                    }
+                  },
+                  "systemSource": {
+                    "value": {
+                      "error": "invalid request: source must be \"manual\""
+                    }
+                  },
+                  "demoMode": {
+                    "value": {
+                      "error": "This operation is not allowed in demo mode"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized - invalid or missing authentication token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden - missing required permission",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": "Insufficient permissions: write access to web analytics required"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": "Failed to create annotation"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/annotations.update": {
+      "post": {
+        "summary": "Update an annotation",
+        "description": "Edits an annotation's moment, timezone and presentation. Requires the web_analytics write permission.\n\nAutomatic annotations are editable — an operator may want to reword a broadcast's title — but their origin is not: `source` and `source_id` are reloaded from storage and carried forward, so an edit can neither promote a manual row to a system one nor take over another broadcast's slot.\n",
+        "operationId": "updateAnnotation",
+        "tags": [
+          "Web Analytics"
+        ],
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateAnnotationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Annotation updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnnotationResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request - unparseable body, validation failed, or the instance runs in demo mode.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "missingId": {
+                    "value": {
+                      "error": "invalid request: id is required"
+                    }
+                  },
+                  "missingAnnotatedAt": {
+                    "value": {
+                      "error": "invalid request: annotated_at is required"
+                    }
+                  },
+                  "demoMode": {
+                    "value": {
+                      "error": "This operation is not allowed in demo mode"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized - invalid or missing authentication token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden - missing required permission",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": "Insufficient permissions: write access to web analytics required"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No annotation with that ID in this workspace",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": "annotation not found with ID: 3f2504e04f8911d39a0c0305e82c3301"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": "Failed to update annotation"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/annotations.delete": {
+      "post": {
+        "summary": "Delete an annotation",
+        "description": "Deletes an annotation, automatic ones included — a broadcast annotation cannot come back by accident, since its broadcast has already started. Requires the web_analytics write permission.\n",
+        "operationId": "deleteAnnotation",
+        "tags": [
+          "Web Analytics"
+        ],
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeleteAnnotationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Annotation deleted. A body rather than a 204, so a delete is never indistinguishable from a proxy swallowing the response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeleteAnnotationResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request - unparseable body, missing id, or the instance runs in demo mode.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "missingId": {
+                    "value": {
+                      "error": "invalid request: id is required"
+                    }
+                  },
+                  "demoMode": {
+                    "value": {
+                      "error": "This operation is not allowed in demo mode"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized - invalid or missing authentication token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden - missing required permission",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": "Insufficient permissions: write access to web analytics required"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No annotation with that ID in this workspace",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": "annotation not found with ID: 3f2504e04f8911d39a0c0305e82c3301"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": "Failed to delete annotation"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/transactional.send": {
       "post": {
         "summary": "Send a transactional notification",
@@ -6574,7 +7399,7 @@
               "email",
               "web"
             ],
-            "description": "Channel filter for block visibility"
+            "description": "Which channel this template targets. It selects the content object the template must carry: an `email` template supplies `email` and omits `web`, and a `web` template does the reverse."
           }
         }
       },
@@ -7573,6 +8398,694 @@
           "id",
           "email"
         ]
+      },
+      "WebPageviewAction": {
+        "type": "object",
+        "description": "One pageview of the cumulative action list. Breaking any bound below drops this action alone; the rest of the beat is still accepted.",
+        "required": [
+          "type",
+          "path",
+          "page_number"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "pageview"
+            ]
+          },
+          "path": {
+            "type": "string",
+            "maxLength": 2048
+          },
+          "page_number": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000
+          },
+          "duration": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0,
+            "maximum": 86400000,
+            "description": "Engaged (visible and focused) time on the page, ms. Capped at a day, which is more engaged time than one page can plausibly collect."
+          },
+          "scroll": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100
+          },
+          "entered_at": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0,
+            "maximum": 100000000000000,
+            "description": "Epoch ms, bounded to what a timestamp column can hold rather than to a window: a replayed offline beat legitimately carries an old timestamp."
+          },
+          "exited_at": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0,
+            "maximum": 100000000000000,
+            "description": "Epoch ms; when both are set, must be >= entered_at."
+          }
+        }
+      },
+      "WebGoalAction": {
+        "type": "object",
+        "description": "One conversion of the cumulative action list. Breaking any bound below drops this action alone; the rest of the beat is still accepted.",
+        "required": [
+          "type",
+          "name",
+          "path",
+          "page_number",
+          "timestamp"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "goal"
+            ]
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 100
+          },
+          "path": {
+            "type": "string",
+            "maxLength": 2048
+          },
+          "page_number": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000
+          },
+          "timestamp": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1,
+            "maximum": 100000000000000,
+            "description": "Original client timestamp in epoch ms; part of the goal's dedup key, so a retried beat lands on the same row. Bounded to what a timestamp column can hold, not to a window."
+          },
+          "value": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1000000000000
+          },
+          "properties": {
+            "type": "object",
+            "maxProperties": 50,
+            "additionalProperties": {
+              "type": "string",
+              "maxLength": 1024
+            },
+            "description": "At most 50 keys, 1024 characters per value and 8 KB in total: the action list is cumulative, so an unbounded map is re-sent forever and would eventually push the body past the 1 MB limit."
+          }
+        }
+      },
+      "WebSessionAttributes": {
+        "type": "object",
+        "required": [
+          "landing_page"
+        ],
+        "properties": {
+          "referrer": {
+            "type": "string"
+          },
+          "landing_page": {
+            "type": "string"
+          },
+          "utm_source": {
+            "type": "string"
+          },
+          "utm_medium": {
+            "type": "string"
+          },
+          "utm_campaign": {
+            "type": "string"
+          },
+          "utm_term": {
+            "type": "string"
+          },
+          "utm_content": {
+            "type": "string"
+          },
+          "utm_id": {
+            "type": "string"
+          },
+          "utm_id_from": {
+            "type": "string"
+          },
+          "screen_width": {
+            "type": "integer"
+          },
+          "screen_height": {
+            "type": "integer"
+          },
+          "viewport_width": {
+            "type": "integer"
+          },
+          "viewport_height": {
+            "type": "integer"
+          },
+          "device": {
+            "type": "string",
+            "description": "Device class, one of desktop, mobile or tablet. Detected IN THE BROWSER by the SDK, not re-parsed from user_agent server-side: modern browsers freeze the UA string and expose the real device, OS and version only through the Client Hints API, which never reaches the server. Client input, so it is trimmed to 200 characters and stored as sent. Defaults to \"desktop\" when absent or blank."
+          },
+          "browser": {
+            "type": "string",
+            "description": "Browser name from the same in-browser detection (\"Chrome\", \"Safari\", …). Defaults to \"Unknown\" when absent or blank."
+          },
+          "browser_type": {
+            "type": "string",
+            "description": "Qualifier for non-ordinary clients the SDK recognises — crawler, inapp, email, fetcher, cli — and empty for a normal browser. Note the server's own bot filtering works off the request User-Agent header, not this field, which is client input like the rest."
+          },
+          "os": {
+            "type": "string",
+            "description": "Operating system from the same in-browser detection (\"macOS\", \"Windows\", \"iPadOS\", …). Defaults to \"Unknown\" when absent or blank."
+          },
+          "user_agent": {
+            "type": "string",
+            "description": "Raw user agent, stored as sent and usable as an attribution filter dimension. It is NOT parsed into device/browser/os — those arrive already resolved in the fields above. Falls back to the request's User-Agent header when the attribute is absent."
+          },
+          "connection_type": {
+            "type": "string"
+          },
+          "language": {
+            "type": "string"
+          },
+          "timezone": {
+            "type": "string"
+          }
+        }
+      },
+      "WebTrackPayload": {
+        "type": "object",
+        "required": [
+          "workspace_id",
+          "session_id",
+          "actions",
+          "updated_at"
+        ],
+        "properties": {
+          "workspace_id": {
+            "type": "string"
+          },
+          "session_id": {
+            "type": "string",
+            "description": "Client-generated UUIDv7. Its embedded timestamp is the single source of truth for the session start and for the partition the rows land in, and must fall within [now-48h, now+24h]. The past bound is the wider one because a session can keep beating for 24h after it started and the SDK offline queue holds beats for another 24h; the future bound is the same 24h as the other timestamps, since the id is minted from the device clock and a visitor whose clock runs fast inherits the whole skew."
+          },
+          "actions": {
+            "type": "array",
+            "maxItems": 1000,
+            "description": "The FULL cumulative list of session actions (re-sent on every beat).\n\nTwo rules apply here and they are easy to conflate. One ACTION that breaks its own bounds is DROPPED on its own and the rest of the beat is still recorded — never a 400, because the list is cumulative and rejecting the beat would reject every later beat of that session too, permanently. The LIST exceeding maxItems is the opposite: it is a 400 for the whole beat, and because actions[] only ever grows, every later beat fails the same way until the client trims its oldest actions or rotates the session — the same remedy as the 413.",
+            "items": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/WebPageviewAction"
+                },
+                {
+                  "$ref": "#/components/schemas/WebGoalAction"
+                }
+              ]
+            }
+          },
+          "attributes": {
+            "$ref": "#/components/schemas/WebSessionAttributes"
+          },
+          "created_at": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Session creation, epoch ms. Optional, and never read: the session start comes from the UUIDv7 session_id instead, so a stored session start can never disagree with the partition its rows landed in. Accepted for wire compatibility with SDKs that still send it, discarded on arrival — not listed as required, so a generated client is not forced to invent a value the server throws away."
+          },
+          "updated_at": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Beat timestamp, epoch ms; must be within 24h of server time."
+          },
+          "sdk_version": {
+            "type": "string"
+          },
+          "tab_id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The writing tab. Tabs share a session id but keep their own cumulative actions and their own seq, so they are disjoint writers. Absent (or 0) from an older SDK."
+          },
+          "sent_at": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Stamped at each HTTP attempt; drives clock-skew correction beyond 5s."
+          },
+          "contact_email": {
+            "type": "string",
+            "maxLength": 255,
+            "description": "Contact address claimed for this session, signed by contact_email_hmac. /track is public and unauthenticated, so no identity field is believed until it verifies against the workspace secret. Send either this pair or identify_token, never both.\n\nA valid signature is necessary but NOT sufficient: the identified path is rate limited, and the address must already be a contact in the workspace. Both extra gates are described under the /track operation. Every rejection along the way — bad signature, throttled, unknown address — costs the identity only: the beat is still recorded, just anonymously, and the response is the same 200 with no error. There is nothing on the wire distinguishing a working integration from a broken one, so verify against a contact that exists and check that the session actually shows up identified."
+          },
+          "contact_email_hmac": {
+            "type": "string",
+            "maxLength": 64,
+            "description": "HMAC-SHA-256 of a DOMAIN-SEPARATED string, minted on the customer's server (never in the browser, which would hand the workspace secret to every visitor). The exact recipe, which must be followed literally:\n\nsignature = lowercase_hex( HMAC_SHA256( key = workspace secret key, message = \"wa_identify:\" + contact_email ) )\n\nThe message is the ASCII prefix \"wa_identify:\" concatenated with the address — signing bare \"alice@example.com\" instead of \"wa_identify:alice@example.com\" is the failure mode to check first. The result is the 64 lowercase hex characters of the digest, compared as bytes, so uppercase hex or base64 will not match.\n\nThe prefix exists to keep this credential from being interchangeable with the email HMAC that authorizes subscription changes (notification center, unsubscribe, one-click), which is computed over the bare address with the same workspace secret and is printed into every email Notifuse sends. Without the prefix, an unsubscribe HMAC scraped from a forwarded email would silently identify a visitor, and this analytics credential lifted out of page JS by any third-party script would let its holder change that contact's subscriptions.\n\nSigned and verified over the RAW address exactly as it appears in contact_email, before any normalization: sign the same bytes you send. Normalization (trim, lowercase) happens only after the signature checks out, to match the stored contact."
+          },
+          "identify_token": {
+            "type": "string",
+            "maxLength": 3174,
+            "description": "Opaque encrypted credential carried by an email-click link (the nf_id parameter), and the alternative to the contact_email / contact_email_hmac pair rather than a companion to it. Expired or undecryptable tokens cost the identity only, not the beat. Once decrypted, the address it carries passes through the same two further gates as a signed contact_email (rate limit, then contact-must-exist).\n\nThe length limit is a ceiling on what the server will look at, not a size to aim for: it is derived from the longest address contacts can store, so that no token Notifuse mints can ever exceed it. Send the nf_id value back exactly as it arrived — a longer one is discarded before decryption, which costs the identity silently."
+          },
+          "dimensions": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Custom dimensions custom_1..custom_10."
+          },
+          "seq": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0,
+            "description": "Monotonic per-session beat counter; the server only applies strictly newer beats."
+          }
+        }
+      },
+      "WebFilterCondition": {
+        "type": "object",
+        "required": [
+          "field",
+          "operator"
+        ],
+        "properties": {
+          "field": {
+            "type": "string"
+          },
+          "operator": {
+            "type": "string",
+            "enum": [
+              "equals",
+              "not_equals",
+              "contains",
+              "not_contains",
+              "is_empty",
+              "is_not_empty",
+              "regex"
+            ]
+          },
+          "value": {
+            "type": "string"
+          }
+        }
+      },
+      "WebFilterOperation": {
+        "type": "object",
+        "required": [
+          "dimension",
+          "action"
+        ],
+        "properties": {
+          "dimension": {
+            "type": "string"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "set_value",
+              "unset_value",
+              "set_default_value"
+            ]
+          },
+          "value": {
+            "type": "string"
+          }
+        }
+      },
+      "WebFilter": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "priority",
+          "conditions",
+          "operations",
+          "enabled"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "priority": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1000
+          },
+          "order": {
+            "type": "integer"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "conditions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WebFilterCondition"
+            }
+          },
+          "operations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WebFilterOperation"
+            }
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "version": {
+            "type": "string"
+          }
+        }
+      },
+      "WebAnalyticsSettings": {
+        "type": "object",
+        "nullable": true,
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "allowed_domains": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Origins allowed to send beats (\"example.com\", \"*.example.com\"); empty allows all."
+          },
+          "bounce_threshold_seconds": {
+            "type": "integer",
+            "description": "Sessions with less engaged time count as bounces (default 10)."
+          },
+          "filters": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WebFilter"
+            }
+          },
+          "filters_version": {
+            "type": "string",
+            "readOnly": true
+          },
+          "custom_dimension_labels": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "identify_from_email_links": {
+            "type": "boolean",
+            "description": "Adds a signed identity to the links of tracked emails, so a recipient who clicks one is recognised on landing without any code on the customer's site, and their visit is tied to their contact record. Off by default: unlike identify(), which the customer's own server calls with their own secret, this credential is minted by Notifuse for every recipient of every tracked send, so it is theirs to ask for."
+          },
+          "geo_enabled": {
+            "type": "boolean"
+          },
+          "geo_store_city": {
+            "type": "boolean"
+          },
+          "geo_store_region": {
+            "type": "boolean"
+          },
+          "geo_coordinates_precision": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 2
+          }
+        }
+      },
+      "WebAnalyticsBackfillRequest": {
+        "type": "object",
+        "required": [
+          "workspace_id"
+        ],
+        "properties": {
+          "workspace_id": {
+            "type": "string"
+          }
+        }
+      },
+      "WebAnalyticsBackfillResponse": {
+        "type": "object",
+        "properties": {
+          "backfill": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "task_id": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "pending",
+                  "running",
+                  "completed",
+                  "failed",
+                  "paused"
+                ]
+              },
+              "progress": {
+                "type": "number"
+              },
+              "state": {
+                "type": "object",
+                "properties": {
+                  "filters_version": {
+                    "type": "string"
+                  },
+                  "partition_index": {
+                    "type": "integer"
+                  },
+                  "rows_updated": {
+                    "type": "integer",
+                    "format": "int64"
+                  }
+                }
+              },
+              "error_message": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "Annotation": {
+        "type": "object",
+        "required": [
+          "id",
+          "annotated_at",
+          "timezone",
+          "title",
+          "color",
+          "source",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Server-generated identifier (a UUID with its dashes removed).",
+            "example": "3f2504e04f8911d39a0c0305e82c3301"
+          },
+          "annotated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "The moment the annotation marks, as a real instant.",
+            "example": "2026-08-15T09:00:00Z"
+          },
+          "timezone": {
+            "type": "string",
+            "description": "IANA timezone the moment was entered in. This is display intent only — annotated_at already fixes the instant, and filtering never uses this field. It is what lets \"9am in Tokyo\" render back as 9am instead of the reader's local equivalent.",
+            "example": "Asia/Tokyo"
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 100,
+            "description": "Counted in characters, not bytes.",
+            "example": "Pricing page redesign"
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 500,
+            "description": "Optional longer note. Counted in characters, not bytes.",
+            "example": "Rolled out to all visitors after the A/B test."
+          },
+          "color": {
+            "type": "string",
+            "pattern": "^#[0-9A-Fa-f]{6}$",
+            "description": "Six-digit hex colour used for the marker on the charts.",
+            "example": "#3b82f6"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "manual",
+              "broadcast"
+            ],
+            "description": "Who wrote the row. `manual` is anything typed by an operator or posted to this API; `broadcast` rows are written automatically when a broadcast starts sending. There is deliberately no API source — see the note on annotations.create.",
+            "example": "manual"
+          },
+          "source_id": {
+            "type": "string",
+            "description": "The entity that caused an automatic annotation (a broadcast id today). Always absent on manual rows, and never settable through the API. An annotation outlives the entity it points at: deleting a broadcast leaves its annotation, because the send did happen.",
+            "example": "bcast_1234567890"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "ListAnnotationsResponse": {
+        "type": "object",
+        "properties": {
+          "annotations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Annotation"
+            }
+          }
+        }
+      },
+      "AnnotationResponse": {
+        "type": "object",
+        "properties": {
+          "annotation": {
+            "$ref": "#/components/schemas/Annotation"
+          }
+        }
+      },
+      "CreateAnnotationRequest": {
+        "type": "object",
+        "required": [
+          "workspace_id",
+          "annotated_at",
+          "title"
+        ],
+        "properties": {
+          "workspace_id": {
+            "type": "string",
+            "example": "ws_1234567890"
+          },
+          "annotated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "The moment to mark, as an RFC3339 instant.",
+            "example": "2026-08-15T09:00:00Z"
+          },
+          "timezone": {
+            "type": "string",
+            "description": "IANA timezone the moment was entered in, kept for display. Defaults to the workspace timezone, then to UTC.",
+            "example": "Asia/Tokyo"
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 100,
+            "example": "Pricing page redesign"
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 500,
+            "example": "Rolled out to all visitors after the A/B test."
+          },
+          "color": {
+            "type": "string",
+            "pattern": "^#[0-9A-Fa-f]{6}$",
+            "default": "#3b82f6",
+            "example": "#3b82f6"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "manual"
+            ],
+            "description": "Only `manual` is accepted. Sending `broadcast` is rejected rather than quietly downgraded: it would be claiming the slot of an automatic row.",
+            "default": "manual"
+          }
+        }
+      },
+      "UpdateAnnotationRequest": {
+        "type": "object",
+        "required": [
+          "workspace_id",
+          "id",
+          "annotated_at",
+          "title"
+        ],
+        "properties": {
+          "workspace_id": {
+            "type": "string",
+            "example": "ws_1234567890"
+          },
+          "id": {
+            "type": "string",
+            "example": "3f2504e04f8911d39a0c0305e82c3301"
+          },
+          "annotated_at": {
+            "type": "string",
+            "format": "date-time",
+            "example": "2026-08-15T09:00:00Z"
+          },
+          "timezone": {
+            "type": "string",
+            "description": "Falls back to the annotation's stored timezone when omitted.",
+            "example": "Asia/Tokyo"
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 100,
+            "example": "Pricing page redesign"
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 500
+          },
+          "color": {
+            "type": "string",
+            "pattern": "^#[0-9A-Fa-f]{6}$",
+            "description": "Falls back to the annotation's stored colour when omitted.",
+            "example": "#3b82f6"
+          }
+        }
+      },
+      "DeleteAnnotationRequest": {
+        "type": "object",
+        "required": [
+          "workspace_id",
+          "id"
+        ],
+        "properties": {
+          "workspace_id": {
+            "type": "string",
+            "example": "ws_1234567890"
+          },
+          "id": {
+            "type": "string",
+            "example": "3f2504e04f8911d39a0c0305e82c3301"
+          }
+        }
+      },
+      "DeleteAnnotationResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "example": true
+          }
+        }
       }
     }
   }

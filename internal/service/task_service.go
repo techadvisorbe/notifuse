@@ -13,6 +13,7 @@ import (
 	"math/rand"
 	"net/http"
 	"runtime/debug"
+	"strconv"
 	"sync"
 	"time"
 
@@ -37,6 +38,93 @@ const defaultMaxTaskRuntime = 50 // 50 seconds
 // inside its grace window.
 const taskExecutionGrace = 30 * time.Second
 
+// dispatchResponseMargin is the slack added on top of a task's own execution
+// bound before the dispatcher stops waiting for the handler's reply.
+const dispatchResponseMargin = 10 * time.Second
+
+// dispatchTimeout returns how long a dispatch should wait for /api/tasks.execute
+// to answer. The handler executes the task synchronously and only replies when
+// it is done, so this has to cover the task's whole permitted lifetime:
+// MaxRuntime plus the grace window ExecuteTask applies, plus a little slack for
+// the round trip.
+func dispatchTimeout(t *domain.Task) time.Duration {
+	maxRuntime := t.MaxRuntime
+	if maxRuntime <= 0 {
+		maxRuntime = defaultMaxTaskRuntime
+	}
+	return time.Duration(maxRuntime)*time.Second + taskExecutionGrace + dispatchResponseMargin
+}
+
+// newDispatchHTTPClient builds the client shared by all task dispatches.
+//
+// CheckRedirect: refuse to follow redirects. The dispatch target is our own
+// /api/tasks.execute; any 3xx response means something in front of the API
+// (auth proxy, TLS-upgrading ingress, CDN) has intercepted the request. The
+// Go default would follow a 302 as a GET to the Location URL — if that URL
+// is an auth-wall login page returning 200 HTML, the status check treats it
+// as success and the task never runs. ErrUseLastResponse returns the 3xx
+// response unfollowed so the non-200 branch catches it and logs loudly.
+// See #320 / #317 (Cloudflare Access intercepting dispatch).
+//
+// Timeout is only a backstop against a connection that never answers: every
+// dispatch carries its own, shorter deadline (see newDispatchRequest). It must
+// stay above dispatchTimeout for the longest-running task type, or it becomes
+// the binding constraint again — which is what the old fixed 53s was.
+func newDispatchHTTPClient() *http.Client {
+	return &http.Client{
+		Timeout: 10 * time.Minute,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+		Transport: &http.Transport{
+			MaxIdleConns:        100,
+			MaxIdleConnsPerHost: 100,
+			IdleConnTimeout:     90 * time.Second,
+			TLSClientConfig: &tls.Config{
+				InsecureSkipVerify: true,
+			},
+		},
+	}
+}
+
+// newDispatchRequest builds one dispatch bounded by the task's own budget: the
+// handler runs the task to completion before answering, so the dispatcher has
+// to wait at least as long as the task may legitimately run. A fixed timeout
+// here truncated longer task types and left only seconds of margin on a
+// broadcast slice — the gap an enqueue transaction was cancelled in.
+//
+// The returned cancel func must be called by the caller when the dispatch is
+// done. Using NewRequestWithContext (rather than NewRequest) is also what
+// propagates the trace to the handler.
+func (s *TaskService) newDispatchRequest(ctx context.Context, t *domain.Task, body []byte) (*http.Request, context.CancelFunc, error) {
+	reqCtx, cancel := context.WithTimeout(ctx, dispatchTimeout(t))
+
+	endpoint := fmt.Sprintf("%s/api/tasks.execute", s.apiEndpoint)
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, endpoint, bytes.NewBuffer(body))
+	if err != nil {
+		cancel()
+		return nil, nil, err
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Task-ID", t.ID) // Add task ID for tracing
+
+	// Sign the dispatch. /api/tasks.execute has no session to authenticate — the
+	// caller is this process talking to itself through the ingress — so the
+	// signature is what tells the handler the request came from the scheduler and
+	// not from anyone who learned a task id. The path signed is the one the
+	// handler sees; the body is in the signed content because every dispatch hits
+	// the same path.
+	if secret := s.signingSecret(); secret != "" {
+		timestamp := time.Now().UTC().Unix()
+		req.Header.Set(domain.TaskExecuteTimestampHeader, strconv.FormatInt(timestamp, 10))
+		req.Header.Set(domain.TaskExecuteSignatureHeader,
+			domain.SignTaskExecuteRequest(domain.TaskExecuteSigningKey(secret), timestamp, req.URL.Path, body))
+	}
+
+	return req, cancel, nil
+}
+
 // TaskService manages task execution and state
 type TaskService struct {
 	repo        domain.TaskRepository
@@ -54,6 +142,9 @@ type TaskService struct {
 	// Wired from TaskScheduler.Enabled — an instance running its own scheduler executes its
 	// own tasks directly (no self-call); see SetDirectExecution.
 	directExecution bool
+	// secretKey signs HTTP dispatches to /api/tasks.execute. Set through
+	// SetSecretKey rather than taken by the constructor, which has 37 call sites.
+	secretKey string
 }
 
 // WithTransaction executes a function within a transaction
@@ -110,6 +201,24 @@ func (s *TaskService) SetDirectExecution(enabled bool) {
 	s.directExecution = enabled
 }
 
+// SetSecretKey sets the installation's SECRET_KEY, from which the key that signs
+// HTTP dispatches to /api/tasks.execute is derived. A service left without one
+// dispatches unsigned, which the handler rejects — that is the intended failure:
+// an unsigned dispatch is indistinguishable from anyone else's.
+func (s *TaskService) SetSecretKey(secretKey string) {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+	s.secretKey = secretKey
+}
+
+// signingSecret reads the dispatch signing secret. Dispatches are built from
+// per-task goroutines, so the read is locked like every other field here.
+func (s *TaskService) signingSecret() string {
+	s.lock.RLock()
+	defer s.lock.RUnlock()
+	return s.secretKey
+}
+
 // IsDirectExecution returns whether in-process (direct) task execution is enabled.
 func (s *TaskService) IsDirectExecution() bool {
 	s.lock.Lock()
@@ -143,6 +252,7 @@ func getTaskTypes() []string {
 		"process_contact_segment_queue",
 		"check_segment_recompute",
 		"sync_integration",
+		domain.WebAnalyticsBackfillTaskType,
 	}
 }
 
@@ -302,32 +412,11 @@ func (s *TaskService) ExecutePendingTasks(ctx context.Context, maxTasks int) err
 
 	tracing.AddAttribute(ctx, "execution_mode", "http")
 
-	// Create HTTP client with connection pooling for reuse across tasks
-	// Per Go docs: "Clients and Transports are safe for concurrent use by multiple
-	// goroutines and for efficiency should only be created once and re-used."
-	//
-	// CheckRedirect: refuse to follow redirects. The dispatch target is our own
-	// /api/tasks.execute; any 3xx response means something in front of the API
-	// (auth proxy, TLS-upgrading ingress, CDN) has intercepted the request. The
-	// Go default would follow a 302 as a GET to the Location URL — if that URL
-	// is an auth-wall login page returning 200 HTML, the status check below
-	// treats it as success and the task never runs. ErrUseLastResponse returns
-	// the 3xx response unfollowed so the non-200 branch catches it and logs
-	// loudly. See #320 / #317 (Cloudflare Access intercepting dispatch).
-	httpClient := &http.Client{
-		Timeout: 53 * time.Second,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-		Transport: &http.Transport{
-			MaxIdleConns:        100,
-			MaxIdleConnsPerHost: 100,
-			IdleConnTimeout:     90 * time.Second,
-			TLSClientConfig: &tls.Config{
-				InsecureSkipVerify: true,
-			},
-		},
-	}
+	// One client shared across dispatches. Per Go docs: "Clients and Transports
+	// are safe for concurrent use by multiple goroutines and for efficiency
+	// should only be created once and re-used." See newDispatchHTTPClient for
+	// the redirect and timeout rationale.
+	httpClient := newDispatchHTTPClient()
 	httpClient = tracing.WrapHTTPClient(httpClient)
 
 	// Fire-and-forget dispatch: each task runs in its own goroutine bounded by
@@ -371,9 +460,7 @@ func (s *TaskService) ExecutePendingTasks(ctx context.Context, maxTasks int) err
 				return
 			}
 
-			// Create request with tracing context
-			endpoint := fmt.Sprintf("%s/api/tasks.execute", s.apiEndpoint)
-			req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewBuffer(reqBody))
+			req, cancelReq, err := s.newDispatchRequest(taskCtx, t, reqBody)
 			if err != nil {
 				tracing.MarkSpanError(taskCtx, err)
 				s.logger.WithField("task_id", t.ID).
@@ -382,10 +469,7 @@ func (s *TaskService) ExecutePendingTasks(ctx context.Context, maxTasks int) err
 					Error("Failed to create HTTP request for task execution")
 				return
 			}
-
-			// Set content type
-			req.Header.Set("Content-Type", "application/json")
-			req.Header.Set("X-Task-ID", t.ID) // Add task ID for tracing
+			defer cancelReq()
 
 			// Execute request
 			resp, err := httpClient.Do(req)
@@ -682,6 +766,54 @@ func (s *TaskService) ExecuteTask(ctx context.Context, workspace, taskID string,
 	// Wait for completion, error, or timeout
 	select {
 	case <-ctx.Done():
+		// Two very different situations arrive here.
+		//
+		// context.Canceled means the parent went away — the server is shutting
+		// down, or the dispatcher hung up mid-run. That is not the task's fault
+		// and must not consume its retry budget: three deploys during a long
+		// broadcast used to be enough to kill it. Re-queue it instead.
+		//
+		// Only Canceled counts as an interruption. The data-feed fetchers build
+		// their own WithTimeout sub-contexts, so a feed timing out on its own
+		// surfaces as DeadlineExceeded and must keep counting as a real failure
+		// — as does our own timeout+grace backstop firing on a stuck processor,
+		// handled below.
+		if errors.Is(ctx.Err(), context.Canceled) {
+			// The processor goroutine is still unwinding. Leave a gap before the
+			// task becomes re-dispatchable (GetNextBatch takes any pending task
+			// whose next_run_after has elapsed) so a second execution cannot
+			// start alongside the first.
+			interruptedErr := &domain.ErrTaskExecution{
+				TaskID: taskID,
+				Reason: "execution interrupted",
+				Err:    ctx.Err(),
+			}
+			if relErr := s.repo.ReleaseTask(bgCtx, workspace, taskID, interruptedErr.Error(),
+				time.Now().UTC().Add(taskExecutionGrace)); relErr != nil {
+				if errors.Is(relErr, domain.ErrTaskNotRunning) {
+					// Something else already moved the task on while we were
+					// being cancelled — a cancelled broadcast, a pause. Their
+					// decision wins.
+					s.logger.WithFields(map[string]interface{}{
+						"task_id":      taskID,
+						"workspace_id": workspace,
+					}).Info("Interrupted task was already claimed or finalized elsewhere - leaving it alone")
+					return interruptedErr
+				}
+				s.logger.WithFields(map[string]interface{}{
+					"task_id":      taskID,
+					"workspace_id": workspace,
+					"error":        relErr.Error(),
+				}).Error("Failed to release interrupted task")
+				return fmt.Errorf("failed to release interrupted task: %w", relErr)
+			}
+			s.logger.WithFields(map[string]interface{}{
+				"task_id":      taskID,
+				"workspace_id": workspace,
+			}).Warn("Task execution was interrupted — re-queued without consuming a retry")
+			return interruptedErr
+		}
+
 		// The grace deadline (or an earlier caller deadline) fired while the
 		// processor was still running — a genuinely stuck execution. Release
 		// the task with a detached write so the scheduler can re-dispatch it;
@@ -720,7 +852,12 @@ func (s *TaskService) ExecuteTask(ctx context.Context, workspace, taskID string,
 				tracing.AddAttribute(rescheduleCtx, "workspace_id", workspace)
 				tracing.AddAttribute(rescheduleCtx, "recurring_interval", *task.RecurringInterval)
 
-				// Calculate next run with backoff and jitter
+				// Calculate next run with backoff and jitter. The backoff is applied
+				// to a LOCAL copy on purpose: writing it back to
+				// task.RecurringInterval would make a temporary slowdown permanent,
+				// since nothing ever restores the original cadence once the
+				// integration recovers. The stored interval stays the configured one
+				// and the penalty lives in the task state instead.
 				interval := *task.RecurringInterval
 				if task.State != nil && task.State.IntegrationSync != nil {
 					if task.State.IntegrationSync.ConsecErrors > 0 {
@@ -825,6 +962,40 @@ func (s *TaskService) ExecuteTask(ctx context.Context, workspace, taskID string,
 			}).Info("Task pending and will continue in next run")
 		}
 	case err := <-processErr:
+		// An error that carries a cancellation is an interruption, not a
+		// failure: the processor was cut short by its context going away rather
+		// than by anything wrong with the task. Re-queue it immediately —
+		// unlike the ctx.Done() branch above, the processor goroutine has
+		// already returned, so there is no overlap window to avoid.
+		// The error is not always able to say it was cancelled: a cancellation
+		// that lands inside a transaction surfaces as sql.ErrTxDone, whose chain
+		// carries no context error. So also ask the context itself — but only
+		// about cancellation, since our own deadline firing (DeadlineExceeded)
+		// is a genuinely stuck processor and must still count as a failure.
+		if errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
+			if relErr := s.repo.ReleaseTask(bgCtx, workspace, taskID, err.Error(), time.Now().UTC()); relErr != nil {
+				if errors.Is(relErr, domain.ErrTaskNotRunning) {
+					s.logger.WithFields(map[string]interface{}{
+						"task_id":      taskID,
+						"workspace_id": workspace,
+					}).Info("Interrupted task was already claimed or finalized elsewhere - leaving it alone")
+					return err
+				}
+				s.logger.WithFields(map[string]interface{}{
+					"task_id":      taskID,
+					"workspace_id": workspace,
+					"error":        relErr.Error(),
+				}).Error("Failed to release interrupted task")
+				return fmt.Errorf("failed to release interrupted task: %w", relErr)
+			}
+			s.logger.WithFields(map[string]interface{}{
+				"task_id":      taskID,
+				"workspace_id": workspace,
+				"error":        err.Error(),
+			}).Warn("Task execution was interrupted — re-queued without consuming a retry")
+			return err
+		}
+
 		// Task failed with an error
 		failCtx, failSpan := tracing.StartServiceSpan(ctx, "TaskService", "MarkTaskFailed")
 		defer tracing.EndSpan(failSpan, nil)
@@ -1163,10 +1334,15 @@ func (s *TaskService) handleBroadcastResumed(ctx context.Context, payload domain
 		return
 	}
 
-	// Resume the task
+	// Resume the task with a fresh retry budget. repo.Update writes retry_count
+	// verbatim, so without this a broadcast that was paused after burning
+	// retries on transient failures came back one failure from being marked
+	// failed for good — and the console offers no other way to clear it.
 	nextRunAfter := time.Now().UTC()
 	task.NextRunAfter = &nextRunAfter
 	task.Status = domain.TaskStatusPending
+	task.RetryCount = 0
+	task.ErrorMessage = nil
 
 	tracing.AddAttribute(ctx, "next_run_after", nextRunAfter.Format(time.RFC3339))
 	tracing.AddAttribute(ctx, "new_status", string(task.Status))

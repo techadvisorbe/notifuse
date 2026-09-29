@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { cloneDeep, forEach, get, set } from 'lodash'
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
 import { faPenToSquare, faTrashCan } from '@fortawesome/free-regular-svg-icons'
@@ -38,18 +38,14 @@ import {
   LeafContactListForm,
   LeafCustomEventsGoalForm
 } from './form_leaf'
+import { timelineChangesSchema } from './table_schemas'
 import { FieldTypeNumber } from './type_number'
 import { FieldTypeJSON } from './type_json'
 import styles from './input.module.css'
 
-export const HasLeaf = (node: TreeNode): boolean => {
-  if (node.kind === 'leaf') return true
-  if (!node.branch) return false
-
-  return node.branch.leaves.some((child: TreeNode) => {
-    return HasLeaf(child)
-  })
-}
+// Defined in ./tree_completeness so pure callers can use it without importing this module,
+// which pulls in antd and the whole editor. Re-exported here for the existing importers.
+export { HasLeaf } from './tree_completeness'
 
 export type SegmentSchemas = {
   [key: string]: TableSchema
@@ -62,6 +58,9 @@ export type TreeNodeInputProps = {
   lists?: List[]
   workspaceId?: string
   customFieldLabels?: Record<string, string>
+  // Reports the tree as it would stand if the condition currently open in the form were confirmed,
+  // and undefined once no condition is open. Lets the drawer preview an in-progress condition.
+  onDraftTreeChange?: (draftTree: TreeNode | undefined) => void
 }
 
 const fieldTypeRendererDictionary: FieldTypeRendererDictionary = {
@@ -91,6 +90,24 @@ const getColorClass = (colorID: number): string => {
 export const TreeNodeInput = (props: TreeNodeInputProps) => {
   const { t } = useLingui()
   const [editingNodeLeaf, setEditingNodeLeaf] = useState<EditingNodeLeaf | undefined>(undefined)
+
+  const onDraftTreeChangeRef = useRef(props.onDraftTreeChange)
+  onDraftTreeChangeRef.current = props.onDraftTreeChange
+
+  // A draft only ever describes the condition open in the form. Whenever that changes — opened,
+  // confirmed, cancelled, or swapped for another condition — the committed tree takes over again.
+  useEffect(() => {
+    onDraftTreeChangeRef.current?.(undefined)
+  }, [editingNodeLeaf])
+
+  const onDraftLeafChange = (draftLeaf: TreeNode, path: string, pathKey: number) => {
+    if (!props.onDraftTreeChange || !props.value) return
+
+    const clonedTree = cloneDeep(props.value) as TreeNode
+    set(clonedTree, path + '[' + pathKey + ']', draftLeaf)
+
+    props.onDraftTreeChange(clonedTree)
+  }
 
   const { data: templatesData } = useQuery({
     queryKey: ['templates', props.workspaceId],
@@ -302,6 +319,7 @@ export const TreeNodeInput = (props: TreeNodeInputProps) => {
       // Custom events goals use CustomEventsGoalCondition
       leaf.custom_events_goal = {
         goal_type: '*', // All goal types by default
+        negate: false, // "has", not "has not"
         aggregate_operator: 'count',
         operator: 'gte',
         value: 1, // At least 1 event makes sense as default
@@ -447,7 +465,7 @@ export const TreeNodeInput = (props: TreeNodeInputProps) => {
             {deleteButton(path, pathKey, false)}
           </Flex>
           <div>
-            <Alert type="error" message={t`source ${node.leaf?.source} not found`} />
+            <Alert type="error" title={t`source ${node.leaf?.source} not found`} />
           </div>
         </div>
       )
@@ -467,6 +485,9 @@ export const TreeNodeInput = (props: TreeNodeInputProps) => {
               onChange={(updatedLeaf: TreeNode) => {
                 onUpdateNode(updatedLeaf, path, pathKey)
               }}
+              onDraftChange={(draftLeaf: TreeNode) => {
+                onDraftLeafChange(draftLeaf, path, pathKey)
+              }}
               source={node.leaf?.source as string}
               schema={schema}
               editingNodeLeaf={editingNodeLeaf as EditingNodeLeaf}
@@ -480,6 +501,9 @@ export const TreeNodeInput = (props: TreeNodeInputProps) => {
               value={node}
               onChange={(updatedLeaf: TreeNode) => {
                 onUpdateNode(updatedLeaf, path, pathKey)
+              }}
+              onDraftChange={(draftLeaf: TreeNode) => {
+                onDraftLeafChange(draftLeaf, path, pathKey)
               }}
               source={node.leaf?.source as string}
               schema={schema}
@@ -496,6 +520,9 @@ export const TreeNodeInput = (props: TreeNodeInputProps) => {
               onChange={(updatedLeaf: TreeNode) => {
                 onUpdateNode(updatedLeaf, path, pathKey)
               }}
+              onDraftChange={(draftLeaf: TreeNode) => {
+                onDraftLeafChange(draftLeaf, path, pathKey)
+              }}
               source={node.leaf?.source as string}
               schema={schema}
               editingNodeLeaf={editingNodeLeaf as EditingNodeLeaf}
@@ -509,6 +536,9 @@ export const TreeNodeInput = (props: TreeNodeInputProps) => {
               value={node}
               onChange={(updatedLeaf: TreeNode) => {
                 onUpdateNode(updatedLeaf, path, pathKey)
+              }}
+              onDraftChange={(draftLeaf: TreeNode) => {
+                onDraftLeafChange(draftLeaf, path, pathKey)
               }}
               source={node.leaf?.source as string}
               schema={schema}
@@ -547,18 +577,18 @@ export const TreeNodeInput = (props: TreeNodeInputProps) => {
 
           <div>
             <Space style={{ alignItems: 'center' }}>
-              <Tag bordered={false} color="cyan">
+              <Tag variant="filled" color="cyan">
                 {schema.icon && <FontAwesomeIcon icon={schema.icon} style={{ marginRight: 8 }} />}
                 {t`List subscription`}
               </Tag>
               <span className="opacity-60">{isInList ? t`is in` : t`is not in`}</span>
-              <Tag bordered={false} color="green">
+              <Tag variant="filled" color="green">
                 {listName}
               </Tag>
               {isInList && contactList.status && (
                 <>
                   <span className="opacity-60">{t`with status`}</span>
-                  <Tag bordered={false} color="purple">
+                  <Tag variant="filled" color="purple">
                     {statusLabel}
                   </Tag>
                 </>
@@ -595,35 +625,54 @@ export const TreeNodeInput = (props: TreeNodeInputProps) => {
 
           <div>
             <Space style={{ alignItems: 'start' }}>
-              <Tag bordered={false} color="cyan">
+              <Tag variant="filled" color="cyan">
                 {schema.icon && <FontAwesomeIcon icon={schema.icon} style={{ marginRight: 8 }} />}
                 {t`Goal`}
               </Tag>
               <div>
                 <div className="mb-2">
                   <Space>
-                    <span className="opacity-60">{t`type`}</span>
-                    <Tag bordered={false} color="blue">
+                    <Tag variant="filled" color={goal.negate ? 'red' : 'blue'}>
+                      {goal.negate ? t`has not` : t`has`}
+                    </Tag>
+                    <span className="opacity-60">{t`goal type`}</span>
+                    <Tag variant="filled" color="blue">
                       {goalTypeLabel}
                     </Tag>
+                    {goal.goal_name && (
+                      <>
+                        <span className="opacity-60">{t`goal name`}</span>
+                        <Tag variant="filled" color="blue">
+                          {goal.goal_name}
+                        </Tag>
+                      </>
+                    )}
+                    {goal.event_name && (
+                      <>
+                        <span className="opacity-60">{t`event`}</span>
+                        <Tag variant="filled" color="blue">
+                          {goal.event_name}
+                        </Tag>
+                      </>
+                    )}
                   </Space>
                 </div>
                 <div className="mb-2">
                   <Space>
-                    <Tag bordered={false} color="blue">
+                    <Tag variant="filled" color="blue">
                       {aggregateLabel}
                     </Tag>
                     <span className="opacity-60">{t`is`}</span>
-                    <Tag bordered={false} color="blue">
+                    <Tag variant="filled" color="blue">
                       {operatorLabel}
                     </Tag>
-                    <Tag bordered={false} color="blue">
+                    <Tag variant="filled" color="blue">
                       {goal.value}
                     </Tag>
                     {goal.operator === 'between' && goal.value_2 !== undefined && (
                       <>
                         <span className="opacity-60">{t`and`}</span>
-                        <Tag bordered={false} color="blue">
+                        <Tag variant="filled" color="blue">
                           {goal.value_2}
                         </Tag>
                       </>
@@ -634,14 +683,14 @@ export const TreeNodeInput = (props: TreeNodeInputProps) => {
                   <Space>
                     <span className="opacity-60">{t`timeframe`}</span>
                     {goal.timeframe_operator === 'anytime' && (
-                      <Tag bordered={false} color="blue">
+                      <Tag variant="filled" color="blue">
                         {t`anytime`}
                       </Tag>
                     )}
                     {goal.timeframe_operator === 'in_the_last_days' && (
                       <>
                         <span className="opacity-60">{t`in the last`}</span>
-                        <Tag bordered={false} color="blue">
+                        <Tag variant="filled" color="blue">
                           {goal.timeframe_values?.[0]}
                         </Tag>
                         <span className="opacity-60">{t`days`}</span>
@@ -650,11 +699,11 @@ export const TreeNodeInput = (props: TreeNodeInputProps) => {
                     {goal.timeframe_operator === 'in_date_range' && (
                       <>
                         <span className="opacity-60">{t`between`}</span>
-                        <Tag bordered={false} color="blue">
+                        <Tag variant="filled" color="blue">
                           {formatDateDisplay(goal.timeframe_values?.[0])}
                         </Tag>
                         <span className="opacity-60">&rarr;</span>
-                        <Tag bordered={false} color="blue">
+                        <Tag variant="filled" color="blue">
                           {formatDateDisplay(goal.timeframe_values?.[1])}
                         </Tag>
                       </>
@@ -662,7 +711,7 @@ export const TreeNodeInput = (props: TreeNodeInputProps) => {
                     {goal.timeframe_operator === 'before_date' && (
                       <>
                         <span className="opacity-60">{t`before`}</span>
-                        <Tag bordered={false} color="blue">
+                        <Tag variant="filled" color="blue">
                           {formatDateDisplay(goal.timeframe_values?.[0])}
                         </Tag>
                       </>
@@ -670,13 +719,25 @@ export const TreeNodeInput = (props: TreeNodeInputProps) => {
                     {goal.timeframe_operator === 'after_date' && (
                       <>
                         <span className="opacity-60">{t`after`}</span>
-                        <Tag bordered={false} color="blue">
+                        <Tag variant="filled" color="blue">
                           {formatDateDisplay(goal.timeframe_values?.[0])}
                         </Tag>
                       </>
                     )}
                   </Space>
                 </div>
+                {goal.filters && goal.filters.length > 0 && (
+                  <div className="mt-2">
+                    <Space>
+                      <span className="opacity-60">{t`with properties`}</span>
+                      {goal.filters.map((filter, index) => (
+                        <Tag key={index} variant="filled" color="blue">
+                          {filter.field_name}
+                        </Tag>
+                      ))}
+                    </Space>
+                  </div>
+                )}
               </div>
             </Space>
           </div>
@@ -705,13 +766,13 @@ export const TreeNodeInput = (props: TreeNodeInputProps) => {
         <div>
           <Space style={{ alignItems: 'start' }}>
             {isContactSource && (
-              <Tag bordered={false} color="cyan">
+              <Tag variant="filled" color="cyan">
                 {schema.icon && <FontAwesomeIcon icon={schema.icon} style={{ marginRight: 8 }} />}
                 {t`Contact property`}
               </Tag>
             )}
             {isContactTimelineSource && (
-              <Tag bordered={false} color="cyan">
+              <Tag variant="filled" color="cyan">
                 {schema.icon && <FontAwesomeIcon icon={schema.icon} style={{ marginRight: 8 }} />}
                 {t`Activity`}
               </Tag>
@@ -721,7 +782,7 @@ export const TreeNodeInput = (props: TreeNodeInputProps) => {
                 <>
                   <div className="mb-2">
                     <span className="opacity-60 pr-3">{t`type`}</span>
-                    <Tag bordered={false} color="blue">
+                    <Tag variant="filled" color="blue">
                       {node.leaf?.contact_timeline.kind === 'email.opened' && t`Open email`}
                       {node.leaf?.contact_timeline.kind === 'email.clicked' && t`Click email`}
                       {node.leaf?.contact_timeline.kind === 'email.bounced' && t`Bounce email`}
@@ -730,12 +791,14 @@ export const TreeNodeInput = (props: TreeNodeInputProps) => {
                         t`Unsubscribe from list`}
                       {node.leaf?.contact_timeline.kind === 'email.sent' &&
                         t`New message (email...)`}
+                      {node.leaf?.contact_timeline.kind === 'web.pageview' && t`View web page`}
+                      {node.leaf?.contact_timeline.kind === 'web.session' && t`Visit website`}
                     </Tag>
                   </div>
                   {node.leaf?.contact_timeline?.template_id && (
                     <div className="mb-2">
                       <span className="opacity-60 pr-3">{t`template`}</span>
-                      <Tag bordered={false} color="blue">
+                      <Tag variant="filled" color="blue">
                         {templatesData?.templates?.find(
                           (tpl) => tpl.id === node.leaf?.contact_timeline?.template_id
                         )?.name || node.leaf?.contact_timeline?.template_id}
@@ -744,12 +807,12 @@ export const TreeNodeInput = (props: TreeNodeInputProps) => {
                   )}
                   <Space>
                     <span className="opacity-60">{t`happened`}</span>
-                    <Tag bordered={false} color="blue">
+                    <Tag variant="filled" color="blue">
                       {node.leaf?.contact_timeline.count_operator === 'at_least' && t`at least`}
                       {node.leaf?.contact_timeline.count_operator === 'at_most' && t`at most`}
                       {node.leaf?.contact_timeline.count_operator === 'exactly' && t`exactly`}
                     </Tag>
-                    <Tag bordered={false} color="blue">
+                    <Tag variant="filled" color="blue">
                       {node.leaf?.contact_timeline.count_value}
                     </Tag>
                     <span className="opacity-60">{t`times`}</span>
@@ -759,14 +822,14 @@ export const TreeNodeInput = (props: TreeNodeInputProps) => {
                     <Space>
                       <span className="opacity-60">{t`timeframe`}</span>
                       {node.leaf?.contact_timeline.timeframe_operator === 'anytime' && (
-                        <Tag bordered={false} color="blue">
+                        <Tag variant="filled" color="blue">
                           {t`anytime`}
                         </Tag>
                       )}
                       {node.leaf?.contact_timeline.timeframe_operator === 'in_the_last_days' && (
                         <>
                           <span className="opacity-60">{t`in the last`}</span>
-                          <Tag bordered={false} color="blue">
+                          <Tag variant="filled" color="blue">
                             {node.leaf?.contact_timeline.timeframe_values?.[0]}
                           </Tag>
                           <span className="opacity-60">{t`days`}</span>
@@ -775,11 +838,11 @@ export const TreeNodeInput = (props: TreeNodeInputProps) => {
                       {node.leaf?.contact_timeline.timeframe_operator === 'in_date_range' && (
                         <>
                           <span className="opacity-60">{t`between`}</span>
-                          <Tag bordered={false} color="blue">
+                          <Tag variant="filled" color="blue">
                             {formatDateDisplay(node.leaf?.contact_timeline.timeframe_values?.[0])}
                           </Tag>
                           &rarr;
-                          <Tag className="ml-3" bordered={false} color="blue">
+                          <Tag className="ml-3" variant="filled" color="blue">
                             {formatDateDisplay(node.leaf?.contact_timeline.timeframe_values?.[1])}
                           </Tag>
                         </>
@@ -787,7 +850,7 @@ export const TreeNodeInput = (props: TreeNodeInputProps) => {
                       {node.leaf?.contact_timeline.timeframe_operator === 'before_date' && (
                         <>
                           <span className="opacity-60">{t`before`}</span>
-                          <Tag bordered={false} color="blue">
+                          <Tag variant="filled" color="blue">
                             {formatDateDisplay(node.leaf?.contact_timeline.timeframe_values?.[0])}
                           </Tag>
                         </>
@@ -795,7 +858,7 @@ export const TreeNodeInput = (props: TreeNodeInputProps) => {
                       {node.leaf?.contact_timeline.timeframe_operator === 'after_date' && (
                         <>
                           <span className="opacity-60">{t`after`}</span>
-                          <Tag bordered={false} color="blue">
+                          <Tag variant="filled" color="blue">
                             {formatDateDisplay(node.leaf?.contact_timeline.timeframe_values?.[0])}
                           </Tag>
                         </>
@@ -809,7 +872,16 @@ export const TreeNodeInput = (props: TreeNodeInputProps) => {
                   <table>
                     <tbody>
                       {filtersToShow.map((filter, key) => {
-                        const field = schema.fields[filter.field_name]
+                        // Activity filters name keys of the event's `changes`
+                        // payload, not columns of contact_timeline, so they
+                        // resolve against the kind's schema. Falling back to the
+                        // table schema found no field at all and threw on the
+                        // first render of a saved web filter.
+                        const filterSchema =
+                          (node.leaf?.source === 'contact_timeline' &&
+                            timelineChangesSchema(node.leaf?.contact_timeline?.kind)) ||
+                          schema
+                        const field = filterSchema.fields[filter.field_name]
                         // Use JSON renderer if filter has json_path, otherwise use the field_type renderer
                         const rendererType =
                           filter.json_path && filter.json_path.length > 0
@@ -823,17 +895,19 @@ export const TreeNodeInput = (props: TreeNodeInputProps) => {
                               {!fieldTypeRenderer && (
                                 <Alert
                                   type="error"
-                                  message={t`type ${rendererType} is not implemented`}
+                                  title={t`type ${rendererType} is not implemented`}
                                 />
                               )}
                               {fieldTypeRenderer && (
                                 <Space key={key}>
                                   <Popover
                                     title={'field: ' + filter.field_name}
-                                    content={field.description}
+                                    content={field?.description}
                                   >
                                     <b>
-                                      {props.customFieldLabels?.[filter.field_name] || field.title}
+                                      {props.customFieldLabels?.[filter.field_name] ||
+                                        field?.title ||
+                                        filter.field_name}
                                     </b>
                                   </Popover>
                                   {fieldTypeRenderer.render(filter, field, props.customFieldLabels)}

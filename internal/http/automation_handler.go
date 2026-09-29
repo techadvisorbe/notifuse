@@ -2,6 +2,7 @@ package http
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	"github.com/Notifuse/notifuse/internal/domain"
@@ -65,8 +66,7 @@ func (h *AutomationHandler) handleCreate(w http.ResponseWriter, r *http.Request)
 
 	if err := h.service.Create(r.Context(), req.WorkspaceID, req.Automation); err != nil {
 		h.logger.WithField("error", err.Error()).Error("Failed to create automation")
-		if _, ok := err.(*domain.PermissionError); ok {
-			WriteJSONError(w, err.Error(), http.StatusForbidden)
+		if writePermissionError(w, err) {
 			return
 		}
 		WriteJSONError(w, "Failed to create automation", http.StatusInternalServerError)
@@ -93,8 +93,7 @@ func (h *AutomationHandler) handleGet(w http.ResponseWriter, r *http.Request) {
 	automation, err := h.service.Get(r.Context(), req.WorkspaceID, req.AutomationID)
 	if err != nil {
 		h.logger.WithField("error", err.Error()).Error("Failed to get automation")
-		if _, ok := err.(*domain.PermissionError); ok {
-			WriteJSONError(w, err.Error(), http.StatusForbidden)
+		if writePermissionError(w, err) {
 			return
 		}
 		WriteJSONError(w, "Failed to get automation", http.StatusInternalServerError)
@@ -121,8 +120,7 @@ func (h *AutomationHandler) handleList(w http.ResponseWriter, r *http.Request) {
 	automations, total, err := h.service.List(r.Context(), req.WorkspaceID, req.ToFilter())
 	if err != nil {
 		h.logger.WithField("error", err.Error()).Error("Failed to list automations")
-		if _, ok := err.(*domain.PermissionError); ok {
-			WriteJSONError(w, err.Error(), http.StatusForbidden)
+		if writePermissionError(w, err) {
 			return
 		}
 		WriteJSONError(w, "Failed to list automations", http.StatusInternalServerError)
@@ -155,8 +153,22 @@ func (h *AutomationHandler) handleUpdate(w http.ResponseWriter, r *http.Request)
 
 	if err := h.service.Update(r.Context(), req.WorkspaceID, req.Automation); err != nil {
 		h.logger.WithField("error", err.Error()).Error("Failed to update automation")
-		if _, ok := err.(*domain.PermissionError); ok {
-			WriteJSONError(w, err.Error(), http.StatusForbidden)
+		if writePermissionError(w, err) {
+			return
+		}
+		// An update to a live automation regenerates its trigger, so the same
+		// caller-supplied trigger configuration can fail here too.
+		var conditionErr *domain.TriggerConditionError
+		if errors.As(err, &conditionErr) {
+			WriteJSONError(w, conditionErr.Error(), http.StatusBadRequest)
+			return
+		}
+		// A transition that lost a race to another admin: nothing is broken and nothing
+		// about the request was wrong, so this is a 409 the caller can retry after
+		// reloading — not a 500 and not a 400.
+		var conflictErr *domain.AutomationConflictError
+		if errors.As(err, &conflictErr) {
+			WriteJSONError(w, conflictErr.Error(), http.StatusConflict)
 			return
 		}
 		WriteJSONError(w, "Failed to update automation", http.StatusInternalServerError)
@@ -188,8 +200,7 @@ func (h *AutomationHandler) handleDelete(w http.ResponseWriter, r *http.Request)
 
 	if err := h.service.Delete(r.Context(), req.WorkspaceID, req.AutomationID); err != nil {
 		h.logger.WithField("error", err.Error()).Error("Failed to delete automation")
-		if _, ok := err.(*domain.PermissionError); ok {
-			WriteJSONError(w, err.Error(), http.StatusForbidden)
+		if writePermissionError(w, err) {
 			return
 		}
 		WriteJSONError(w, "Failed to delete automation", http.StatusInternalServerError)
@@ -221,8 +232,23 @@ func (h *AutomationHandler) handleActivate(w http.ResponseWriter, r *http.Reques
 
 	if err := h.service.Activate(r.Context(), req.WorkspaceID, req.AutomationID); err != nil {
 		h.logger.WithField("error", err.Error()).Error("Failed to activate automation")
-		if _, ok := err.(*domain.PermissionError); ok {
-			WriteJSONError(w, err.Error(), http.StatusForbidden)
+		if writePermissionError(w, err) {
+			return
+		}
+		// The trigger configuration is the caller's input, and PostgreSQL's complaint
+		// about it is the only thing that makes it diagnosable. errors.As, not a type
+		// assertion: the service wraps this on its way up.
+		var conditionErr *domain.TriggerConditionError
+		if errors.As(err, &conditionErr) {
+			WriteJSONError(w, conditionErr.Error(), http.StatusBadRequest)
+			return
+		}
+		// A transition that lost a race to another admin: nothing is broken and nothing
+		// about the request was wrong, so this is a 409 the caller can retry after
+		// reloading — not a 500 and not a 400.
+		var conflictErr *domain.AutomationConflictError
+		if errors.As(err, &conflictErr) {
+			WriteJSONError(w, conflictErr.Error(), http.StatusConflict)
 			return
 		}
 		WriteJSONError(w, "Failed to activate automation", http.StatusInternalServerError)
@@ -254,8 +280,15 @@ func (h *AutomationHandler) handlePause(w http.ResponseWriter, r *http.Request) 
 
 	if err := h.service.Pause(r.Context(), req.WorkspaceID, req.AutomationID); err != nil {
 		h.logger.WithField("error", err.Error()).Error("Failed to pause automation")
-		if _, ok := err.(*domain.PermissionError); ok {
-			WriteJSONError(w, err.Error(), http.StatusForbidden)
+		if writePermissionError(w, err) {
+			return
+		}
+		// A transition that lost a race to another admin: nothing is broken and nothing
+		// about the request was wrong, so this is a 409 the caller can retry after
+		// reloading — not a 500 and not a 400.
+		var conflictErr *domain.AutomationConflictError
+		if errors.As(err, &conflictErr) {
+			WriteJSONError(w, conflictErr.Error(), http.StatusConflict)
 			return
 		}
 		WriteJSONError(w, "Failed to pause automation", http.StatusInternalServerError)
@@ -282,8 +315,7 @@ func (h *AutomationHandler) handleGetContactNodeExecutions(w http.ResponseWriter
 	contactAutomation, nodeExecutions, err := h.service.GetContactNodeExecutions(r.Context(), req.WorkspaceID, req.AutomationID, req.Email)
 	if err != nil {
 		h.logger.WithField("error", err.Error()).Error("Failed to get contact node executions")
-		if _, ok := err.(*domain.PermissionError); ok {
-			WriteJSONError(w, err.Error(), http.StatusForbidden)
+		if writePermissionError(w, err) {
 			return
 		}
 		WriteJSONError(w, "Failed to get contact node executions", http.StatusInternalServerError)

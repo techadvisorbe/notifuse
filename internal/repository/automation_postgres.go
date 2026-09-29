@@ -4,13 +4,14 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	sq "github.com/Masterminds/squirrel"
 	"github.com/Notifuse/notifuse/internal/domain"
 	"github.com/Notifuse/notifuse/internal/service"
+	"github.com/lib/pq"
 )
 
 // AutomationRepository implements domain.AutomationRepository
@@ -314,24 +315,26 @@ func (r *AutomationRepository) Update(ctx context.Context, workspaceID string, a
 	return r.UpdateTx(ctx, nil, workspaceID, automation)
 }
 
-// UpdateTx updates an automation within a transaction
-func (r *AutomationRepository) UpdateTx(ctx context.Context, tx *sql.Tx, workspaceID string, automation *domain.Automation) error {
+// automationUpdateBuilder builds the column writes every automation update performs, and
+// stamps updated_at. The WHERE clause is the caller's: UpdateTx matches the row, and
+// UpdateIfStatus adds the status predicate that makes the write optimistic.
+//
+// NOTE: Stats are NOT updated here - they should only be modified via atomic methods
+// like IncrementAutomationStat or UpdateAutomationStats to prevent accidental resets
+func automationUpdateBuilder(workspaceID string, automation *domain.Automation) (sq.UpdateBuilder, error) {
 	triggerJSON, err := json.Marshal(automation.Trigger)
 	if err != nil {
-		return fmt.Errorf("failed to marshal trigger config: %w", err)
+		return sq.UpdateBuilder{}, fmt.Errorf("failed to marshal trigger config: %w", err)
 	}
 
 	nodesJSON, err := json.Marshal(automation.Nodes)
 	if err != nil {
-		return fmt.Errorf("failed to marshal nodes: %w", err)
+		return sq.UpdateBuilder{}, fmt.Errorf("failed to marshal nodes: %w", err)
 	}
-
-	// NOTE: Stats are NOT updated here - they should only be modified via atomic methods
-	// like IncrementAutomationStat or UpdateAutomationStats to prevent accidental resets
 
 	automation.UpdatedAt = time.Now().UTC()
 
-	query, args, err := automationPsql.
+	return automationPsql.
 		Update("automations").
 		Set("name", automation.Name).
 		Set("status", automation.Status).
@@ -342,8 +345,17 @@ func (r *AutomationRepository) UpdateTx(ctx context.Context, tx *sql.Tx, workspa
 		Set("nodes", nodesJSON).
 		Set("exit_on_reply", automation.ExitOnReply).
 		Set("updated_at", automation.UpdatedAt).
-		Where(sq.Eq{"id": automation.ID, "workspace_id": workspaceID}).
-		ToSql()
+		Where(sq.Eq{"id": automation.ID, "workspace_id": workspaceID}), nil
+}
+
+// UpdateTx updates an automation within a transaction
+func (r *AutomationRepository) UpdateTx(ctx context.Context, tx *sql.Tx, workspaceID string, automation *domain.Automation) error {
+	builder, err := automationUpdateBuilder(workspaceID, automation)
+	if err != nil {
+		return err
+	}
+
+	query, args, err := builder.ToSql()
 	if err != nil {
 		return fmt.Errorf("failed to build query: %w", err)
 	}
@@ -375,6 +387,47 @@ func (r *AutomationRepository) UpdateTx(ctx context.Context, tx *sql.Tx, workspa
 	}
 
 	return nil
+}
+
+// UpdateIfStatus persists the automation only while its stored status is still
+// expectedStatus (optimistic lock). Returns false (without error) when no row was updated —
+// another transition moved the status between the caller's read and this write.
+//
+// The three status transitions all read the row, decide whether to install or drop the
+// trigger, and only then write. Without the predicate, Update writes back the status it read
+// a moment earlier, so a Pause landing in between is silently reverted to live while the
+// trigger it dropped is never reinstalled — an automation showing Live that enrols nobody,
+// which nothing in the product detects or repairs.
+func (r *AutomationRepository) UpdateIfStatus(ctx context.Context, workspaceID string, automation *domain.Automation, expectedStatus domain.AutomationStatus) (bool, error) {
+	builder, err := automationUpdateBuilder(workspaceID, automation)
+	if err != nil {
+		return false, err
+	}
+
+	query, args, err := builder.Where(sq.Eq{"status": expectedStatus}).ToSql()
+	if err != nil {
+		return false, fmt.Errorf("failed to build query: %w", err)
+	}
+
+	db, err := r.getDB(ctx, workspaceID)
+	if err != nil {
+		return false, fmt.Errorf("failed to get database connection: %w", err)
+	}
+
+	result, err := db.ExecContext(ctx, query, args...)
+	if err != nil {
+		return false, fmt.Errorf("failed to update automation: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("failed to get rows affected: %w", err)
+	}
+
+	// Deliberately not an error: losing a race is a normal outcome the caller turns into a
+	// 409, and "automation not found" — what the unconditional Update says for the same zero
+	// rows — would be a lie the caller cannot act on.
+	return rowsAffected > 0, nil
 }
 
 // UpdateContactAutomationIfActive persists the contact automation only while its
@@ -528,10 +581,28 @@ func (r *AutomationRepository) CreateAutomationTrigger(ctx context.Context, work
 		return fmt.Errorf("failed to get database connection: %w", err)
 	}
 
-	// Use generator to create trigger SQL
+	// Use generator to create trigger SQL. Everything it rejects came from the caller's
+	// trigger configuration, so this is a 400 and not an opaque 500.
 	triggerSQL, err := r.triggerGenerator.Generate(automation)
 	if err != nil {
-		return fmt.Errorf("failed to generate trigger SQL: %w", err)
+		return domain.NewTriggerConditionError(fmt.Sprintf("failed to generate trigger SQL: %v", err))
+	}
+
+	// One transaction for all of it. Run as separate statements they autocommit, so a
+	// failure on CREATE TRIGGER leaves the two DROPs applied — destroying the trigger
+	// the automation was running on before the re-activation was attempted, and leaving
+	// an orphan function behind.
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to begin trigger transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// DROP/CREATE TRIGGER take ACCESS EXCLUSIVE on contact_timeline, and one
+	// transaction now holds it across the whole sequence instead of four short locks.
+	// Bound the wait rather than blocking event ingestion behind it.
+	if _, err := tx.ExecContext(ctx, "SET LOCAL lock_timeout = '5s'"); err != nil {
+		return fmt.Errorf("failed to set lock_timeout: %w", err)
 	}
 
 	// Execute in order: drop existing trigger, drop existing function, create function, create trigger
@@ -546,12 +617,73 @@ func (r *AutomationRepository) CreateAutomationTrigger(ctx context.Context, work
 	}
 
 	for _, stmt := range statements {
-		if _, err := db.ExecContext(ctx, stmt.sql); err != nil {
+		if _, err := tx.ExecContext(ctx, stmt.sql); err != nil {
 			return fmt.Errorf("%s: %w", stmt.errMsg, err)
 		}
 	}
 
+	// Resolve the condition's column references. CREATE FUNCTION only syntax-checks a
+	// plpgsql body — it does not resolve names — so an unresolvable column would install
+	// cleanly and then abort every write to contact_timeline, which is fed by triggers on
+	// contacts, lists, message_history, custom_events, segments and inbound webhooks.
+	//
+	// This runs after the DDL rather than before it, even though the point is to install
+	// nothing invalid: the transaction rolls back either way, and probing first would take
+	// ACCESS SHARE on contact_timeline and then upgrade to the ACCESS EXCLUSIVE the DROPs
+	// need — two concurrent activations in the same workspace would deadlock on that.
+	if triggerSQL.ValidationQuery != "" {
+		if err := probeTriggerConditions(ctx, tx, triggerSQL.ValidationQuery); err != nil {
+			return err
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit trigger installation: %w", err)
+	}
+
 	return nil
+}
+
+// probeTriggerConditions plans the compiled conditions and reports whether the failure is
+// the caller's fault. Only a genuine syntax or semantic complaint from PostgreSQL means the
+// configuration is wrong; a lock timeout or a dropped connection is transient, and calling
+// it a bad condition would tell the caller not to retry something that would have worked.
+func probeTriggerConditions(ctx context.Context, tx *sql.Tx, query string) error {
+	rows, err := tx.QueryContext(ctx, query)
+	if err == nil {
+		closeErr := rows.Close()
+		err = rows.Err()
+		if err == nil {
+			err = closeErr
+		}
+	}
+	if err == nil {
+		return nil
+	}
+
+	var pqErr *pq.Error
+	if errors.As(err, &pqErr) {
+		// Named codes, not the whole 42 class: class 42 also holds undefined_table and
+		// insufficient_privilege, which describe the workspace database rather than the
+		// condition. Blaming those on the caller answers 400 and tells them not to retry
+		// a condition that is perfectly well formed.
+		switch pqErr.Code {
+		case "42601", // syntax_error
+			"42703", // undefined_column
+			"42883", // undefined_function — includes "operator does not exist"
+			"42804", // datatype_mismatch
+			"42846", // cannot_coerce
+			// A filter whose field_type contradicts the column it names compiles fine and
+			// is caught only when PostgreSQL tries to read the value — still the caller's
+			// mistake, and one they cannot diagnose from a generic failure.
+			"22007", // invalid_datetime_format
+			"22P02", // invalid_text_representation
+			"0A000": // feature_not_supported
+			return domain.NewTriggerConditionError(fmt.Sprintf("invalid trigger conditions: %v", err))
+		}
+	}
+
+	return fmt.Errorf("failed to validate trigger conditions: %w", err)
 }
 
 // DropAutomationTrigger removes the database trigger for an automation
@@ -561,10 +693,14 @@ func (r *AutomationRepository) DropAutomationTrigger(ctx context.Context, worksp
 		return fmt.Errorf("failed to get database connection: %w", err)
 	}
 
-	// Remove hyphens from UUID for valid PostgreSQL identifier
-	safeID := strings.ReplaceAll(automationID, "-", "")
-	triggerName := fmt.Sprintf("automation_trigger_%s", safeID)
-	functionName := fmt.Sprintf("automation_trigger_%s", safeID)
+	// automations.delete validates only that the id is non-empty and never loads the row,
+	// so unlike the install path this id has passed through nothing at all — no length cap,
+	// no format check. It is about to be concatenated into DDL as a bare identifier.
+	triggerName, err := service.AutomationTriggerName(automationID)
+	if err != nil {
+		return domain.NewTriggerConditionError(err.Error())
+	}
+	functionName := triggerName
 
 	// Drop the trigger
 	dropTriggerSQL := fmt.Sprintf("DROP TRIGGER IF EXISTS %s ON contact_timeline", triggerName)

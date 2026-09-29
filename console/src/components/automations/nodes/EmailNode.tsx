@@ -3,17 +3,17 @@ import { Handle, Position, useConnection, type NodeProps } from '@xyflow/react'
 import { Mail } from 'lucide-react'
 import { useLingui } from '@lingui/react/macro'
 import { BaseNode } from './BaseNode'
-import { nodeTypeColors } from './constants'
+import { nodeTypeColors, getNodeDescription } from './constants'
 import { useAutomation } from '../context'
-import type { AutomationNodeData } from '../utils/flowConverter'
+import type { AutomationFlowNode, Structural } from '../utils/flowConverter'
 import type { EmailNodeConfig } from '../../../services/api/automation'
 
-type EmailNodeProps = NodeProps<AutomationNodeData>
+type EmailNodeProps = NodeProps<AutomationFlowNode>
 
 export const EmailNode: React.FC<EmailNodeProps> = ({ data, selected }) => {
   const { t } = useLingui()
   const { templates } = useAutomation()
-  const config = data.config as EmailNodeConfig
+  const config = data.config as Structural<EmailNodeConfig>
   const hasTemplate = !!config?.template_id
   const templateName = config?.template_id ? templates.find(tmpl => tmpl.id === config.template_id)?.name : undefined
   const connection = useConnection()
@@ -37,6 +37,7 @@ export const EmailNode: React.FC<EmailNodeProps> = ({ data, selected }) => {
       <BaseNode
         type="email"
         label={t`Email`}
+        description={getNodeDescription(data.config)}
         icon={<Mail size={16} color={selected ? undefined : nodeTypeColors.email} />}
         selected={selected}
         isOrphan={data.isOrphan}

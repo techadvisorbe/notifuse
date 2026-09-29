@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"testing"
+	"time"
 
 	"github.com/Notifuse/notifuse/internal/domain"
 
@@ -17,6 +19,7 @@ import (
 	"github.com/golang/mock/gomock"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // Test setup helper
@@ -303,6 +306,26 @@ func TestSegmentHandler_HandleGet(t *testing.T) {
 			expectedStatus: http.StatusNotFound,
 		},
 		{
+			// The shape the service actually returns. SegmentService.GetSegment
+			// wraps the repository's typed error in "failed to get segment: %w",
+			// and a bare type assertion does not see through a wrap — so this
+			// handler answered 500 for every missing segment while the case
+			// above went on passing.
+			name:   "Segment Not Found, wrapped the way the service wraps it",
+			method: http.MethodGet,
+			queryParams: url.Values{
+				"workspace_id": []string{"workspace123"},
+				"id":           []string{"nonexistent"},
+			},
+			setupMock: func(m *mocks.MockSegmentService) {
+				m.EXPECT().GetSegment(gomock.Any(), gomock.Any()).Return(
+					nil,
+					fmt.Errorf("failed to get segment: %w", &domain.ErrSegmentNotFound{Message: "segment not found"}),
+				)
+			},
+			expectedStatus: http.StatusNotFound,
+		},
+		{
 			name:   "Service Error",
 			method: http.MethodGet,
 			queryParams: url.Values{
@@ -560,6 +583,38 @@ func TestSegmentHandler_HandleUpdate(t *testing.T) {
 			expectedStatus: http.StatusNotFound,
 		},
 		{
+			// The shape the service actually returns: UpdateSegment loads the row
+			// first and wraps the repository's typed error in "failed to get
+			// segment: %w". A bare type assertion sees nothing through that wrap,
+			// so editing a segment someone else had deleted answered 500 while the
+			// unwrapped case above went on passing.
+			name:   "Update Segment Not Found, wrapped the way the service wraps it",
+			method: http.MethodPost,
+			requestBody: &domain.UpdateSegmentRequest{
+				WorkspaceID: "workspace123",
+				ID:          "nonexistent",
+				Name:        "Updated Segment",
+				Color:       "#33FF57",
+				Timezone:    "UTC",
+				Tree: &domain.TreeNode{
+					Kind: "leaf",
+					Leaf: &domain.TreeNodeLeaf{
+						Source: "contacts",
+						Contact: &domain.ContactCondition{
+							Filters: []*domain.DimensionFilter{},
+						},
+					},
+				},
+			},
+			setupMock: func(m *mocks.MockSegmentService) {
+				m.EXPECT().UpdateSegment(gomock.Any(), gomock.Any()).Return(
+					nil,
+					fmt.Errorf("failed to get segment: %w", &domain.ErrSegmentNotFound{Message: "segment not found"}),
+				)
+			},
+			expectedStatus: http.StatusNotFound,
+		},
+		{
 			name:   "Update Segment Service Error",
 			method: http.MethodPost,
 			requestBody: &domain.UpdateSegmentRequest{
@@ -671,6 +726,23 @@ func TestSegmentHandler_HandleDelete(t *testing.T) {
 			expectedStatus: http.StatusNotFound,
 		},
 		{
+			// "failed to delete segment: %w" is what the service returns, and a
+			// type assertion does not see through it — so deleting a segment twice,
+			// which the console lets two open tabs do, answered 500.
+			name:   "Delete Segment Not Found, wrapped the way the service wraps it",
+			method: http.MethodPost,
+			requestBody: &domain.DeleteSegmentRequest{
+				WorkspaceID: "workspace123",
+				ID:          "nonexistent",
+			},
+			setupMock: func(m *mocks.MockSegmentService) {
+				m.EXPECT().DeleteSegment(gomock.Any(), gomock.Any()).Return(
+					fmt.Errorf("failed to delete segment: %w", &domain.ErrSegmentNotFound{Message: "segment not found"}),
+				)
+			},
+			expectedStatus: http.StatusNotFound,
+		},
+		{
 			name:   "Delete Segment Service Error",
 			method: http.MethodPost,
 			requestBody: &domain.DeleteSegmentRequest{
@@ -759,6 +831,24 @@ func TestSegmentHandler_HandleRebuild(t *testing.T) {
 			setupMock: func(m *mocks.MockSegmentService) {
 				m.EXPECT().RebuildSegment(gomock.Any(), "workspace123", "nonexistent").Return(
 					&domain.ErrSegmentNotFound{Message: "segment not found"},
+				)
+			},
+			expectedStatus: http.StatusNotFound,
+		},
+		{
+			// RebuildSegment loads the row first and wraps in "failed to get
+			// segment: %w", the same shape handleGet was fixed for. Nothing about
+			// the wrap is specific to one endpoint, which is why the mapping now
+			// lives in writeServiceError instead of in each handler.
+			name:   "Rebuild Segment Not Found, wrapped the way the service wraps it",
+			method: http.MethodPost,
+			requestBody: map[string]string{
+				"workspace_id": "workspace123",
+				"segment_id":   "nonexistent",
+			},
+			setupMock: func(m *mocks.MockSegmentService) {
+				m.EXPECT().RebuildSegment(gomock.Any(), "workspace123", "nonexistent").Return(
+					fmt.Errorf("failed to get segment: %w", &domain.ErrSegmentNotFound{Message: "segment not found"}),
 				)
 			},
 			expectedStatus: http.StatusNotFound,
@@ -1109,4 +1199,313 @@ func TestSegmentHandler_HandleGetContacts(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestSegmentHandler_PermissionDenied pins the 403 on every segment endpoint. The
+// service wraps its denial the way the authenticate step above the gate does, so a
+// bare type assertion would degrade it into an opaque 500.
+func TestSegmentHandler_PermissionDenied(t *testing.T) {
+	denial := func(resource domain.PermissionResource, permission domain.PermissionType) error {
+		return fmt.Errorf("failed to authenticate user: %w",
+			domain.NewPermissionError(resource, permission, "Insufficient permissions"))
+	}
+
+	testCases := []struct {
+		name       string
+		resource   domain.PermissionResource
+		permission domain.PermissionType
+		request    func() *http.Request
+		expect     func(*mocks.MockSegmentService, error)
+		handle     func(*SegmentHandler, http.ResponseWriter, *http.Request)
+	}{
+		{
+			name:       "list",
+			resource:   domain.PermissionResourceSegments,
+			permission: domain.PermissionTypeRead,
+			request: func() *http.Request {
+				return httptest.NewRequest(http.MethodGet, "/api/segments.list?workspace_id=workspace1", nil)
+			},
+			expect: func(s *mocks.MockSegmentService, err error) {
+				s.EXPECT().ListSegments(gomock.Any(), gomock.Any()).Return(nil, err)
+			},
+			handle: func(h *SegmentHandler, w http.ResponseWriter, r *http.Request) { h.handleList(w, r) },
+		},
+		{
+			name:       "get",
+			resource:   domain.PermissionResourceSegments,
+			permission: domain.PermissionTypeRead,
+			request: func() *http.Request {
+				return httptest.NewRequest(http.MethodGet, "/api/segments.get?workspace_id=workspace1&id=segment1", nil)
+			},
+			expect: func(s *mocks.MockSegmentService, err error) {
+				s.EXPECT().GetSegment(gomock.Any(), gomock.Any()).Return(nil, err)
+			},
+			handle: func(h *SegmentHandler, w http.ResponseWriter, r *http.Request) { h.handleGet(w, r) },
+		},
+		{
+			name:       "create",
+			resource:   domain.PermissionResourceSegments,
+			permission: domain.PermissionTypeWrite,
+			request: func() *http.Request {
+				body, _ := json.Marshal(map[string]interface{}{"workspace_id": "workspace1", "id": "segment1"})
+				return httptest.NewRequest(http.MethodPost, "/api/segments.create", bytes.NewReader(body))
+			},
+			expect: func(s *mocks.MockSegmentService, err error) {
+				s.EXPECT().CreateSegment(gomock.Any(), gomock.Any()).Return(nil, err)
+			},
+			handle: func(h *SegmentHandler, w http.ResponseWriter, r *http.Request) { h.handleCreate(w, r) },
+		},
+		{
+			name:       "update",
+			resource:   domain.PermissionResourceSegments,
+			permission: domain.PermissionTypeWrite,
+			request: func() *http.Request {
+				body, _ := json.Marshal(map[string]interface{}{"workspace_id": "workspace1", "id": "segment1"})
+				return httptest.NewRequest(http.MethodPost, "/api/segments.update", bytes.NewReader(body))
+			},
+			expect: func(s *mocks.MockSegmentService, err error) {
+				s.EXPECT().UpdateSegment(gomock.Any(), gomock.Any()).Return(nil, err)
+			},
+			handle: func(h *SegmentHandler, w http.ResponseWriter, r *http.Request) { h.handleUpdate(w, r) },
+		},
+		{
+			name:       "delete",
+			resource:   domain.PermissionResourceSegments,
+			permission: domain.PermissionTypeWrite,
+			request: func() *http.Request {
+				body, _ := json.Marshal(map[string]interface{}{"workspace_id": "workspace1", "id": "segment1"})
+				return httptest.NewRequest(http.MethodPost, "/api/segments.delete", bytes.NewReader(body))
+			},
+			expect: func(s *mocks.MockSegmentService, err error) {
+				s.EXPECT().DeleteSegment(gomock.Any(), gomock.Any()).Return(err)
+			},
+			handle: func(h *SegmentHandler, w http.ResponseWriter, r *http.Request) { h.handleDelete(w, r) },
+		},
+		{
+			name:       "rebuild",
+			resource:   domain.PermissionResourceSegments,
+			permission: domain.PermissionTypeWrite,
+			request: func() *http.Request {
+				body, _ := json.Marshal(map[string]interface{}{"workspace_id": "workspace1", "segment_id": "segment1"})
+				return httptest.NewRequest(http.MethodPost, "/api/segments.rebuild", bytes.NewReader(body))
+			},
+			expect: func(s *mocks.MockSegmentService, err error) {
+				s.EXPECT().RebuildSegment(gomock.Any(), "workspace1", "segment1").Return(err)
+			},
+			handle: func(h *SegmentHandler, w http.ResponseWriter, r *http.Request) { h.handleRebuild(w, r) },
+		},
+		{
+			// preview and contacts are denied on contacts:read, not on segments.
+			name:       "preview",
+			resource:   domain.PermissionResourceContacts,
+			permission: domain.PermissionTypeRead,
+			request: func() *http.Request {
+				body, _ := json.Marshal(map[string]interface{}{
+					"workspace_id": "workspace1",
+					"tree":         createTestSegment().Tree,
+				})
+				return httptest.NewRequest(http.MethodPost, "/api/segments.preview", bytes.NewReader(body))
+			},
+			expect: func(s *mocks.MockSegmentService, err error) {
+				s.EXPECT().PreviewSegment(gomock.Any(), "workspace1", gomock.Any(), gomock.Any()).Return(nil, err)
+			},
+			handle: func(h *SegmentHandler, w http.ResponseWriter, r *http.Request) { h.handlePreview(w, r) },
+		},
+		{
+			name:       "contacts",
+			resource:   domain.PermissionResourceContacts,
+			permission: domain.PermissionTypeRead,
+			request: func() *http.Request {
+				return httptest.NewRequest(http.MethodGet, "/api/segments.contacts?workspace_id=workspace1&segment_id=segment1", nil)
+			},
+			expect: func(s *mocks.MockSegmentService, err error) {
+				s.EXPECT().GetSegmentContacts(gomock.Any(), "workspace1", "segment1", gomock.Any(), gomock.Any()).Return(nil, err)
+			},
+			handle: func(h *SegmentHandler, w http.ResponseWriter, r *http.Request) { h.handleGetContacts(w, r) },
+		},
+		{
+			// The expanded shape reads more contact data, so it must not be a way
+			// around the denial the email-only shape answers with.
+			name:       "contacts expanded",
+			resource:   domain.PermissionResourceContacts,
+			permission: domain.PermissionTypeRead,
+			request: func() *http.Request {
+				return httptest.NewRequest(http.MethodGet, "/api/segments.contacts?workspace_id=workspace1&segment_id=segment1&expand=contact", nil)
+			},
+			expect: func(s *mocks.MockSegmentService, err error) {
+				s.EXPECT().GetSegmentContactDetails(gomock.Any(), "workspace1", "segment1", gomock.Any(), gomock.Any()).Return(nil, err)
+			},
+			handle: func(h *SegmentHandler, w http.ResponseWriter, r *http.Request) { h.handleGetContacts(w, r) },
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			mockService, _, handler := setupSegmentHandlerTest(t)
+			tc.expect(mockService, denial(tc.resource, tc.permission))
+
+			w := httptest.NewRecorder()
+			tc.handle(handler, w, tc.request())
+
+			assert.Equal(t, http.StatusForbidden, w.Code)
+
+			var body map[string]interface{}
+			assert.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+			assert.Equal(t, "Insufficient permissions", body["error"])
+			assert.Equal(t, string(tc.resource), body["resource"])
+			assert.Equal(t, string(tc.permission), body["permission"])
+		})
+	}
+}
+
+// TestSegmentHandler_GetContactsLegacyShapeUnchanged pins the response the console
+// reads today, byte for byte. The expanded shape is opt-in precisely so this body
+// cannot move: a caller that sends no expand parameter must not start receiving
+// contact objects, extra keys, or a different key order.
+func TestSegmentHandler_GetContactsLegacyShapeUnchanged(t *testing.T) {
+	mockService, _, handler := setupSegmentHandlerTest(t)
+
+	mockService.EXPECT().
+		GetSegmentContacts(gomock.Any(), "workspace123", "segment1", 50, 0).
+		Return([]string{"user1@example.com", "user2@example.com"}, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/segments.contacts?workspace_id=workspace123&segment_id=segment1", nil)
+	rr := httptest.NewRecorder()
+
+	handler.handleGetContacts(rr, req)
+
+	require.Equal(t, http.StatusOK, rr.Code)
+	assert.Equal(t, "application/json", rr.Header().Get("Content-Type"))
+	assert.Equal(t, `{"emails":["user1@example.com","user2@example.com"],"limit":50,"offset":0}`+"\n", rr.Body.String())
+}
+
+func TestSegmentHandler_GetContactsExpanded(t *testing.T) {
+	newest := time.Date(2026, 3, 2, 10, 0, 0, 0, time.UTC)
+	older := time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC)
+
+	details := []*domain.SegmentContactDetail{
+		{Contact: &domain.Contact{Email: "newest@example.com"}, MatchedAt: newest},
+		{Contact: &domain.Contact{Email: "older@example.com"}, MatchedAt: older},
+	}
+
+	t.Run("returns contact objects with their join time, newest first", func(t *testing.T) {
+		mockService, _, handler := setupSegmentHandlerTest(t)
+
+		mockService.EXPECT().
+			GetSegmentContactDetails(gomock.Any(), "workspace123", "segment1", 50, 0).
+			Return(details, nil)
+
+		req := httptest.NewRequest(http.MethodGet, "/api/segments.contacts?workspace_id=workspace123&segment_id=segment1&expand=contact", nil)
+		rr := httptest.NewRecorder()
+
+		handler.handleGetContacts(rr, req)
+
+		require.Equal(t, http.StatusOK, rr.Code)
+
+		var response struct {
+			Contacts []struct {
+				Contact   map[string]interface{} `json:"contact"`
+				MatchedAt time.Time              `json:"matched_at"`
+			} `json:"contacts"`
+			Limit  int `json:"limit"`
+			Offset int `json:"offset"`
+		}
+		require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &response))
+
+		require.Len(t, response.Contacts, 2)
+		assert.Equal(t, "newest@example.com", response.Contacts[0].Contact["email"])
+		assert.Equal(t, newest, response.Contacts[0].MatchedAt)
+		assert.Equal(t, "older@example.com", response.Contacts[1].Contact["email"])
+		assert.Equal(t, older, response.Contacts[1].MatchedAt)
+		assert.Equal(t, 50, response.Limit)
+		assert.Equal(t, 0, response.Offset)
+
+		// The email-only key is gone: a client asking for the expanded shape gets
+		// one representation of the membership, not two to reconcile.
+		var raw map[string]interface{}
+		require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &raw))
+		_, hasEmails := raw["emails"]
+		assert.False(t, hasEmails)
+	})
+
+	t.Run("honours limit and offset", func(t *testing.T) {
+		mockService, _, handler := setupSegmentHandlerTest(t)
+
+		mockService.EXPECT().
+			GetSegmentContactDetails(gomock.Any(), "workspace123", "segment1", 5, 25).
+			Return(details[:1], nil)
+
+		req := httptest.NewRequest(http.MethodGet, "/api/segments.contacts?workspace_id=workspace123&segment_id=segment1&expand=contact&limit=5&offset=25", nil)
+		rr := httptest.NewRecorder()
+
+		handler.handleGetContacts(rr, req)
+
+		require.Equal(t, http.StatusOK, rr.Code)
+
+		var response map[string]interface{}
+		require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &response))
+		assert.Equal(t, float64(5), response["limit"])
+		assert.Equal(t, float64(25), response["offset"])
+	})
+
+	t.Run("segment not found answers 404 JSON", func(t *testing.T) {
+		mockService, _, handler := setupSegmentHandlerTest(t)
+
+		mockService.EXPECT().
+			GetSegmentContactDetails(gomock.Any(), "workspace123", "nonexistent", 50, 0).
+			Return(nil, fmt.Errorf("wrapped: %w", &domain.ErrSegmentNotFound{Message: "segment not found"}))
+
+		req := httptest.NewRequest(http.MethodGet, "/api/segments.contacts?workspace_id=workspace123&segment_id=nonexistent&expand=contact", nil)
+		rr := httptest.NewRecorder()
+
+		handler.handleGetContacts(rr, req)
+
+		require.Equal(t, http.StatusNotFound, rr.Code)
+		assert.Equal(t, "application/json", rr.Header().Get("Content-Type"))
+
+		var body map[string]interface{}
+		require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &body))
+		assert.Equal(t, "Segment not found", body["error"])
+	})
+
+	t.Run("service failure answers 500 JSON", func(t *testing.T) {
+		mockService, _, handler := setupSegmentHandlerTest(t)
+
+		mockService.EXPECT().
+			GetSegmentContactDetails(gomock.Any(), "workspace123", "segment1", 50, 0).
+			Return(nil, errors.New("service error"))
+
+		req := httptest.NewRequest(http.MethodGet, "/api/segments.contacts?workspace_id=workspace123&segment_id=segment1&expand=contact", nil)
+		rr := httptest.NewRecorder()
+
+		handler.handleGetContacts(rr, req)
+
+		require.Equal(t, http.StatusInternalServerError, rr.Code)
+		assert.Equal(t, "application/json", rr.Header().Get("Content-Type"))
+
+		var body map[string]interface{}
+		require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &body))
+		assert.NotEmpty(t, body["error"])
+	})
+
+	t.Run("unknown expand value is rejected rather than silently ignored", func(t *testing.T) {
+		mockService, _, handler := setupSegmentHandlerTest(t)
+
+		// No service call at all: a typo must not quietly fall back to the
+		// email-only shape the caller did not ask for.
+		mockService.EXPECT().GetSegmentContacts(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Times(0)
+		mockService.EXPECT().GetSegmentContactDetails(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Times(0)
+
+		req := httptest.NewRequest(http.MethodGet, "/api/segments.contacts?workspace_id=workspace123&segment_id=segment1&expand=contacts", nil)
+		rr := httptest.NewRecorder()
+
+		handler.handleGetContacts(rr, req)
+
+		require.Equal(t, http.StatusBadRequest, rr.Code)
+		assert.Equal(t, "application/json", rr.Header().Get("Content-Type"))
+
+		var body map[string]interface{}
+		require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &body))
+		assert.Contains(t, body["error"], "expand")
+	})
 }

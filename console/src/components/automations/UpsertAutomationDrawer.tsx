@@ -63,8 +63,10 @@ function DrawerContent({ onCloseDrawer }: { onCloseDrawer: () => void }) {
   // on the workspace having at least one such integration. For SES this is also region-aware:
   // inbound only works in receiving-capable regions, so a sending-only-region SES integration
   // does not enable the toggle (it would never fire).
-  const hasInboundIntegration = (workspace?.integrations || []).some((i) =>
-    supportsInboundReplies(i.email_provider)
+  // Integration.email_provider is optional on the client type and supportsInboundReplies
+  // dereferences it on its first line, so it has to be checked for before it is inspected.
+  const hasInboundIntegration = (workspace?.integrations || []).some(
+    (i) => !!i.email_provider && supportsInboundReplies(i.email_provider)
   )
 
   const { modal } = App.useApp()
@@ -289,11 +291,16 @@ export function UpsertAutomationDrawer({
 
       <Drawer
         placement="right"
-        width="100%"
+        size="100%"
         onClose={handleClose}
         open={isOpen}
-        destroyOnClose
+        destroyOnHidden
         closable={false}
+        // The condition editors inside the canvas are drawers of their own, and rc-drawer
+        // pushes a parent aside when a child opens — which would slide this full-screen
+        // editor 180px off. The transform is applied by the parent, so this is the only
+        // place it can be switched off; setting push on the child does nothing.
+        push={false}
         styles={{
           body: { padding: 0, display: 'flex', flexDirection: 'column', height: '100%' }
         }}

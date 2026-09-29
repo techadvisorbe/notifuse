@@ -11,10 +11,6 @@ import (
 	"github.com/Notifuse/notifuse/pkg/logger"
 	"github.com/Notifuse/notifuse/pkg/notifuse_mjml"
 	"github.com/Notifuse/notifuse/pkg/tracing"
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/credentials"
-	"github.com/aws/aws-sdk-go/aws/session"
-	"github.com/aws/aws-sdk-go/service/ses"
 	"github.com/google/uuid"
 	"go.opencensus.io/trace"
 )
@@ -88,25 +84,44 @@ func NewEmailService(
 	}
 }
 
-// CreateSESClient creates a new SES client with the provided credentials
-func CreateSESClient(region, accessKey, secretKey string) domain.SESClient {
-	sess, _ := session.NewSession(&aws.Config{
-		Region:      aws.String(region),
-		Credentials: credentials.NewStaticCredentials(accessKey, secretKey, ""),
-	})
-	return ses.New(sess)
-}
-
 // TestEmailProvider sends a test email to verify the provider configuration works
-func (s *EmailService) TestEmailProvider(ctx context.Context, workspaceID string, provider domain.EmailProvider, to string) error {
+func (s *EmailService) TestEmailProvider(ctx context.Context, workspaceID string, integrationID string, provider domain.EmailProvider, to string) error {
 	ctx, span := tracing.StartServiceSpan(ctx, "EmailService", "TestEmailProvider")
 	defer tracing.EndSpan(span, nil)
 
 	// Authenticate user
-	ctx, _, _, err := s.authService.AuthenticateUserForWorkspace(ctx, workspaceID)
+	ctx, _, userWorkspace, err := s.authService.AuthenticateUserForWorkspace(ctx, workspaceID)
 	if err != nil {
 		tracing.MarkSpanError(ctx, err)
 		return err
+	}
+
+	// This sends a real email through the workspace's stored provider credentials,
+	// so it is a send and gated like one.
+	if !userWorkspace.HasPermission(domain.PermissionResourceTransactional, domain.PermissionTypeWrite) {
+		return domain.NewPermissionError(
+			domain.PermissionResourceTransactional,
+			domain.PermissionTypeWrite,
+			"Insufficient permissions: write access to transactional required",
+		)
+	}
+
+	// Fill in credentials the client could not send. Workspaces do not serve
+	// decrypted credentials, so a client testing a SAVED integration posts blanks
+	// — and a test that authenticates with an empty key fails against
+	// configuration that works, which accuses the wrong thing.
+	//
+	// Skipped when no integration is named: the provider is not saved yet, so the
+	// client still holds whatever it typed and there is nothing to fill from.
+	if integrationID != "" {
+		if workspace, wsErr := s.workspaceRepo.GetByID(ctx, workspaceID); wsErr == nil && workspace != nil {
+			if stored := workspace.GetIntegrationByID(integrationID); stored != nil {
+				hydrateEmailProviderCredentials(&provider, &stored.EmailProvider)
+			}
+		}
+		// A lookup failure is deliberately not fatal: the test then runs with
+		// whatever the client sent and fails on its own terms, which is a clearer
+		// report than an error about loading a workspace.
 	}
 
 	// Validate the provider has the required fields
@@ -235,8 +250,16 @@ func (s *EmailService) VisitLink(ctx context.Context, messageID string, workspac
 // against the request host identifies that send-time endpoint without a
 // workspace lookup on the hot click path, and stays correct when the
 // workspace endpoint is later reconfigured.
+//
+// It also strips the web analytics identity token from the URLs it does keep.
+// A recorded URL becomes a JSONB *key* in clicked_links and per-link reporting
+// aggregates those keys across a broadcast, but the token is minted per
+// recipient over a fresh random nonce: left in place it would turn one row per
+// link into one row per recipient, and persist a bearer identity credential in
+// the workspace database — the same two hazards the request-host check avoids
+// for the unsubscribe links.
 func sanitizeClickedURL(clickedURL string, requestHost string) string {
-	if clickedURL == "" || len(clickedURL) > maxRecordedClickedURLLength {
+	if clickedURL == "" {
 		return ""
 	}
 
@@ -249,7 +272,70 @@ func sanitizeClickedURL(clickedURL string, requestHost string) string {
 		return ""
 	}
 
-	return clickedURL
+	// The parameter name has to be the one notifuse_mjml WRITES onto a tracked
+	// link, not a copy of the literal: a second definition drifting from the
+	// first would silently stop matching, and the per-recipient credential the
+	// strip exists to remove would become a clicked_links JSONB key.
+	recorded := stripQueryParam(clickedURL, domain.WebIdentifyQueryParam)
+
+	// The cap is measured on what we are about to persist, not on what arrived:
+	// it exists to bound the clicked_links key, and the token adds ~150
+	// characters that never reach that key. Checking the raw URL first would
+	// drop an otherwise recordable click for the length of a parameter this
+	// function has just removed.
+	if len(recorded) > maxRecordedClickedURLLength {
+		return ""
+	}
+
+	return recorded
+}
+
+// stripQueryParam removes every occurrence of one query parameter from a URL,
+// working on the raw string rather than re-serialising a parsed url.URL. A
+// template link can reach here still carrying an unrendered Liquid placeholder,
+// and url.URL.String() would percent-escape its braces and spaces — recording a
+// link under a key that no longer matches the one the template ships. Raw
+// surgery also keeps parameter order, the fragment, userinfo and the port
+// exactly as they were, and leaves URLs without the parameter byte-identical,
+// so keys recorded before this existed keep aggregating with new ones.
+func stripQueryParam(rawURL string, name string) string {
+	// The query is what sits between the first '?' and the fragment. Anything
+	// after '#' stays untouched: a token there is not what the SDK reads, and
+	// the fragment never reaches the customer's server anyway.
+	head, fragment := rawURL, ""
+	if hash := strings.IndexByte(rawURL, '#'); hash >= 0 {
+		head, fragment = rawURL[:hash], rawURL[hash:]
+	}
+
+	mark := strings.IndexByte(head, '?')
+	if mark < 0 {
+		return rawURL
+	}
+
+	base, query := head[:mark], head[mark+1:]
+	pairs := strings.Split(query, "&")
+	kept := make([]string, 0, len(pairs))
+	for _, pair := range pairs {
+		key := pair
+		if eq := strings.IndexByte(pair, '='); eq >= 0 {
+			key = pair[:eq]
+		}
+		if key == name {
+			continue
+		}
+		kept = append(kept, pair)
+	}
+
+	if len(kept) == len(pairs) {
+		return rawURL
+	}
+	if len(kept) == 0 {
+		// The '?' goes with the last parameter: a link that carried nothing but
+		// the token must record as the bare destination, not as "…/product?".
+		return base + fragment
+	}
+
+	return base + "?" + strings.Join(kept, "&") + fragment
 }
 
 func (s *EmailService) OpenEmail(ctx context.Context, messageID string, workspaceID string) error {
@@ -332,6 +418,71 @@ func (s *EmailService) SendEmailForTemplate(ctx context.Context, request domain.
 	// Resolve the tracking/base endpoint: custom endpoint if set, else the API endpoint.
 	endpoint := workspace.Settings.ResolveEndpoint(s.apiEndpoint)
 
+	// Mint the web analytics identity for THIS recipient, so the rebuild below
+	// can carry it as one more field: what is not listed in that literal is what
+	// gets silently dropped.
+	//
+	// The gate is the feature being on AND at least one declared destination.
+	// The emptiness check is deliberately not delegated: an empty allowlist means
+	// "accept beats from any host" to the tracker, and carrying that reading over
+	// here would append a contact's identity to every link in the email, whoever
+	// it points at. The per-link host match runs later, in TrackLinks, against
+	// these same hosts.
+	//
+	// The third condition is who receives the message. The token names exactly
+	// one contact, every tracked link in the body carries that same token, and
+	// this send delivers the body to To plus every CC and BCC address — which
+	// arrive verbatim from the transactional.send request (and from the SMTP
+	// bridge's own headers, see smtp_bridge_handler.go). So a notification
+	// configured with a CC would hand each of those inboxes a working, week-long
+	// bearer identity for the actual recipient: whoever clicks from there is
+	// recorded as that contact, and with the contact bridge on, their web goals
+	// become that contact's timeline entries, segment recomputations and
+	// automation enrolments. Nothing downstream can tell those clicks apart, so
+	// the only safe reading is that a message with additional recipients cannot
+	// promise it reaches only the contact it identifies. No token at all costs
+	// that send its visit attribution, which is the cheaper failure.
+	singleRecipient := len(request.EmailOptions.CC) == 0 && len(request.EmailOptions.BCC) == 0
+
+	// The last condition is the per-notification opt-out. TrackLinks returns the
+	// HTML untouched on TrackingModeDisabled — no redirect, no UTM and no nf_id —
+	// so a token minted for such a send is a live credential, valid for
+	// domain.WebIdentifyTokenTTL, that no link in the email can ever carry. The
+	// Supabase auth notifications are all configured that way, so without this
+	// term every signup confirmation, magic link and recovery mail on a workspace
+	// running web analytics mints one and throws it away.
+	//
+	// Only the explicit opt-out counts here: an absent mode and "inherit" are the
+	// same state, and EnableTracking being false is not one — a workspace can run
+	// web analytics with email click tracking off and still need the recipient
+	// identified on landing, which is why TrackLinks treats an identity token as
+	// its own reason to rewrite the links.
+	trackingOptedOut := request.TrackingSettings.TrackingMode == notifuse_mjml.TrackingModeDisabled
+
+	var identifyToken string
+	var identifyAllowedHosts []string
+	if wa := workspace.Settings.WebAnalytics; singleRecipient && !trackingOptedOut && wa.CanIdentifyFromEmailLinks() {
+		token, err := domain.BuildWebIdentifyToken(
+			request.Contact.Email,
+			workspace.Settings.SecretKey,
+			domain.WebIdentifyTokenTTL,
+			time.Now().UTC(),
+		)
+		if err != nil {
+			// Identity is an analytics enrichment on top of the send; the send is
+			// the legitimate work. A token that cannot be built costs the visit its
+			// attribution, never the email.
+			s.logger.WithFields(map[string]interface{}{
+				"error":      err.Error(),
+				"workspace":  request.WorkspaceID,
+				"message_id": request.MessageID,
+			}).Error("Failed to mint the web analytics identity token, sending without it")
+		} else {
+			identifyToken = token
+			identifyAllowedHosts = wa.AllowedDomains
+		}
+	}
+
 	trackingSettings := notifuse_mjml.TrackingSettings{
 		Endpoint:       endpoint,
 		EnableTracking: request.TrackingSettings.EnableTracking,
@@ -347,6 +498,10 @@ func (s *EmailService) SendEmailForTemplate(ctx context.Context, request domain.
 		UTMTerm:      request.TrackingSettings.UTMTerm,
 		WorkspaceID:  request.WorkspaceID,
 		MessageID:    request.MessageID,
+		// Request-scoped, and both json:"-": the credential reaches the compiler
+		// without ever reaching a stored tracking_settings row.
+		IdentifyToken:        identifyToken,
+		IdentifyAllowedHosts: identifyAllowedHosts,
 	}
 
 	compileTemplateRequest := domain.CompileTemplateRequest{
@@ -509,14 +664,19 @@ func (s *EmailService) SendEmailForTemplate(ctx context.Context, request domain.
 	err = s.SendEmail(ctx, providerRequest, false)
 
 	if err != nil {
-		// Update message history with error status
-		messageHistory.FailedAt = &now
-		messageHistory.UpdatedAt = now
+		// Record the failure with a targeted status write, not a whole-row update.
+		// Create() encrypted message_data on the way in and left this struct
+		// holding the plaintext template data, so writing the row back from it
+		// would store the blob in clear — and would restore every other column
+		// from a copy taken before the send. The queue worker's upsert leaves the
+		// same columns alone on a retry for the same reason.
 		errorMsg := err.Error()
-		messageHistory.StatusInfo = &errorMsg
-
-		// Attempt to update the message history record
-		updateErr := s.messageRepo.Update(ctx, request.WorkspaceID, messageHistory)
+		updateErr := s.messageRepo.SetStatusesIfNotSet(ctx, request.WorkspaceID, []domain.MessageEventUpdate{{
+			ID:         request.MessageID,
+			Event:      domain.MessageEventFailed,
+			Timestamp:  now,
+			StatusInfo: &errorMsg,
+		}})
 		if updateErr != nil {
 			s.logger.WithFields(map[string]interface{}{
 				"error":      updateErr.Error(),

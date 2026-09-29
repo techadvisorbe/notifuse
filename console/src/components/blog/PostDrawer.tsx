@@ -40,8 +40,11 @@ import { jsonToHtml, extractTextContent } from './utils'
 import type { Workspace } from '../../services/api/types'
 import { BlogAIAssistant } from './BlogAIAssistant'
 
-// TiptapNode interface matching the structure expected by utils
-interface TiptapNode {
+// TiptapNode shape matching the structure expected by utils.
+// Declared as a type alias rather than an interface on purpose: the editor and the AI
+// assistant both exchange documents as `Record<string, unknown>`, and only a type
+// alias carries the implicit index signature that makes the two interchangeable.
+type TiptapNode = {
   type: string
   text?: string
   content?: TiptapNode[]
@@ -52,9 +55,17 @@ interface TiptapNode {
   attrs?: Record<string, unknown>
 }
 
+// Shallow check: a Tiptap document is identified by its string `type`, which is what
+// every consumer here branches on.
+function isTiptapNode(value: unknown): value is TiptapNode {
+  return typeof value === 'object' && value !== null && 'type' in value && typeof value.type === 'string'
+}
+
 const { TextArea } = Input
 
-interface PostFormValues {
+// Type alias rather than an interface: antd hands these values to helpers typed as
+// `Record<string, unknown>`, which only a type alias satisfies.
+type PostFormValues = {
   title: string
   slug: string
   category_id: string
@@ -568,9 +579,9 @@ export function PostDrawer({ open, onClose, post, workspace, initialCategoryId }
 
   // Handler for AI assistant content updates
   const handleAIUpdateContent = (json: Record<string, unknown>) => {
-    if (editorRef.current && json.type === 'doc') {
+    if (editorRef.current && isTiptapNode(json) && json.type === 'doc') {
       editorRef.current.setContent(json)
-      setBlogContent(json as TiptapNode)
+      setBlogContent(json)
       setFormTouched(true)
     }
   }
@@ -642,11 +653,11 @@ export function PostDrawer({ open, onClose, post, workspace, initialCategoryId }
     <>
     <Drawer
       title={isEditMode ? t`Edit Post` : t`Create New Post`}
-      width="100%"
+      size="100%"
       onClose={handleClose}
       open={open}
       keyboard={false}
-      maskClosable={false}
+      mask={{ closable: false }}
       className={'drawer-no-transition drawer-body-no-padding'}
       extra={
         <div className="text-right">
@@ -799,7 +810,7 @@ export function PostDrawer({ open, onClose, post, workspace, initialCategoryId }
 
                 {templateLoading || (post && !blogContent) ? (
                   <div className="flex items-center justify-center h-full">
-                    <Space direction="vertical" align="center">
+                    <Space orientation="vertical" align="center">
                       <div>{t`Loading template...`}</div>
                     </Space>
                   </div>

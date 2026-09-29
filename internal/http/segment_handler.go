@@ -55,6 +55,9 @@ func (h *SegmentHandler) handleList(w http.ResponseWriter, r *http.Request) {
 	segments, err := h.service.ListSegments(r.Context(), &req)
 	if err != nil {
 		h.logger.WithField("error", err.Error()).Error("Failed to get segments")
+		if writeServiceError(w, err, "Failed to get segments") {
+			return
+		}
 		WriteJSONError(w, "Failed to get segments", http.StatusInternalServerError)
 		return
 	}
@@ -78,8 +81,10 @@ func (h *SegmentHandler) handleGet(w http.ResponseWriter, r *http.Request) {
 
 	segment, err := h.service.GetSegment(r.Context(), &req)
 	if err != nil {
-		if _, ok := err.(*domain.ErrSegmentNotFound); ok {
-			WriteJSONError(w, "Segment not found", http.StatusNotFound)
+		// Mapped before logging, not after: a missing segment and a denial are the
+		// caller's answer, not a fault of ours, and logging them at error level
+		// buries the failures that are.
+		if writeServiceError(w, err, "Failed to get segment") {
 			return
 		}
 		h.logger.WithField("error", err.Error()).Error("Failed to get segment")
@@ -108,6 +113,9 @@ func (h *SegmentHandler) handleCreate(w http.ResponseWriter, r *http.Request) {
 	segment, err := h.service.CreateSegment(r.Context(), &req)
 	if err != nil {
 		h.logger.WithField("error", err.Error()).Error("Failed to create segment")
+		if writeServiceError(w, err, "Failed to create segment") {
+			return
+		}
 		WriteJSONError(w, "Failed to create segment", http.StatusInternalServerError)
 		return
 	}
@@ -132,8 +140,7 @@ func (h *SegmentHandler) handleUpdate(w http.ResponseWriter, r *http.Request) {
 
 	segment, err := h.service.UpdateSegment(r.Context(), &req)
 	if err != nil {
-		if _, ok := err.(*domain.ErrSegmentNotFound); ok {
-			WriteJSONError(w, "Segment not found", http.StatusNotFound)
+		if writeServiceError(w, err, "Failed to update segment") {
 			return
 		}
 		h.logger.WithField("error", err.Error()).Error("Failed to update segment")
@@ -160,8 +167,7 @@ func (h *SegmentHandler) handleDelete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.service.DeleteSegment(r.Context(), &req); err != nil {
-		if _, ok := err.(*domain.ErrSegmentNotFound); ok {
-			WriteJSONError(w, "Segment not found", http.StatusNotFound)
+		if writeServiceError(w, err, "Failed to delete segment") {
 			return
 		}
 		h.logger.WithField("error", err.Error()).Error("Failed to delete segment")
@@ -202,8 +208,7 @@ func (h *SegmentHandler) handleRebuild(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.service.RebuildSegment(r.Context(), req.WorkspaceID, req.SegmentID); err != nil {
-		if _, ok := err.(*domain.ErrSegmentNotFound); ok {
-			WriteJSONError(w, "Segment not found", http.StatusNotFound)
+		if writeServiceError(w, err, "Failed to rebuild segment") {
 			return
 		}
 		h.logger.WithField("error", err.Error()).Error("Failed to rebuild segment")
@@ -253,6 +258,9 @@ func (h *SegmentHandler) handlePreview(w http.ResponseWriter, r *http.Request) {
 	response, err := h.service.PreviewSegment(r.Context(), req.WorkspaceID, req.Tree, req.Limit)
 	if err != nil {
 		h.logger.WithField("error", err.Error()).Error("Failed to preview segment")
+		if writeServiceError(w, err, "Failed to preview segment") {
+			return
+		}
 		WriteJSONError(w, "Failed to preview segment", http.StatusInternalServerError)
 		return
 	}
@@ -292,20 +300,46 @@ func (h *SegmentHandler) handleGetContacts(w http.ResponseWriter, r *http.Reques
 		}
 	}
 
-	emails, err := h.service.GetSegmentContacts(r.Context(), workspaceID, segmentID, limit, offset)
-	if err != nil {
-		if _, ok := err.(*domain.ErrSegmentNotFound); ok {
-			WriteJSONError(w, "Segment not found", http.StatusNotFound)
+	// expand is opt-in: absent, the response stays the bare email list every
+	// existing caller reads. An unrecognized value is rejected rather than ignored,
+	// so a typo cannot silently hand back the smaller shape.
+	switch expand := r.URL.Query().Get("expand"); expand {
+	case "":
+		emails, err := h.service.GetSegmentContacts(r.Context(), workspaceID, segmentID, limit, offset)
+		if err != nil {
+			h.writeGetContactsError(w, err)
 			return
 		}
-		h.logger.WithField("error", err.Error()).Error("Failed to get segment contacts")
-		WriteJSONError(w, "Failed to get segment contacts", http.StatusInternalServerError)
+
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"emails": emails,
+			"limit":  limit,
+			"offset": offset,
+		})
+	case "contact":
+		contacts, err := h.service.GetSegmentContactDetails(r.Context(), workspaceID, segmentID, limit, offset)
+		if err != nil {
+			h.writeGetContactsError(w, err)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"contacts": contacts,
+			"limit":    limit,
+			"offset":   offset,
+		})
+	default:
+		WriteJSONError(w, "invalid expand value, supported: contact", http.StatusBadRequest)
+	}
+}
+
+// writeGetContactsError maps a segment-contacts failure to its response, shared by
+// both response shapes so a denial answers 403 and a missing segment 404 whichever
+// one the caller asked for.
+func (h *SegmentHandler) writeGetContactsError(w http.ResponseWriter, err error) {
+	if writeServiceError(w, err, "Failed to get segment contacts") {
 		return
 	}
-
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"emails": emails,
-		"limit":  limit,
-		"offset": offset,
-	})
+	h.logger.WithField("error", err.Error()).Error("Failed to get segment contacts")
+	WriteJSONError(w, "Failed to get segment contacts", http.StatusInternalServerError)
 }

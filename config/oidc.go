@@ -10,6 +10,13 @@ import (
 // same env-wins-over-DB precedence used for SMTP (see resolveOIDCConfig). The
 // ClientSecret is held in memory decrypted but is encrypted at rest in the DB and
 // must never be exposed to any client-facing path (serveConfigJS / settings GET).
+//
+// There is deliberately no "enforce SSO" / "disable magic code" switch here. SSO is
+// additive: magic-code login always remains available, which is what keeps an
+// unreachable IdP or a misconfigured issuer from locking every operator out of the
+// instance — including out of the settings page where they would fix it. Anyone
+// adding enforcement has to solve that first: an escape hatch that does not itself
+// depend on the IdP, such as ROOT_EMAIL keeping password access unconditionally.
 type OIDCConfig struct {
 	Enabled         bool
 	IssuerURL       string
@@ -82,6 +89,10 @@ func (c OIDCConfig) Validate() error {
 	if c.RedirectURI == "" {
 		return fmt.Errorf("OIDC redirect URI could not be derived (set OIDC_REDIRECT_URI or API_ENDPOINT)")
 	}
+	// An empty allowlist means "no domain is allowed", never "all domains" — the
+	// resolver applies it as a positive match. Pairing it with auto-create would
+	// therefore be inert rather than dangerous, but it reads as "let anyone in", so
+	// refuse to boot instead of leaving an operator guessing which way it went.
 	if c.AutoCreateUsers && len(c.AllowedDomains) == 0 {
 		return fmt.Errorf("OIDC_AUTO_CREATE_USERS=true requires a non-empty OIDC_ALLOWED_DOMAINS allowlist")
 	}

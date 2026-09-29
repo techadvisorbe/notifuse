@@ -423,6 +423,55 @@ func TestTemplateHandler_HandleCreate(t *testing.T) {
 	}
 }
 
+// A taken template id must answer 400 and say so. The repository reports it as a typed
+// *domain.ErrTemplateExists rather than as PostgreSQL's English message, which the server
+// translates per lc_messages - matching that text meant a French or Japanese server sent
+// the author a bare 500 with no indication the id was the problem.
+func TestTemplateHandler_HandleCreate_DuplicateID(t *testing.T) {
+	validRequest := domain.CreateTemplateRequest{
+		WorkspaceID: "workspace123",
+		ID:          "template123",
+		Name:        "Test Template",
+		Channel:     "email",
+		Category:    "transactional",
+		Email:       createTestEmailTemplate(),
+	}
+
+	t.Run("taken id answers 400 naming the id", func(t *testing.T) {
+		mockService, _, serverURL, secretKey, cleanup := setupTemplateHandlerTest(t)
+		defer cleanup()
+
+		mockService.EXPECT().CreateTemplate(gomock.Any(), "workspace123", gomock.Any()).
+			Return(fmt.Errorf("failed to create template: %w", &domain.ErrTemplateExists{Message: "template id already exists"}))
+
+		resp := sendRequest(t, http.MethodPost, fmt.Sprintf("%s/api/templates.create", serverURL), createTestToken(secretKey), validRequest)
+		defer func() { _ = resp.Body.Close() }()
+
+		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+		var body map[string]string
+		require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+		assert.Equal(t, "Template id already exists", body["error"])
+	})
+
+	// The contrast that gives the test its teeth: anything else is still an outage, so the
+	// author is not told to rename a template when the database was unreachable.
+	t.Run("any other failure stays a 500", func(t *testing.T) {
+		mockService, _, serverURL, secretKey, cleanup := setupTemplateHandlerTest(t)
+		defer cleanup()
+
+		mockService.EXPECT().CreateTemplate(gomock.Any(), "workspace123", gomock.Any()).
+			Return(errors.New("sorry, too many clients already"))
+
+		resp := sendRequest(t, http.MethodPost, fmt.Sprintf("%s/api/templates.create", serverURL), createTestToken(secretKey), validRequest)
+		defer func() { _ = resp.Body.Close() }()
+
+		assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
+		var body map[string]string
+		require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+		assert.Equal(t, "Failed to create template", body["error"])
+	})
+}
+
 func TestTemplateHandler_HandleCreate_WithTranslations(t *testing.T) {
 	mockService, _, serverURL, secretKey, cleanup := setupTemplateHandlerTest(t)
 	defer cleanup()
@@ -935,4 +984,170 @@ func TestHandleUpdate_CodeModeTemplate(t *testing.T) {
 	defer func() { _ = resp.Body.Close() }()
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
+}
+
+// TestHandleCreate_MissingVisualEditorTree posts a raw payload whose "email" object omits
+// visual_editor_tree. The body is a map rather than a marshalled domain.CreateTemplateRequest
+// so the request reaches the handler exactly as an external API client would send it; a
+// typed request always carries a tree and cannot reproduce the case.
+func TestHandleCreate_MissingVisualEditorTree(t *testing.T) {
+	mockService, _, serverURL, secretKey, cleanup := setupTemplateHandlerTest(t)
+	defer cleanup()
+
+	payload := map[string]interface{}{
+		"workspace_id": "workspace123",
+		"id":           "test-template",
+		"name":         "Test Template",
+		"category":     "transactional",
+		"channel":      "email",
+		"email": map[string]interface{}{
+			"subject": "Test - {{ nombre }}",
+			"html":    "<p>Hola {{ nombre }}</p>",
+		},
+	}
+
+	// Validation must reject the request before it reaches the service.
+	mockService.EXPECT().CreateTemplate(gomock.Any(), gomock.Any(), gomock.Any()).Times(0)
+
+	apiURL := fmt.Sprintf("%s/api/templates.create", serverURL)
+	resp := sendRequest(t, http.MethodPost, apiURL, createTestToken(secretKey), payload)
+	defer func() { _ = resp.Body.Close() }()
+
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+
+	var body map[string]interface{}
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	assert.Contains(t, body["error"], "visual_editor_tree is required")
+}
+
+// TestHandleUpdate_MissingVisualEditorTree is the templates.update counterpart.
+func TestHandleUpdate_MissingVisualEditorTree(t *testing.T) {
+	mockService, _, serverURL, secretKey, cleanup := setupTemplateHandlerTest(t)
+	defer cleanup()
+
+	payload := map[string]interface{}{
+		"workspace_id": "workspace123",
+		"id":           "test-template",
+		"name":         "Test Template",
+		"category":     "transactional",
+		"channel":      "email",
+		"email": map[string]interface{}{
+			"subject": "Test Subject",
+		},
+	}
+
+	mockService.EXPECT().UpdateTemplate(gomock.Any(), gomock.Any(), gomock.Any()).Times(0)
+
+	apiURL := fmt.Sprintf("%s/api/templates.update", serverURL)
+	resp := sendRequest(t, http.MethodPost, apiURL, createTestToken(secretKey), payload)
+	defer func() { _ = resp.Body.Close() }()
+
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+}
+
+// TestTemplateHandler_HandleUpdate_AbsentAndServerOwnedFields pins the two wire facts the
+// service's preserve logic rests on, using map bodies because a typed request literal cannot
+// express a missing key — which is exactly how this class of bug ships. An omitted
+// "translations" must reach the service as a nil map (its signal to keep what is stored) and an
+// explicit {} must reach it non-nil (the deliberate clear); integration_id is server-owned and
+// must not be settable from the wire whatever a client sends.
+func TestTemplateHandler_HandleUpdate_AbsentAndServerOwnedFields(t *testing.T) {
+	baseBody := func() map[string]interface{} {
+		return map[string]interface{}{
+			"workspace_id": "workspace123",
+			"id":           "tmpl_abc",
+			"name":         "Updated Name",
+			"channel":      "email",
+			"category":     "transactional",
+			"email":        createTestEmailTemplate(),
+		}
+	}
+
+	t.Run("omitted translations arrive as a nil map", func(t *testing.T) {
+		mockService, _, serverURL, secretKey, cleanup := setupTemplateHandlerTest(t)
+		defer cleanup()
+
+		mockService.EXPECT().UpdateTemplate(gomock.Any(), "workspace123", gomock.Any()).
+			DoAndReturn(func(ctx context.Context, wsID string, tmpl *domain.Template) error {
+				assert.Nil(t, tmpl.Translations, "an omitted key must stay distinguishable from an explicit clear")
+				return nil
+			})
+
+		resp := sendRequest(t, http.MethodPost, fmt.Sprintf("%s/api/templates.update", serverURL), createTestToken(secretKey), baseBody())
+		defer func() { _ = resp.Body.Close() }()
+
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+	})
+
+	t.Run("an explicit empty translations object arrives as an empty non-nil map", func(t *testing.T) {
+		mockService, _, serverURL, secretKey, cleanup := setupTemplateHandlerTest(t)
+		defer cleanup()
+
+		body := baseBody()
+		body["translations"] = map[string]interface{}{}
+
+		mockService.EXPECT().UpdateTemplate(gomock.Any(), "workspace123", gomock.Any()).
+			DoAndReturn(func(ctx context.Context, wsID string, tmpl *domain.Template) error {
+				assert.NotNil(t, tmpl.Translations, "an explicit {} is a clear, not an omission")
+				assert.Empty(t, tmpl.Translations)
+				return nil
+			})
+
+		resp := sendRequest(t, http.MethodPost, fmt.Sprintf("%s/api/templates.update", serverURL), createTestToken(secretKey), body)
+		defer func() { _ = resp.Body.Close() }()
+
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+	})
+
+	t.Run("integration_id sent by a client is ignored", func(t *testing.T) {
+		mockService, _, serverURL, secretKey, cleanup := setupTemplateHandlerTest(t)
+		defer cleanup()
+
+		body := baseBody()
+		body["integration_id"] = "client-supplied"
+
+		mockService.EXPECT().UpdateTemplate(gomock.Any(), "workspace123", gomock.Any()).
+			DoAndReturn(func(ctx context.Context, wsID string, tmpl *domain.Template) error {
+				assert.Nil(t, tmpl.IntegrationID, "integration_id is server-owned: a client must not be able to claim a template for an integration")
+				return nil
+			})
+
+		resp := sendRequest(t, http.MethodPost, fmt.Sprintf("%s/api/templates.update", serverURL), createTestToken(secretKey), body)
+		defer func() { _ = resp.Body.Close() }()
+
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+	})
+
+	t.Run("the response reports what was persisted, not what was sent", func(t *testing.T) {
+		mockService, _, serverURL, secretKey, cleanup := setupTemplateHandlerTest(t)
+		defer cleanup()
+
+		// Stands in for the service restoring the fields the request could not carry, so the
+		// client's local copy is not left believing they are gone.
+		mockService.EXPECT().UpdateTemplate(gomock.Any(), "workspace123", gomock.Any()).
+			DoAndReturn(func(ctx context.Context, wsID string, tmpl *domain.Template) error {
+				integrationID := "supabase-int-1"
+				tmpl.IntegrationID = &integrationID
+				tmpl.Translations = map[string]domain.TemplateTranslation{
+					"fr": {Email: &domain.EmailTemplate{SenderID: "sender123", Subject: "Sujet FR"}},
+				}
+				return nil
+			})
+
+		resp := sendRequest(t, http.MethodPost, fmt.Sprintf("%s/api/templates.update", serverURL), createTestToken(secretKey), baseBody())
+		defer func() { _ = resp.Body.Close() }()
+
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+		var response struct {
+			Template struct {
+				IntegrationID *string                               `json:"integration_id"`
+				Translations  map[string]domain.TemplateTranslation `json:"translations"`
+			} `json:"template"`
+		}
+		require.NoError(t, json.NewDecoder(resp.Body).Decode(&response))
+		require.NotNil(t, response.Template.IntegrationID)
+		assert.Equal(t, "supabase-int-1", *response.Template.IntegrationID)
+		require.Contains(t, response.Template.Translations, "fr")
+		assert.Equal(t, "Sujet FR", response.Template.Translations["fr"].Email.Subject)
+	})
 }

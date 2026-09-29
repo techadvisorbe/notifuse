@@ -231,7 +231,7 @@ export function SystemSettingsDrawer() {
       <Drawer
         title={t`System Settings`}
         placement="right"
-        width={900}
+        size={900}
         onClose={() => setOpen(false)}
         open={open}
         extra={
@@ -587,6 +587,28 @@ export function SystemSettingsDrawer() {
                   <Input.Password
                     disabled={isOverridden('oidc_client_secret')}
                     autoComplete="new-password"
+                  />
+                </Form.Item>
+              </Col>
+            </Row>
+            <Row gutter={16}>
+              <Col span={24}>
+                <Form.Item
+                  label={t`Redirect URI`}
+                  name="oidc_redirect_uri"
+                  rules={[{ type: 'url', message: t`Must be a valid https URL` }]}
+                  help={
+                    renderEnvHint('oidc_redirect_uri') || (
+                      <Text type="secondary" style={{ fontSize: 11 }}>
+                        {t`Leave empty to derive it from the API endpoint. Set it when the callback is reached through a proxy or a vanity domain.`}
+                      </Text>
+                    )
+                  }
+                >
+                  <Input
+                    disabled={isOverridden('oidc_redirect_uri')}
+                    placeholder="https://your-domain.com/api/user.oidc.callback"
+                    allowClear
                   />
                 </Form.Item>
               </Col>

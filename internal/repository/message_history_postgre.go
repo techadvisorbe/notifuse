@@ -294,112 +294,6 @@ func (r *MessageHistoryRepository) Upsert(ctx context.Context, workspaceID strin
 	return nil
 }
 
-// Update updates an existing message history record
-func (r *MessageHistoryRepository) Update(ctx context.Context, workspaceID string, message *domain.MessageHistory) error {
-	// Get the workspace database connection
-	workspaceDB, err := r.workspaceRepo.GetConnection(ctx, workspaceID)
-	if err != nil {
-		return fmt.Errorf("failed to get workspace connection: %w", err)
-	}
-
-	// Serialize attachments to JSON for storage
-	var attachmentsJSON interface{}
-	if len(message.Attachments) > 0 {
-		attachmentsJSON = message.Attachments
-	}
-
-	query := `
-		UPDATE message_history SET
-			external_id = $2,
-			contact_email = $3,
-			broadcast_id = $4,
-			automation_id = $5,
-			transactional_notification_id = $6,
-			list_id = $7,
-			template_id = $8,
-			template_version = $9,
-			channel = $10,
-			status_info = LEFT($11, 255),
-			message_data = $12,
-			channel_options = $13,
-			attachments = $14,
-			sent_at = $15,
-			delivered_at = $16,
-			failed_at = $17,
-			opened_at = $18,
-			clicked_at = $19,
-			bounced_at = $20,
-			complained_at = $21,
-			unsubscribed_at = $22,
-			updated_at = $23
-		WHERE id = $1
-	`
-
-	_, err = workspaceDB.ExecContext(
-		ctx,
-		query,
-		message.ID,
-		message.ExternalID,
-		message.ContactEmail,
-		message.BroadcastID,
-		message.AutomationID,
-		message.TransactionalNotificationID,
-		message.ListID,
-		message.TemplateID,
-		message.TemplateVersion,
-		message.Channel,
-		message.StatusInfo,
-		message.MessageData,
-		message.ChannelOptions,
-		attachmentsJSON,
-		message.SentAt,
-		message.DeliveredAt,
-		message.FailedAt,
-		message.OpenedAt,
-		message.ClickedAt,
-		message.BouncedAt,
-		message.ComplainedAt,
-		message.UnsubscribedAt,
-		time.Now().UTC(),
-	)
-
-	if err != nil {
-		return fmt.Errorf("failed to update message history: %w", err)
-	}
-
-	return nil
-}
-
-// Get retrieves a message history by ID
-func (r *MessageHistoryRepository) Get(ctx context.Context, workspaceID string, secretKey string, id string) (*domain.MessageHistory, error) {
-	// Get the workspace database connection
-	workspaceDB, err := r.workspaceRepo.GetConnection(ctx, workspaceID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get workspace connection: %w", err)
-	}
-
-	query := fmt.Sprintf(`SELECT %s FROM message_history WHERE id = $1`, messageHistorySelectFields())
-
-	var message domain.MessageHistory
-	err = scanMessage(workspaceDB.QueryRowContext(ctx, query, id), &message)
-
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("message history with id %s not found", id)
-		}
-		return nil, fmt.Errorf("failed to get message history: %w", err)
-	}
-
-	// Decrypt message data after reading from database
-	decryptedMessageData, err := decryptMessageData(message.MessageData, secretKey)
-	if err != nil {
-		return nil, fmt.Errorf("failed to decrypt message data: %w", err)
-	}
-	message.MessageData = decryptedMessageData
-
-	return &message, nil
-}
-
 // GetByExternalID retrieves a message history by external ID for idempotency checks
 func (r *MessageHistoryRepository) GetByExternalID(ctx context.Context, workspaceID string, secretKey string, externalID string) (*domain.MessageHistory, error) {
 	// Get the workspace database connection
@@ -453,130 +347,6 @@ func (r *MessageHistoryRepository) GetBySMTPMessageID(ctx context.Context, works
 		return nil, fmt.Errorf("failed to get message history by smtp_message_id: %w", err)
 	}
 	return message, nil
-}
-
-// GetByContact retrieves message history for a specific contact
-func (r *MessageHistoryRepository) GetByContact(ctx context.Context, workspaceID string, secretKey string, contactEmail string, limit, offset int) ([]*domain.MessageHistory, int, error) {
-	// Get the workspace database connection
-	workspaceDB, err := r.workspaceRepo.GetConnection(ctx, workspaceID)
-	if err != nil {
-		return nil, 0, fmt.Errorf("failed to get workspace connection: %w", err)
-	}
-
-	// First get total count
-	countQuery := `SELECT COUNT(*) FROM message_history WHERE contact_email = $1`
-	var totalCount int
-	err = workspaceDB.QueryRowContext(ctx, countQuery, contactEmail).Scan(&totalCount)
-	if err != nil {
-		return nil, 0, fmt.Errorf("failed to count message history: %w", err)
-	}
-
-	// Set default limit and offset if not provided
-	if limit <= 0 {
-		limit = 50 // Default limit
-	}
-	if offset < 0 {
-		offset = 0
-	}
-
-	query := fmt.Sprintf(`
-		SELECT %s
-		FROM message_history
-		WHERE contact_email = $1
-		ORDER BY sent_at DESC
-		LIMIT $2 OFFSET $3
-	`, messageHistorySelectFields())
-
-	rows, err := workspaceDB.QueryContext(ctx, query, contactEmail, limit, offset)
-	if err != nil {
-		return nil, 0, fmt.Errorf("failed to query message history: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-
-	var messages []*domain.MessageHistory
-	for rows.Next() {
-		var message domain.MessageHistory
-		if err := scanMessage(rows, &message); err != nil {
-			return nil, 0, fmt.Errorf("failed to scan message history: %w", err)
-		}
-
-		// Decrypt message data after reading from database
-		decryptedMessageData, err := decryptMessageData(message.MessageData, secretKey)
-		if err != nil {
-			return nil, 0, fmt.Errorf("failed to decrypt message data: %w", err)
-		}
-		message.MessageData = decryptedMessageData
-
-		messages = append(messages, &message)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, 0, fmt.Errorf("error iterating message history rows: %w", err)
-	}
-
-	return messages, totalCount, nil
-}
-
-// GetByBroadcast retrieves message history for a specific broadcast
-func (r *MessageHistoryRepository) GetByBroadcast(ctx context.Context, workspaceID string, secretKey string, broadcastID string, limit, offset int) ([]*domain.MessageHistory, int, error) {
-	// Get the workspace database connection
-	workspaceDB, err := r.workspaceRepo.GetConnection(ctx, workspaceID)
-	if err != nil {
-		return nil, 0, fmt.Errorf("failed to get workspace connection: %w", err)
-	}
-
-	// First get total count
-	countQuery := `SELECT COUNT(*) FROM message_history WHERE broadcast_id = $1`
-	var totalCount int
-	err = workspaceDB.QueryRowContext(ctx, countQuery, broadcastID).Scan(&totalCount)
-	if err != nil {
-		return nil, 0, fmt.Errorf("failed to count message history: %w", err)
-	}
-
-	// Set default limit and offset if not provided
-	if limit <= 0 {
-		limit = 50 // Default limit
-	}
-	if offset < 0 {
-		offset = 0
-	}
-
-	query := fmt.Sprintf(`
-		SELECT %s
-		FROM message_history
-		WHERE broadcast_id = $1
-		ORDER BY sent_at DESC
-		LIMIT $2 OFFSET $3
-	`, messageHistorySelectFields())
-
-	rows, err := workspaceDB.QueryContext(ctx, query, broadcastID, limit, offset)
-	if err != nil {
-		return nil, 0, fmt.Errorf("failed to query message history: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-
-	var messages []*domain.MessageHistory
-	for rows.Next() {
-		var message domain.MessageHistory
-		if err := scanMessage(rows, &message); err != nil {
-			return nil, 0, fmt.Errorf("failed to scan message history: %w", err)
-		}
-
-		// Decrypt message data after reading from database
-		decryptedMessageData, err := decryptMessageData(message.MessageData, secretKey)
-		if err != nil {
-			return nil, 0, fmt.Errorf("failed to decrypt message data: %w", err)
-		}
-		message.MessageData = decryptedMessageData
-
-		messages = append(messages, &message)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, 0, fmt.Errorf("error iterating message history rows: %w", err)
-	}
-
-	return messages, totalCount, nil
 }
 
 // SetStatusesIfNotSet updates multiple message statuses in a single batch operation
@@ -933,7 +703,7 @@ func (r *MessageHistoryRepository) ListMessages(ctx context.Context, workspaceID
 			return nil, "", fmt.Errorf("invalid cursor format: expected timestamp~id")
 		}
 
-		cursorTime, err := time.Parse(time.RFC3339, cursorParts[0])
+		cursorTime, err := time.Parse(time.RFC3339Nano, cursorParts[0])
 		if err != nil {
 			// codecov:ignore:start
 			tracing.MarkSpanError(ctx, err)
@@ -1100,7 +870,9 @@ func (r *MessageHistoryRepository) ListMessages(ctx context.Context, workspaceID
 	// Generate the next cursor based on the last item if we have results
 	if len(messages) > 0 && hasMore {
 		lastMessage := messages[len(messages)-1]
-		cursorStr := fmt.Sprintf("%s~%s", lastMessage.CreatedAt.Format(time.RFC3339), lastMessage.ID)
+		// Use RFC3339Nano to preserve sub-second precision and avoid skipping messages
+		// created within the same second (bulk broadcast sends share a created_at second)
+		cursorStr := fmt.Sprintf("%s~%s", lastMessage.CreatedAt.Format(time.RFC3339Nano), lastMessage.ID)
 		nextCursor = base64.StdEncoding.EncodeToString([]byte(cursorStr))
 	}
 
@@ -1369,9 +1141,19 @@ func (r *MessageHistoryRepository) DeleteForEmail(ctx context.Context, workspace
 	}
 
 	// Redact the email address by replacing it with a generic redacted identifier;
-	// clicked_links is cleared too since recorded URLs may carry personal data
+	// clicked_links is cleared too since recorded URLs may carry personal data.
+	//
+	// message_data goes with them, and that one is load-bearing: it holds
+	// data.contact.email plus the address embedded in the notification-center and
+	// unsubscribe URLs, and messages.list DECRYPTS it before returning. Redacting
+	// contact_email alone left the real address in the same row, beside the
+	// "DELETED_EMAIL" label — a row that reads as anonymised and is not.
+	//
+	// Emptied rather than deleted: GetBroadcastStats sums the *_at timestamp
+	// columns on these rows, so dropping them would rewrite every broadcast's
+	// history. '{}' rather than NULL because the column is NOT NULL.
 	redactedEmail := "DELETED_EMAIL"
-	query := `UPDATE message_history SET contact_email = $1, clicked_links = NULL WHERE contact_email = $2`
+	query := `UPDATE message_history SET contact_email = $1, clicked_links = NULL, message_data = '{}'::jsonb WHERE contact_email = $2`
 
 	result, err := workspaceDB.ExecContext(ctx, query, redactedEmail, email)
 	if err != nil {

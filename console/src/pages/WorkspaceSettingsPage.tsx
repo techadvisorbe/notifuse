@@ -10,10 +10,15 @@ import { SMTPBridgeSettings } from '../components/settings/SMTPBridgeSettings'
 import { Integrations } from '../components/settings/Integrations'
 import { CustomFieldsConfiguration } from '../components/settings/CustomFieldsConfiguration'
 import { BlogSettings } from '../components/settings/BlogSettings'
+import { WebAnalyticsSettings } from '../components/settings/WebAnalyticsSettings'
 import { WebhooksSettings } from '../components/settings/WebhooksSettings'
 import { useAuth } from '../contexts/AuthContext'
 import { DeleteWorkspaceSection } from '../components/settings/DeleteWorkspace'
-import { SettingsSidebar, SettingsSection } from '../components/settings/SettingsSidebar'
+import {
+  SettingsSidebar,
+  SETTINGS_SECTIONS,
+  SettingsSection
+} from '../components/settings/SettingsSidebar'
 
 const { Sider, Content } = Layout
 
@@ -28,36 +33,24 @@ export function WorkspaceSettingsPage() {
   const [isOwner, setIsOwner] = useState(false)
   const [canManageCustomFields, setCanManageCustomFields] = useState(false)
   const [canManageBlog, setCanManageBlog] = useState(false)
+  const [canManageWebAnalytics, setCanManageWebAnalytics] = useState(false)
   const { refreshWorkspaces, user, workspaces } = useAuth()
   const navigate = useNavigate()
 
-  // Valid settings sections
-  const validSections: SettingsSection[] = [
-    'team',
-    'integrations',
-    'webhooks',
-    'custom-fields',
-    'smtp-bridge',
-    'general',
-    'blog',
-    'danger-zone'
-  ]
-
   // Get active section from URL or default to 'team'
-  const activeSection: SettingsSection = validSections.includes(section as SettingsSection)
+  const activeSection: SettingsSection = SETTINGS_SECTIONS.includes(section as SettingsSection)
     ? (section as SettingsSection)
     : 'team'
 
   useEffect(() => {
     // Redirect to team section if invalid section is provided
-    if (!validSections.includes(section as SettingsSection)) {
+    if (!SETTINGS_SECTIONS.includes(section as SettingsSection)) {
       navigate({
         to: '/console/workspace/$workspaceId/settings/$section',
         params: { workspaceId, section: 'team' },
         replace: true
       })
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- validSections is static
   }, [section, workspaceId, navigate])
 
   useEffect(() => {
@@ -90,6 +83,13 @@ export function WorkspaceSettingsPage() {
         setCanManageBlog(
           currentUserMember?.role === 'owner' ||
             currentUserMember?.permissions?.blog?.write === true
+        )
+        // Web analytics settings can be managed by owners or members with
+        // web_analytics:write permission (mirrors the backend
+        // HasPermission(web_analytics, write) check).
+        setCanManageWebAnalytics(
+          currentUserMember?.role === 'owner' ||
+            currentUserMember?.permissions?.web_analytics?.write === true
         )
       }
     } catch (error) {
@@ -164,6 +164,14 @@ export function WorkspaceSettingsPage() {
             workspace={workspace}
             onWorkspaceUpdate={handleWorkspaceUpdate}
             canManage={canManageBlog}
+          />
+        )
+      case 'web-analytics':
+        return (
+          <WebAnalyticsSettings
+            workspace={workspace}
+            onWorkspaceUpdate={handleWorkspaceUpdate}
+            canManage={canManageWebAnalytics}
           />
         )
       case 'danger-zone':

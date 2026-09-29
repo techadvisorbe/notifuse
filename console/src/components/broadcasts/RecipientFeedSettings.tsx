@@ -59,7 +59,7 @@ export function RecipientFeedSettings({
         workspace_id: workspaceId,
         broadcast_id: broadcastId,
         contact_email: testEmail || undefined,
-        url: settings.url,
+        url: settings.url ?? '',
         headers: settings.headers || []
       })
     },
@@ -179,7 +179,7 @@ export function RecipientFeedSettings({
                 <>
                   {testResult.error ? (
                     <Alert
-                      message={t`Test Failed`}
+                      title={t`Test Failed`}
                       description={testResult.error}
                       type="error"
                       className="mb-2"

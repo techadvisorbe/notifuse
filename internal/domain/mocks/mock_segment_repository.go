@@ -64,6 +64,20 @@ func (mr *MockSegmentRepositoryMockRecorder) CreateSegment(arg0, arg1, arg2 inte
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateSegment", reflect.TypeOf((*MockSegmentRepository)(nil).CreateSegment), arg0, arg1, arg2)
 }
 
+// DeleteForEmail mocks base method.
+func (m *MockSegmentRepository) DeleteForEmail(arg0 context.Context, arg1, arg2 string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "DeleteForEmail", arg0, arg1, arg2)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// DeleteForEmail indicates an expected call of DeleteForEmail.
+func (mr *MockSegmentRepositoryMockRecorder) DeleteForEmail(arg0, arg1, arg2 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteForEmail", reflect.TypeOf((*MockSegmentRepository)(nil).DeleteForEmail), arg0, arg1, arg2)
+}
+
 // DeleteSegment mocks base method.
 func (m *MockSegmentRepository) DeleteSegment(arg0 context.Context, arg1, arg2 string) error {
 	m.ctrl.T.Helper()
@@ -121,6 +135,21 @@ func (m *MockSegmentRepository) GetSegmentContactCount(arg0 context.Context, arg
 func (mr *MockSegmentRepositoryMockRecorder) GetSegmentContactCount(arg0, arg1, arg2 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetSegmentContactCount", reflect.TypeOf((*MockSegmentRepository)(nil).GetSegmentContactCount), arg0, arg1, arg2)
+}
+
+// GetSegmentContactDetails mocks base method.
+func (m *MockSegmentRepository) GetSegmentContactDetails(arg0 context.Context, arg1, arg2 string, arg3, arg4 int) ([]*domain.SegmentContactDetail, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetSegmentContactDetails", arg0, arg1, arg2, arg3, arg4)
+	ret0, _ := ret[0].([]*domain.SegmentContactDetail)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetSegmentContactDetails indicates an expected call of GetSegmentContactDetails.
+func (mr *MockSegmentRepositoryMockRecorder) GetSegmentContactDetails(arg0, arg1, arg2, arg3, arg4 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetSegmentContactDetails", reflect.TypeOf((*MockSegmentRepository)(nil).GetSegmentContactDetails), arg0, arg1, arg2, arg3, arg4)
 }
 
 // GetSegments mocks base method.

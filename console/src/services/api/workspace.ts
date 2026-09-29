@@ -1,5 +1,6 @@
 import { api } from './client'
 import type { EmailBlock } from '../../components/email_builder/types'
+import type { UserPermissions, StoredPermissions } from './permissions'
 
 // Template Block type
 export interface TemplateBlock {
@@ -49,6 +50,7 @@ export interface WorkspaceSettings {
   custom_field_labels?: Record<string, string>
   blog_enabled?: boolean
   blog_settings?: BlogSettings
+  web_analytics?: import('./web_analytics').WebAnalyticsSettings
   default_language: string
   languages: string[]
 }
@@ -92,6 +94,22 @@ export interface AmazonSES {
   access_key: string
   secret_key?: string
   encrypted_secret_key?: string
+
+  /**
+   * Managed tenant isolation: Notifuse provisions a tenant for this integration with its own
+   * reputation profile and suppression list. Mutually exclusive with tenant_name.
+   */
+  tenant_isolation_enabled?: boolean
+
+  /** Advanced: use a configuration set you manage instead of the one Notifuse creates. */
+  configuration_set_name?: string
+  /** Advanced: use a tenant you manage yourself. */
+  tenant_name?: string
+
+  /** Server-owned, read-only: written by webhook registration. */
+  managed_configuration_set?: string
+  /** Server-owned, read-only: written when isolation is provisioned. */
+  managed_tenant_name?: string
 }
 
 export type SMTPAuthType = 'basic' | 'oauth2'
@@ -153,7 +171,14 @@ export interface SendGridSettings {
   encrypted_api_key?: string
 }
 
-export type IntegrationType = 'email' | 'sms' | 'whatsapp' | 'supabase' | 'llm' | 'firecrawl'
+export type IntegrationType =
+  | 'email'
+  | 'sms'
+  | 'whatsapp'
+  | 'supabase'
+  | 'llm'
+  | 'firecrawl'
+  | 'zapier'
 
 // LLM Provider types
 export type LLMProviderKind = 'anthropic' | 'openai' | 'gemini'
@@ -192,6 +217,18 @@ export interface FirecrawlSettings {
   base_url?: string
 }
 
+/**
+ * Everything a Zapier connection records: the address of the API key minted for it when the
+ * card was added.
+ *
+ * Display only — nothing on either side reads it to make a decision — and immutable, so a card
+ * renamed later keeps the address its key was minted under, and the two can read differently.
+ * Not a credential: the token exists once, in the response to workspaces.connectZapier.
+ */
+export interface ZapierSettings {
+  api_key_email: string
+}
+
 export interface SupabaseAuthEmailHookSettings {
   signature_key?: string
   encrypted_signature_key?: string
@@ -218,6 +255,13 @@ export interface Integration {
   supabase_settings?: SupabaseIntegrationSettings
   llm_provider?: LLMProvider
   firecrawl_settings?: FirecrawlSettings
+  zapier_settings?: ZapierSettings
+  /**
+   * Last few characters of each configured credential, keyed like
+   * "smtp.password" or "mailjet.secret_key". Read-only: the server computes it
+   * on every read and never stores it. The credentials themselves are not returned.
+   */
+  credential_hints?: Record<string, string>
   created_at: string
   updated_at: string
 }
@@ -262,6 +306,8 @@ export interface UpdateWorkspaceResponse {
 export interface CreateAPIKeyRequest {
   workspace_id: string
   email_prefix: string
+  // Omitted means full access, mirroring the server default.
+  permissions?: UserPermissions
 }
 
 export interface CreateAPIKeyResponse {
@@ -291,7 +337,13 @@ export interface DeleteWorkspaceResponse {
 export interface CreateIntegrationRequest {
   workspace_id: string
   name: string
-  type: IntegrationType
+  /**
+   * Zapier is excluded because the server rejects it here at two layers: a Zapier record only
+   * exists alongside the API key that workspaces.connectZapier mints for it, and this request
+   * cannot mint one. Widening IntegrationType without this would make the call compile and fail
+   * at runtime with a 400.
+   */
+  type: Exclude<IntegrationType, 'zapier'>
   provider?: EmailProvider
   supabase_settings?: SupabaseIntegrationSettings
   llm_provider?: LLMProvider
@@ -306,6 +358,9 @@ export interface UpdateIntegrationRequest {
   supabase_settings?: SupabaseIntegrationSettings
   llm_provider?: LLMProvider
   firecrawl_settings?: FirecrawlSettings
+  // No zapier_settings, deliberately. The server rebuilds the integration from scratch on every
+  // update and refills the settings from the stored record, so a field here could only express a
+  // wipe of the minted address. Renaming a card is the whole of what an update does to one.
 }
 
 export interface DeleteIntegrationRequest {
@@ -326,6 +381,28 @@ export interface DeleteIntegrationResponse {
   status: string
 }
 
+/**
+ * Connecting Zapier mints an API key and records it as an integration, in one call.
+ *
+ * The label is all the caller chooses. It names the card and seeds the address of the key, which
+ * the server derives itself so no client can claim an address belonging to a key it did not
+ * create — and it carries no permission scope, because the grant is domain.ZapierKeyPermissions'
+ * to choose.
+ */
+export interface ConnectZapierRequest {
+  workspace_id: string
+  label: string
+}
+
+export interface ConnectZapierResponse {
+  status: string
+  /** Shown once. Nothing stores it, so a caller that drops it cannot ask for it again. */
+  token: string
+  /** Address of the key just minted, also recorded on the integration as api_key_email. */
+  email: string
+  integration_id: string
+}
+
 // Workspace Member types
 export interface WorkspaceMember {
   user_id: string
@@ -337,7 +414,9 @@ export interface WorkspaceMember {
   updated_at: string
   invitation_expires_at?: string
   invitation_id?: string
-  permissions: UserPermissions
+  // Received, not constructed: the stored map may be partial, and synthesised invitation rows
+  // carry null. Read it through `?? createEmptyPermissions()`.
+  permissions: StoredPermissions | undefined
 }
 
 export interface GetWorkspaceMembersResponse {
@@ -356,24 +435,15 @@ export interface InviteMemberResponse {
   message: string
 }
 
-// Permission types
-export interface ResourcePermissions {
-  read: boolean
-  write: boolean
-}
-
-export interface UserPermissions {
-  contacts: ResourcePermissions
-  lists: ResourcePermissions
-  templates: ResourcePermissions
-  broadcasts: ResourcePermissions
-  transactional: ResourcePermissions
-  workspace: ResourcePermissions
-  message_history: ResourcePermissions
-  blog: ResourcePermissions
-  automations: ResourcePermissions
-  llm: ResourcePermissions
-}
+// Permission types live in ./permissions, which imports nothing — the constructors are called at
+// module scope by consumers that sit in an import cycle with ./client. Only the types are
+// re-exported here, because most call sites already import them from this module.
+export type {
+  ResourcePermissions,
+  PermissionResource,
+  UserPermissions,
+  StoredPermissions
+} from './permissions'
 
 // Set User Permissions types
 export interface SetUserPermissionsRequest {
@@ -399,7 +469,9 @@ export interface SetCustomFieldLabelsResponse {
 
 export interface SetBlogSettingsRequest {
   workspace_id: string
-  blog_enabled: boolean
+  // Absent leaves the stored flag as it is; only the controls that exist to turn
+  // the blog on or off send one.
+  blog_enabled?: boolean
   blog_settings?: BlogSettings
 }
 
@@ -496,6 +568,15 @@ export const workspaceService = {
 
   deleteIntegration: (data: DeleteIntegrationRequest) =>
     api.post<DeleteIntegrationResponse>('/api/workspaces.deleteIntegration', data),
+
+  // The label is trimmed here rather than at the one screen that calls this, because the server
+  // takes it verbatim as the card's name and accepts a blank-looking one: "   " would mint a real
+  // key and leave a card with nothing to read on it.
+  connectZapier: (data: ConnectZapierRequest) =>
+    api.post<ConnectZapierResponse>('/api/workspaces.connectZapier', {
+      ...data,
+      label: data.label.trim()
+    }),
 
   // Invitation endpoints
   verifyInvitationToken: (token: string) =>

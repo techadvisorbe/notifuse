@@ -2,12 +2,15 @@ package notifuse_mjml
 
 import (
 	"encoding/json"
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/Notifuse/notifuse/pkg/crypto"
+	"github.com/preslavrachev/gomjml/mjml"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestTrackLinks(t *testing.T) {
@@ -578,7 +581,7 @@ func TestTrackingPixelPlacement(t *testing.T) {
 
 	// Check that the tracking pixel uses encrypted /t/ format and new styling
 	hasPixelPattern := strings.Contains(result, `/t/`) &&
-		strings.Contains(result, `alt="" style="border:0;margin:0;padding:0;">`)
+		strings.Contains(result, `alt="" style="border:0;display:block;outline:none;text-decoration:none;">`)
 	if !hasPixelPattern {
 		t.Errorf("Expected encrypted tracking pixel with /t/ path and new styling. Result: %s", result)
 	}
@@ -618,7 +621,7 @@ func TestTrackingPixelWithoutBodyTag(t *testing.T) {
 
 	// Check that the tracking pixel uses encrypted /t/ format
 	hasPixelPattern := strings.Contains(result, `/t/`) &&
-		strings.Contains(result, `alt="" style="border:0;margin:0;padding:0;">`)
+		strings.Contains(result, `alt="" style="border:0;display:block;outline:none;text-decoration:none;">`)
 	if !hasPixelPattern {
 		t.Error("Expected encrypted tracking pixel with /t/ path and new styling")
 	}
@@ -627,6 +630,64 @@ func TestTrackingPixelWithoutBodyTag(t *testing.T) {
 	if !strings.HasSuffix(strings.TrimSpace(result), `</td></tr></table>`) {
 		t.Error("Expected table-wrapped tracking pixel to be at the end when no body tag is present")
 	}
+}
+
+// TestTrackingPixelCollapsesLineBox pins the markup that keeps the open-tracking
+// pixel from adding a visible row to the email.
+//
+// An <img> is inline by default, so it sits on a text baseline and the cell holding
+// it takes a whole line box — around 19px at the default font size — no matter how
+// small the image is. width="1" height="1" does not help, because it describes the
+// image and not the line the image sits on. That is why the pixel used to leave an
+// empty row under the footer, and why Outlook scrolled a few millimetres past it.
+//
+// display:block takes the image off the baseline, the zeroed line-height and
+// font-size collapse the line box for clients that honour only one of the two, and
+// mso-line-height-rule makes the Word engine behind Outlook treat the zero
+// line-height as exact rather than as a minimum.
+func TestTrackingPixelCollapsesLineBox(t *testing.T) {
+	pixel := GenerateHTMLOpenTrackingPixel("ws", "msg", "https://api.example.com", 1700000000)
+
+	assert.Contains(t, pixel, `<td style="line-height:0px;font-size:0px;mso-line-height-rule:exactly;">`,
+		"the pixel cell must zero its line box, or it reserves a full line of text below the email")
+	assert.Regexp(t, `<img [^>]*style="[^"]*display:block[^"]*"`, pixel,
+		"the pixel image must leave the text baseline, or the cell takes a full line box anyway")
+}
+
+// TestTrackingPixelCellStyleMatchesMJMLSpacerRow pins why the cell carries that
+// exact declaration list: it is the one gomjml already emits for its own spacer
+// rows, so the pixel row reads as ordinary structural markup rather than as
+// something written only for a tracking pixel.
+//
+// A gomjml upgrade that changes its spacer markup fails this test. Copy the new
+// string across rather than dropping the assertion — matching MJML byte for byte
+// is the point.
+func TestTrackingPixelCellStyleMatchesMJMLSpacerRow(t *testing.T) {
+	const cellStyle = `line-height:0px;font-size:0px;mso-line-height-rule:exactly;`
+
+	pixel := GenerateHTMLOpenTrackingPixel("ws", "msg", "https://api.example.com", 1700000000)
+	require.Contains(t, pixel, cellStyle)
+
+	rendered, err := mjml.Render(`<mjml><mj-body><mj-section><mj-column><mj-text>x</mj-text></mj-column></mj-section></mj-body></mjml>`)
+	require.NoError(t, err)
+	assert.Contains(t, rendered, cellStyle,
+		"the pixel cell style must stay a string MJML itself emits")
+}
+
+// TestTrackingPixelCarriesNoDimensionAttributes guards the anti-blocker property
+// the collapse fix must not undo: the classic width="1" height="1" pair is the
+// fingerprint pixel blockers match on, so the collapse is done in CSS instead.
+//
+// SpamAssassin gives the same pair a second reason to stay away: it accumulates
+// image area only when both attributes are present, and coerces a zero to 200,
+// so width="0" height="0" would bill the pixel as 40000px of image.
+func TestTrackingPixelCarriesNoDimensionAttributes(t *testing.T) {
+	pixel := GenerateHTMLOpenTrackingPixel("ws", "msg", "https://api.example.com", 1700000000)
+
+	imgTag := regexp.MustCompile(`<img [^>]*>`).FindString(pixel)
+	require.NotEmpty(t, imgTag, "expected an img tag in the pixel markup")
+	assert.NotRegexp(t, `\swidth=`, imgTag, "a width attribute is the pixel-blocker fingerprint")
+	assert.NotRegexp(t, `\sheight=`, imgTag, "a height attribute is the pixel-blocker fingerprint")
 }
 
 func TestIsNonTrackableURL(t *testing.T) {
@@ -1945,11 +2006,15 @@ func TestOverrideMjPreviewInSource(t *testing.T) {
 	})
 
 	t.Run("escapes XML special characters", func(t *testing.T) {
+		// Angle brackets must be numeric character references: the MJML parser
+		// pre-decodes named &lt;/&gt; entities back to raw brackets before XML
+		// parsing, so &lt;script&gt; would come back as live markup.
 		mjml := `<mjml><mj-head><mj-preview>Old</mj-preview></mj-head></mjml>`
 		result := overrideMjPreviewInSource(mjml, `<script>alert("xss")</script> & more`)
-		assert.Contains(t, result, "&lt;script&gt;")
+		assert.Contains(t, result, "&#60;script&#62;")
 		assert.Contains(t, result, "&amp; more")
 		assert.NotContains(t, result, "<script>")
+		assert.NotContains(t, result, "&lt;script&gt;")
 	})
 
 	t.Run("handles multiline existing content", func(t *testing.T) {
@@ -1969,6 +2034,35 @@ func TestOverrideMjPreviewInSource(t *testing.T) {
 		mjml := `<mjml><mj-head><mj-preview>Old</mj-preview></mj-head></mjml>`
 		result := overrideMjPreviewInSource(mjml, "Order {{ order_id }} confirmed")
 		assert.Contains(t, result, "<mj-preview>Order {{ order_id }} confirmed</mj-preview>")
+	})
+
+	t.Run("replaces self-closing mj-preview", func(t *testing.T) {
+		mjml := `<mjml><mj-head><mj-preview /></mj-head><mj-body></mj-body></mjml>`
+		result := overrideMjPreviewInSource(mjml, "New preview")
+		assert.Contains(t, result, "<mj-preview>New preview</mj-preview>")
+		assert.Equal(t, 1, strings.Count(result, "<mj-preview"), "must replace the tag, not add a second one")
+	})
+
+	t.Run("replaces self-closing mj-preview without space", func(t *testing.T) {
+		mjml := `<mjml><mj-head><mj-preview/></mj-head><mj-body></mj-body></mjml>`
+		result := overrideMjPreviewInSource(mjml, "New preview")
+		assert.Contains(t, result, "<mj-preview>New preview</mj-preview>")
+		assert.Equal(t, 1, strings.Count(result, "<mj-preview"))
+	})
+
+	t.Run("keeps attributes of a self-closing mj-preview", func(t *testing.T) {
+		mjml := `<mjml><mj-head><mj-preview css-class="x" /></mj-head><mj-body></mj-body></mjml>`
+		result := overrideMjPreviewInSource(mjml, "New preview")
+		assert.Contains(t, result, `<mj-preview css-class="x">New preview</mj-preview>`)
+		assert.Equal(t, 1, strings.Count(result, "<mj-preview"))
+	})
+
+	t.Run("replaces content of a paired mj-preview carrying attributes", func(t *testing.T) {
+		mjml := `<mjml><mj-head><mj-preview css-class="x">Old preview</mj-preview></mj-head><mj-body></mj-body></mjml>`
+		result := overrideMjPreviewInSource(mjml, "New preview")
+		assert.Contains(t, result, `<mj-preview css-class="x">New preview</mj-preview>`)
+		assert.NotContains(t, result, "Old preview")
+		assert.Equal(t, 1, strings.Count(result, "<mj-preview"))
 	})
 
 	t.Run("creates mj-head when only mjml root exists", func(t *testing.T) {
@@ -2609,6 +2703,400 @@ func TestCompileTemplateSubjectNoTemplateData(t *testing.T) {
 	}
 }
 
+// treeWithMjPreview builds a minimal visual tree whose head contains an
+// mj-preview block with the given content.
+func treeWithMjPreview(content string) EmailBlock {
+	previewBase := NewBaseBlock("preview-1", MJMLComponentMjPreview)
+	previewBase.Content = stringPtr(content)
+	previewBlock := &MJPreviewBlock{BaseBlock: previewBase}
+
+	headBlock := &MJHeadBlock{BaseBlock: NewBaseBlock("head-1", MJMLComponentMjHead)}
+	headBlock.Children = []EmailBlock{previewBlock}
+
+	textBase := NewBaseBlock("text-1", MJMLComponentMjText)
+	textBase.Content = stringPtr("hello")
+	textBlock := &MJTextBlock{BaseBlock: textBase}
+
+	columnBlock := &MJColumnBlock{BaseBlock: NewBaseBlock("column-1", MJMLComponentMjColumn)}
+	columnBlock.Children = []EmailBlock{textBlock}
+
+	sectionBlock := &MJSectionBlock{BaseBlock: NewBaseBlock("section-1", MJMLComponentMjSection)}
+	sectionBlock.Children = []EmailBlock{columnBlock}
+
+	bodyBlock := &MJBodyBlock{BaseBlock: NewBaseBlock("body-1", MJMLComponentMjBody)}
+	bodyBlock.Children = []EmailBlock{sectionBlock}
+
+	mjmlBlock := &MJMLBlock{BaseBlock: NewBaseBlock("mjml-1", MJMLComponentMjml)}
+	mjmlBlock.Children = []EmailBlock{headBlock, bodyBlock}
+	return mjmlBlock
+}
+
+// treeWithMjTitle builds a minimal visual tree whose head contains an mj-title
+// block with the given content.
+func treeWithMjTitle(content string) EmailBlock {
+	titleBase := NewBaseBlock("title-1", MJMLComponentMjTitle)
+	titleBase.Content = stringPtr(content)
+
+	headBlock := &MJHeadBlock{BaseBlock: NewBaseBlock("head-1", MJMLComponentMjHead)}
+	headBlock.Children = []EmailBlock{&MJTitleBlock{BaseBlock: titleBase}}
+
+	textBase := NewBaseBlock("text-1", MJMLComponentMjText)
+	textBase.Content = stringPtr("hello")
+
+	columnBlock := &MJColumnBlock{BaseBlock: NewBaseBlock("column-1", MJMLComponentMjColumn)}
+	columnBlock.Children = []EmailBlock{&MJTextBlock{BaseBlock: textBase}}
+
+	sectionBlock := &MJSectionBlock{BaseBlock: NewBaseBlock("section-1", MJMLComponentMjSection)}
+	sectionBlock.Children = []EmailBlock{columnBlock}
+
+	bodyBlock := &MJBodyBlock{BaseBlock: NewBaseBlock("body-1", MJMLComponentMjBody)}
+	bodyBlock.Children = []EmailBlock{sectionBlock}
+
+	mjmlBlock := &MJMLBlock{BaseBlock: NewBaseBlock("mjml-1", MJMLComponentMjml)}
+	mjmlBlock.Children = []EmailBlock{headBlock, bodyBlock}
+	return mjmlBlock
+}
+
+func globalFeedData(subject string) MapOfAny {
+	return MapOfAny{"global_feed": map[string]interface{}{"subject": subject}}
+}
+
+func TestCompileTemplateSubjectPreviewOverrideFallbackRendersLiquid(t *testing.T) {
+	// Visual tree without an mj-preview block: the override is injected as a new
+	// <mj-preview> tag, and Liquid in it must be rendered — not shipped literally.
+	override := "{{ global_feed.subject }}"
+	req := CompileTemplateRequest{
+		WorkspaceID:            "ws",
+		MessageID:              "msg",
+		VisualEditorTree:       minimalTree(),
+		SubjectPreviewOverride: &override,
+		TemplateData:           globalFeedData("Weekly digest"),
+	}
+
+	resp, err := CompileTemplate(req)
+	require.NoError(t, err)
+	require.True(t, resp.Success, "error: %v", resp.Error)
+	require.NotNil(t, resp.MJML)
+	require.NotNil(t, resp.HTML)
+	assert.Contains(t, *resp.MJML, "<mj-preview>Weekly digest</mj-preview>")
+	assert.Contains(t, *resp.HTML, "Weekly digest")
+	assert.NotContains(t, *resp.HTML, "{{ global_feed.subject }}")
+}
+
+func TestCompileTemplateSubjectPreviewOverrideFallbackEscapesRenderedValue(t *testing.T) {
+	// The rendered value — not the raw Liquid — must be escaped before being
+	// spliced into the MJML source, so data containing &, < or > still compiles.
+	override := "{{ global_feed.subject }}"
+	req := CompileTemplateRequest{
+		WorkspaceID:            "ws",
+		MessageID:              "msg",
+		VisualEditorTree:       minimalTree(),
+		SubjectPreviewOverride: &override,
+		TemplateData:           globalFeedData("Tom & Jerry <weekly>"),
+	}
+
+	resp, err := CompileTemplate(req)
+	require.NoError(t, err)
+	require.True(t, resp.Success, "error: %v", resp.Error)
+	require.NotNil(t, resp.MJML)
+	require.NotNil(t, resp.HTML)
+	assert.Contains(t, *resp.MJML, "Tom &amp; Jerry &#60;weekly&#62;")
+	assert.Contains(t, *resp.HTML, "Tom & Jerry")
+	assert.NotContains(t, *resp.HTML, "{{ global_feed.subject }}")
+}
+
+func TestCompileTemplateSubjectPreviewOverrideFallbackNoDoubleLiquid(t *testing.T) {
+	// A rendered value that itself looks like Liquid must not be evaluated a
+	// second time by the whole-string pass.
+	override := "{{ global_feed.subject }}"
+	req := CompileTemplateRequest{
+		WorkspaceID:            "ws",
+		MessageID:              "msg",
+		VisualEditorTree:       minimalTree(),
+		SubjectPreviewOverride: &override,
+		TemplateData:           globalFeedData("Use {{coupon}} now"),
+	}
+
+	resp, err := CompileTemplate(req)
+	require.NoError(t, err)
+	require.True(t, resp.Success, "error: %v", resp.Error)
+	require.NotNil(t, resp.HTML)
+	assert.Contains(t, *resp.HTML, "Use {{coupon}} now")
+}
+
+func TestCompileTemplateSubjectPreviewOverrideFallbackLiquidError(t *testing.T) {
+	// Malformed Liquid in the injected preview text surfaces as a compile error
+	// instead of being silently shipped to recipients.
+	override := "{{ global_feed.subject"
+	req := CompileTemplateRequest{
+		WorkspaceID:            "ws",
+		MessageID:              "msg",
+		VisualEditorTree:       minimalTree(),
+		SubjectPreviewOverride: &override,
+		TemplateData:           globalFeedData("Weekly digest"),
+	}
+
+	resp, err := CompileTemplate(req)
+	assert.NoError(t, err)
+	assert.False(t, resp.Success)
+	assert.NotNil(t, resp.Error)
+	assert.Nil(t, resp.HTML)
+}
+
+func TestCompileTemplateSubjectPreviewOverrideFallbackPreserveLiquid(t *testing.T) {
+	// MJML export (PreserveLiquid) keeps the Liquid syntax in the injected tag.
+	override := "{{ global_feed.subject }}"
+	req := CompileTemplateRequest{
+		WorkspaceID:            "ws",
+		MessageID:              "msg",
+		VisualEditorTree:       minimalTree(),
+		SubjectPreviewOverride: &override,
+		TemplateData:           globalFeedData("Weekly digest"),
+		PreserveLiquid:         true,
+	}
+
+	resp, err := CompileTemplate(req)
+	require.NoError(t, err)
+	require.True(t, resp.Success, "error: %v", resp.Error)
+	require.NotNil(t, resp.MJML)
+	assert.Contains(t, *resp.MJML, "<mj-preview>{{ global_feed.subject }}</mj-preview>")
+}
+
+func TestCompileTemplateSubjectPreviewOverrideFallbackNoData(t *testing.T) {
+	// No template data → Liquid processing is skipped everywhere, so the raw
+	// expression stays in place (mirrors subject/body behavior).
+	override := "{{ global_feed.subject }}"
+	req := CompileTemplateRequest{
+		WorkspaceID:            "ws",
+		MessageID:              "msg",
+		VisualEditorTree:       minimalTree(),
+		SubjectPreviewOverride: &override,
+	}
+
+	resp, err := CompileTemplate(req)
+	require.NoError(t, err)
+	require.True(t, resp.Success, "error: %v", resp.Error)
+	require.NotNil(t, resp.MJML)
+	assert.Contains(t, *resp.MJML, "<mj-preview>{{ global_feed.subject }}</mj-preview>")
+}
+
+func TestCompileTemplateSubjectPreviewOverrideFallbackWebChannel(t *testing.T) {
+	// Web channel skips personalization everywhere, so the injected preview keeps
+	// its Liquid syntax rather than rendering against contact data.
+	override := "{{ global_feed.subject }}"
+	req := CompileTemplateRequest{
+		WorkspaceID:            "ws",
+		MessageID:              "msg",
+		VisualEditorTree:       minimalTree(),
+		SubjectPreviewOverride: &override,
+		TemplateData:           globalFeedData("Weekly digest"),
+		Channel:                "web",
+	}
+
+	resp, err := CompileTemplate(req)
+	require.NoError(t, err)
+	require.True(t, resp.Success, "error: %v", resp.Error)
+	require.NotNil(t, resp.MJML)
+	assert.Contains(t, *resp.MJML, "<mj-preview>{{ global_feed.subject }}</mj-preview>")
+	assert.NotContains(t, *resp.MJML, "Weekly digest")
+}
+
+func TestCompileTemplateSubjectPreviewOverrideTreeBlockRendersLiquid(t *testing.T) {
+	// When the tree has an mj-preview block, the override lands in that block and
+	// goes through per-block Liquid rendering.
+	override := "{{ global_feed.subject }}"
+	req := CompileTemplateRequest{
+		WorkspaceID:            "ws",
+		MessageID:              "msg",
+		VisualEditorTree:       treeWithMjPreview("PLACEHOLDER"),
+		SubjectPreviewOverride: &override,
+		TemplateData:           globalFeedData("Weekly digest"),
+	}
+
+	resp, err := CompileTemplate(req)
+	require.NoError(t, err)
+	require.True(t, resp.Success, "error: %v", resp.Error)
+	require.NotNil(t, resp.HTML)
+	assert.Contains(t, *resp.HTML, "Weekly digest")
+	assert.NotContains(t, *resp.HTML, "PLACEHOLDER")
+	assert.NotContains(t, *resp.HTML, "{{ global_feed.subject }}")
+}
+
+// codeModeSource is a minimal code-mode document with no mj-preview block.
+const codeModeSource = `<mjml><mj-body><mj-section><mj-column><mj-text>hello</mj-text></mj-column></mj-section></mj-body></mjml>`
+
+func compileCodeMode(t *testing.T, override string, data MapOfAny, source string, preserveLiquid bool) *CompileTemplateResponse {
+	t.Helper()
+	resp, err := CompileTemplate(CompileTemplateRequest{
+		WorkspaceID:            "ws",
+		MessageID:              "msg",
+		MjmlSource:             &source,
+		SubjectPreviewOverride: &override,
+		TemplateData:           data,
+		PreserveLiquid:         preserveLiquid,
+	})
+	require.NoError(t, err)
+	return resp
+}
+
+func TestCompileTemplateSubjectPreviewOverrideCodeModeRendersLiquid(t *testing.T) {
+	// Code mode applies the override before its Liquid pass; Liquid renders.
+	resp := compileCodeMode(t, "{{ global_feed.subject }}", globalFeedData("Weekly digest"), codeModeSource, false)
+	require.True(t, resp.Success, "error: %v", resp.Error)
+	require.NotNil(t, resp.HTML)
+	assert.Contains(t, *resp.HTML, "Weekly digest")
+	assert.NotContains(t, *resp.HTML, "{{ global_feed.subject }}")
+}
+
+func TestCompileTemplateSubjectPreviewOverrideCodeModeEscapesRenderedValue(t *testing.T) {
+	// An ampersand in the rendered value must be escaped: escaping the Liquid
+	// syntax instead leaves a bare & in the MJML, which fails the XML parse.
+	resp := compileCodeMode(t, "{{ global_feed.subject }}", globalFeedData("News & Updates"), codeModeSource, false)
+	require.True(t, resp.Success, "error: %v", resp.Error)
+	require.NotNil(t, resp.MJML)
+	assert.Contains(t, *resp.MJML, "<mj-preview>News &amp; Updates</mj-preview>")
+}
+
+func TestCompileTemplateSubjectPreviewOverrideCodeModeEscapesAngleBrackets(t *testing.T) {
+	resp := compileCodeMode(t, "{{ global_feed.subject }}", globalFeedData("Tom & Jerry <weekly>"), codeModeSource, false)
+	require.True(t, resp.Success, "error: %v", resp.Error)
+	require.NotNil(t, resp.MJML)
+	assert.Contains(t, *resp.MJML, "<mj-preview>Tom &amp; Jerry &#60;weekly&#62;</mj-preview>")
+}
+
+func TestCompileTemplateSubjectPreviewOverrideCodeModeLiquidComparison(t *testing.T) {
+	// Escaping before Liquid turns `>` into an entity and the comparison silently
+	// degrades to a truthiness test, yielding the wrong branch.
+	override := "{% if a > b %}YES{% else %}NO{% endif %}"
+	resp := compileCodeMode(t, override, MapOfAny{"a": 1, "b": 2}, codeModeSource, false)
+	require.True(t, resp.Success, "error: %v", resp.Error)
+	require.NotNil(t, resp.MJML)
+	assert.Contains(t, *resp.MJML, "<mj-preview>NO</mj-preview>")
+	assert.NotContains(t, *resp.MJML, "YES")
+}
+
+func TestCompileTemplateSubjectPreviewOverrideCodeModeReplacesExisting(t *testing.T) {
+	// Code mode must replace an existing mj-preview, not add a second one.
+	source := `<mjml><mj-head><mj-preview>OLD</mj-preview></mj-head><mj-body><mj-section><mj-column><mj-text>hello</mj-text></mj-column></mj-section></mj-body></mjml>`
+	resp := compileCodeMode(t, "{{ global_feed.subject }}", globalFeedData("Weekly digest"), source, false)
+	require.True(t, resp.Success, "error: %v", resp.Error)
+	require.NotNil(t, resp.MJML)
+	assert.Contains(t, *resp.MJML, "<mj-preview>Weekly digest</mj-preview>")
+	assert.NotContains(t, *resp.MJML, "OLD")
+	assert.Equal(t, 1, strings.Count(*resp.MJML, "<mj-preview>"))
+}
+
+func TestCompileTemplateSubjectPreviewOverrideCodeModeLiquidError(t *testing.T) {
+	resp := compileCodeMode(t, "{{ global_feed.subject", globalFeedData("Weekly digest"), codeModeSource, false)
+	assert.False(t, resp.Success)
+	assert.NotNil(t, resp.Error)
+	assert.Nil(t, resp.HTML)
+}
+
+func TestCompileTemplateSubjectPreviewOverrideCodeModePreserveLiquid(t *testing.T) {
+	resp := compileCodeMode(t, "{{ global_feed.subject }}", globalFeedData("Weekly digest"), codeModeSource, true)
+	require.True(t, resp.Success, "error: %v", resp.Error)
+	require.NotNil(t, resp.MJML)
+	assert.Contains(t, *resp.MJML, "<mj-preview>{{ global_feed.subject }}</mj-preview>")
+	assert.NotContains(t, *resp.MJML, "Weekly digest")
+}
+
+func TestCompileTemplateSubjectPreviewOverrideCodeModeSelfClosingPreview(t *testing.T) {
+	// A hand-written self-closing <mj-preview /> must be replaced, not duplicated.
+	source := `<mjml><mj-head><mj-preview /></mj-head><mj-body><mj-section><mj-column><mj-text>hello</mj-text></mj-column></mj-section></mj-body></mjml>`
+	resp := compileCodeMode(t, "{{ global_feed.subject }}", globalFeedData("Weekly digest"), source, false)
+	require.True(t, resp.Success, "error: %v", resp.Error)
+	require.NotNil(t, resp.MJML)
+	require.NotNil(t, resp.HTML)
+	assert.Equal(t, 1, strings.Count(*resp.MJML, "<mj-preview"))
+	assert.Contains(t, *resp.HTML, "Weekly digest")
+}
+
+func TestCompileTemplateSubjectPreviewOverrideCodeModePreviewWithAttributes(t *testing.T) {
+	// A paired mj-preview carrying attributes must have its content replaced;
+	// injecting a second one ships the stale preview text to recipients.
+	source := `<mjml><mj-head><mj-preview css-class="x">OLD</mj-preview></mj-head><mj-body><mj-section><mj-column><mj-text>hello</mj-text></mj-column></mj-section></mj-body></mjml>`
+	resp := compileCodeMode(t, "{{ global_feed.subject }}", globalFeedData("Weekly digest"), source, false)
+	require.True(t, resp.Success, "error: %v", resp.Error)
+	require.NotNil(t, resp.MJML)
+	require.NotNil(t, resp.HTML)
+	assert.Equal(t, 1, strings.Count(*resp.MJML, "<mj-preview"))
+	assert.NotContains(t, *resp.HTML, "OLD")
+	assert.Contains(t, *resp.HTML, "Weekly digest")
+}
+
+func TestCompileTemplateSubjectPreviewOverrideFillsLiquidEmittedSelfClosingPreview(t *testing.T) {
+	// An mj-liquid block can emit a bare <mj-preview /> that the tree walk never
+	// sees, so updateBlockContent cannot place the override in it. The fallback
+	// must fill that tag rather than inject a second preview or drop the text.
+	liqBase := NewBaseBlock("liq", MJMLComponentMjLiquid)
+	liqBase.Content = stringPtr(`<mj-preview />`)
+
+	headBlock := &MJHeadBlock{BaseBlock: NewBaseBlock("head-1", MJMLComponentMjHead)}
+	headBlock.Children = []EmailBlock{&MJLiquidBlock{BaseBlock: liqBase}}
+
+	textBase := NewBaseBlock("text-1", MJMLComponentMjText)
+	textBase.Content = stringPtr("hello")
+	columnBlock := &MJColumnBlock{BaseBlock: NewBaseBlock("column-1", MJMLComponentMjColumn)}
+	columnBlock.Children = []EmailBlock{&MJTextBlock{BaseBlock: textBase}}
+	sectionBlock := &MJSectionBlock{BaseBlock: NewBaseBlock("section-1", MJMLComponentMjSection)}
+	sectionBlock.Children = []EmailBlock{columnBlock}
+	bodyBlock := &MJBodyBlock{BaseBlock: NewBaseBlock("body-1", MJMLComponentMjBody)}
+	bodyBlock.Children = []EmailBlock{sectionBlock}
+	root := &MJMLBlock{BaseBlock: NewBaseBlock("mjml-1", MJMLComponentMjml)}
+	root.Children = []EmailBlock{headBlock, bodyBlock}
+
+	override := "{{ global_feed.subject }}"
+	resp, err := CompileTemplate(CompileTemplateRequest{
+		WorkspaceID:            "ws",
+		MessageID:              "msg",
+		VisualEditorTree:       root,
+		SubjectPreviewOverride: &override,
+		TemplateData:           globalFeedData("Weekly digest"),
+	})
+	require.NoError(t, err)
+	require.True(t, resp.Success, "error: %v", resp.Error)
+	require.NotNil(t, resp.MJML)
+	require.NotNil(t, resp.HTML)
+	assert.Equal(t, 1, strings.Count(*resp.MJML, "<mj-preview"))
+	assert.Contains(t, *resp.MJML, "<mj-preview>Weekly digest</mj-preview>")
+	assert.Contains(t, *resp.HTML, "Weekly digest")
+}
+
+func TestCompileTemplateTreeMjPreviewRendersAngleBrackets(t *testing.T) {
+	// Liquid in an mj-preview block rendering to a value containing angle brackets
+	// must still compile: escaping it with named entities fails, because the MJML
+	// parser decodes those back into markup before parsing.
+	req := CompileTemplateRequest{
+		WorkspaceID:      "ws",
+		MessageID:        "msg",
+		VisualEditorTree: treeWithMjPreview("{{ global_feed.subject }}"),
+		TemplateData:     globalFeedData("Tom & Jerry <weekly>"),
+	}
+
+	resp, err := CompileTemplate(req)
+	require.NoError(t, err)
+	require.True(t, resp.Success, "error: %v", resp.Error)
+	require.NotNil(t, resp.MJML)
+	assert.Contains(t, *resp.MJML, "Tom &amp; Jerry &#60;weekly&#62;")
+}
+
+func TestCompileTemplateTreeMjTitleRendersAngleBrackets(t *testing.T) {
+	// mj-title content goes through the same converter escaping as mj-preview.
+	req := CompileTemplateRequest{
+		WorkspaceID:      "ws",
+		MessageID:        "msg",
+		VisualEditorTree: treeWithMjTitle("{{ global_feed.subject }}"),
+		TemplateData:     globalFeedData("A & B <x>"),
+	}
+
+	resp, err := CompileTemplate(req)
+	require.NoError(t, err)
+	require.True(t, resp.Success, "error: %v", resp.Error)
+	require.NotNil(t, resp.MJML)
+	assert.Contains(t, *resp.MJML, "A &amp; B &#60;x&#62;")
+}
+
 func TestTrackLinks_DisabledModeSuppressesEverything(t *testing.T) {
 	html := `<html><body><a href="https://example.com/auth/confirm?token=abc">Confirm</a></body></html>`
 	settings := TrackingSettings{
@@ -2678,4 +3166,831 @@ func TestValidateTrackingMode(t *testing.T) {
 	if err := ValidateTrackingMode("force_on"); err == nil {
 		t.Error("unknown mode must be rejected")
 	}
+}
+
+// decodeTrackedDestination extracts the first /r/{token} redirect in html and
+// returns the destination URL encrypted inside it, so a test can assert on what
+// the recipient's browser will actually be sent to.
+func decodeTrackedDestination(t *testing.T, html string, endpoint string) string {
+	t.Helper()
+
+	tokenRegex := regexp.MustCompile(regexp.QuoteMeta(endpoint) + `/r/([^"']+)`)
+	m := tokenRegex.FindStringSubmatch(html)
+	require.NotNil(t, m, "expected a /r/{token} tracking link, got: %s", html)
+
+	plaintext, err := crypto.DecryptTrackingToken(m[1])
+	require.NoError(t, err, "failed to decrypt tracking token")
+
+	// Payload format: messageID\nworkspaceID\ntimestamp\ndestinationURL
+	parts := strings.Split(plaintext, "\n")
+	require.Len(t, parts, 4, "unexpected token payload: %q", plaintext)
+	return parts[3]
+}
+
+// TestTrackLinks_IdentityTokenRidesInsideEncryptedPayload is the whole point of
+// applying the token before the redirect is built: the credential must travel
+// encrypted, never as readable text in the email HTML.
+func TestTrackLinks_IdentityTokenRidesInsideEncryptedPayload(t *testing.T) {
+	settings := TrackingSettings{
+		EnableTracking:       true,
+		Endpoint:             "https://track.example.com",
+		WorkspaceID:          "ws-1",
+		MessageID:            "msg-1",
+		UTMSource:            "newsletter",
+		IdentifyToken:        "tok-abc123",
+		IdentifyAllowedHosts: []string{"shop.example.com"},
+	}
+
+	html := `<html><body><a href="https://shop.example.com/product?ref=email">Buy</a></body></html>`
+
+	result, err := TrackLinks(html, settings)
+	require.NoError(t, err)
+
+	// The parameter rides inside the /r/ payload rather than appearing verbatim
+	// in the href. That is obfuscation against pixel-blockers, not
+	// confidentiality: the payload below is decrypted here with no secret.
+	assert.NotContains(t, result, "nf_id",
+		"the identity parameter must ride on the redirect's destination, not on the href itself")
+
+	destination := decodeTrackedDestination(t, result, "https://track.example.com")
+	assert.Contains(t, destination, "nf_id=tok-abc123")
+	assert.Contains(t, destination, "utm_source=newsletter", "UTM rewriting must still apply")
+	assert.Contains(t, destination, "ref=email", "pre-existing query params must survive")
+}
+
+// TestTrackLinks_IdentityTokenSkipsNonAllowlistedHost keeps the credential away
+// from third-party links the email happens to contain.
+func TestTrackLinks_IdentityTokenSkipsNonAllowlistedHost(t *testing.T) {
+	settings := TrackingSettings{
+		EnableTracking:       true,
+		Endpoint:             "https://track.example.com",
+		WorkspaceID:          "ws-1",
+		MessageID:            "msg-1",
+		IdentifyToken:        "tok-abc123",
+		IdentifyAllowedHosts: []string{"shop.example.com"},
+	}
+
+	html := `<html><body><a href="https://partner.example.net/offer">Partner</a></body></html>`
+
+	result, err := TrackLinks(html, settings)
+	require.NoError(t, err)
+
+	destination := decodeTrackedDestination(t, result, "https://track.example.com")
+	assert.NotContains(t, destination, "nf_id",
+		"a host outside the allowlist must never receive the identity token")
+	assert.Equal(t, "https://partner.example.net/offer", destination)
+}
+
+// TestTrackLinks_IdentityTokenEmptyAllowlistAppendsNothing guards the fail-open
+// trap: the workspace-level MatchesAllowedDomain treats an empty allowed-domains
+// list as "every host", which here would hand a bearer identity to any domain on
+// the internet. Unconfigured must mean nowhere.
+func TestTrackLinks_IdentityTokenEmptyAllowlistAppendsNothing(t *testing.T) {
+	settings := TrackingSettings{
+		IdentifyToken:        "tok-abc123",
+		IdentifyAllowedHosts: nil,
+	}
+
+	html := `<html><body><a href="https://anywhere.example.org/page">Link</a></body></html>`
+
+	result, err := TrackLinks(html, settings)
+	require.NoError(t, err)
+	assert.Equal(t, html, result, "an empty allowlist must leave every link untouched")
+}
+
+// TestTrackLinks_IdentityTokenWildcardMatchesApexAndSubdomain mirrors the
+// workspace allowed-domains semantics for "*.example.com".
+func TestTrackLinks_IdentityTokenWildcardMatchesApexAndSubdomain(t *testing.T) {
+	tests := []struct {
+		name       string
+		linkURL    string
+		wantsToken bool
+	}{
+		{name: "apex", linkURL: "https://example.com/page", wantsToken: true},
+		{name: "subdomain", linkURL: "https://shop.example.com/page", wantsToken: true},
+		{name: "deep subdomain", linkURL: "https://eu.shop.example.com/page", wantsToken: true},
+		{name: "uppercase host", linkURL: "https://SHOP.Example.COM/page", wantsToken: true},
+		{name: "host with port", linkURL: "https://shop.example.com:8443/page", wantsToken: true},
+		{name: "suffix lookalike", linkURL: "https://notexample.com/page", wantsToken: false},
+		{name: "attacker suffix", linkURL: "https://example.com.evil.net/page", wantsToken: false},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			settings := TrackingSettings{
+				IdentifyToken:        "tok-abc123",
+				IdentifyAllowedHosts: []string{" *.EXAMPLE.com "},
+			}
+
+			result, err := TrackLinks(`<a href="`+test.linkURL+`">Link</a>`, settings)
+			require.NoError(t, err)
+
+			if test.wantsToken {
+				assert.Contains(t, result, "nf_id=tok-abc123")
+			} else {
+				assert.NotContains(t, result, "nf_id")
+			}
+		})
+	}
+}
+
+// TestTrackLinks_IdentityTokenLeavesSpecialLinksUntouched covers the same
+// defensive shape applyUTMParameters has.
+func TestTrackLinks_IdentityTokenLeavesSpecialLinksUntouched(t *testing.T) {
+	settings := TrackingSettings{
+		IdentifyToken:        "tok-abc123",
+		IdentifyAllowedHosts: []string{"example.com"},
+	}
+
+	html := `<html><body>` +
+		`<a href="mailto:hello@example.com">Mail</a>` +
+		`<a href="tel:+33123456789">Call</a>` +
+		`<a href="{{ unsubscribe_url }}">Unsubscribe</a>` +
+		`<a href="{% if x %}https://example.com{% endif %}">Conditional</a>` +
+		`<a href="#top">Top</a>` +
+		`</body></html>`
+
+	result, err := TrackLinks(html, settings)
+	require.NoError(t, err)
+	assert.Equal(t, html, result)
+}
+
+// TestApplyIdentityParam_DefensiveCases exercises the guards directly, since
+// TrackLinks filters some of these out before the method is reached.
+func TestApplyIdentityParam_DefensiveCases(t *testing.T) {
+	settings := &TrackingSettings{
+		IdentifyToken:        "tok-abc123",
+		IdentifyAllowedHosts: []string{"example.com"},
+	}
+
+	unchanged := []string{
+		"",
+		"mailto:hello@example.com",
+		"tel:+33123456789",
+		"{{ unsubscribe_url }}",
+		"{% if x %}https://example.com{% endif %}",
+		"://example.com/broken",
+		"/relative/path",
+	}
+	for _, sourceURL := range unchanged {
+		assert.Equal(t, sourceURL, settings.applyIdentityParam(sourceURL))
+	}
+
+	// A link that already carries an identity keeps the one it has.
+	preIdentified := "https://example.com/page?nf_id=someone-else"
+	assert.Equal(t, preIdentified, settings.applyIdentityParam(preIdentified))
+
+	// No token minted: nothing to append, whatever the allowlist says.
+	noToken := &TrackingSettings{IdentifyAllowedHosts: []string{"example.com"}}
+	assert.Equal(t, "https://example.com/page", noToken.applyIdentityParam("https://example.com/page"))
+}
+
+// TestApplyIdentityParam_PreservesURLBytes pins the byte-exactness of the
+// append: these are links a customer hand-built in their template, and every
+// case below is one that re-serialising through url.Values corrupts —
+// "sid=1;2" and "discount=50%off" are dropped outright by Encode(), the ids
+// list gets its commas and slashes percent-escaped, and the surviving pairs
+// come back in alphabetical order.
+func TestApplyIdentityParam_PreservesURLBytes(t *testing.T) {
+	settings := &TrackingSettings{
+		IdentifyToken:        "tok-abc123",
+		IdentifyAllowedHosts: []string{"example.com"},
+	}
+
+	tests := []struct {
+		name    string
+		linkURL string
+		want    string
+	}{
+		{
+			name:    "semicolon separated value",
+			linkURL: "https://example.com/page?utm_source=x&sid=1;2",
+			want:    "https://example.com/page?utm_source=x&sid=1;2&nf_id=tok-abc123",
+		},
+		{
+			name:    "bare percent sign",
+			linkURL: "https://example.com/page?discount=50%off",
+			want:    "https://example.com/page?discount=50%off&nf_id=tok-abc123",
+		},
+		{
+			name:    "order, slashes and commas kept",
+			linkURL: "https://example.com/page?utm_campaign=spring&redirect=/home&ids=1,2,3",
+			want:    "https://example.com/page?utm_campaign=spring&redirect=/home&ids=1,2,3&nf_id=tok-abc123",
+		},
+		{
+			name:    "valueless flag keeps its missing equals sign",
+			linkURL: "https://example.com/page?flag&utm_source=x",
+			want:    "https://example.com/page?flag&utm_source=x&nf_id=tok-abc123",
+		},
+		{
+			name:    "fragment stays last",
+			linkURL: "https://example.com/page?a=1#section",
+			want:    "https://example.com/page?a=1&nf_id=tok-abc123#section",
+		},
+		{
+			name:    "fragment without query",
+			linkURL: "https://example.com/page#section",
+			want:    "https://example.com/page?nf_id=tok-abc123#section",
+		},
+		{
+			name:    "no query gains a question mark",
+			linkURL: "https://example.com/page",
+			want:    "https://example.com/page?nf_id=tok-abc123",
+		},
+		{
+			name:    "empty query reuses its question mark",
+			linkURL: "https://example.com/page?",
+			want:    "https://example.com/page?nf_id=tok-abc123",
+		},
+		{
+			name:    "port survives",
+			linkURL: "https://example.com:8443/page?a=1",
+			want:    "https://example.com:8443/page?a=1&nf_id=tok-abc123",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			assert.Equal(t, test.want, settings.applyIdentityParam(test.linkURL))
+		})
+	}
+}
+
+// TestTrackLinks_IdentityTokenKeepsHandBuiltQuery is the end-to-end version:
+// applyUTMParameters already returns a link carrying its own utm_* untouched,
+// and the identity pass must not undo that by rewriting the query.
+func TestTrackLinks_IdentityTokenKeepsHandBuiltQuery(t *testing.T) {
+	settings := TrackingSettings{
+		EnableTracking:       false,
+		UTMSource:            "newsletter",
+		IdentifyToken:        "tok-abc123",
+		IdentifyAllowedHosts: []string{"example.com"},
+	}
+
+	html := `<html><body><a href="https://example.com/page?utm_source=x&sid=1;2#top">Link</a></body></html>`
+
+	result, err := TrackLinks(html, settings)
+	require.NoError(t, err)
+	assert.Equal(t,
+		`<html><body><a href="https://example.com/page?utm_source=x&sid=1;2&nf_id=tok-abc123#top">Link</a></body></html>`,
+		result)
+}
+
+// TestTrackLinks_IdentityTokenSuppressedWhenTrackingDisabled: the per-notification
+// opt-out carries single-use auth URLs that must not be modified in any way.
+func TestTrackLinks_IdentityTokenSuppressedWhenTrackingDisabled(t *testing.T) {
+	settings := TrackingSettings{
+		TrackingMode:         TrackingModeDisabled,
+		EnableTracking:       true,
+		Endpoint:             "https://track.example.com",
+		WorkspaceID:          "ws-1",
+		MessageID:            "msg-1",
+		IdentifyToken:        "tok-abc123",
+		IdentifyAllowedHosts: []string{"example.com"},
+	}
+
+	html := `<html><body><a href="https://example.com/auth/confirm?token=abc">Confirm</a></body></html>`
+
+	result, err := TrackLinks(html, settings)
+	require.NoError(t, err)
+	assert.Equal(t, html, result)
+}
+
+// TestTrackLinks_IdentityTokenAppliedWithClickTrackingOff covers a workspace
+// running web analytics with link tracking off: the early return must not skip
+// the identity pass.
+func TestTrackLinks_IdentityTokenAppliedWithClickTrackingOff(t *testing.T) {
+	settings := TrackingSettings{
+		EnableTracking:       false,
+		IdentifyToken:        "tok-abc123",
+		IdentifyAllowedHosts: []string{"example.com"},
+	}
+
+	html := `<html><body><a href="https://example.com/page">Link</a></body></html>`
+
+	result, err := TrackLinks(html, settings)
+	require.NoError(t, err)
+	assert.Contains(t, result, "https://example.com/page?nf_id=tok-abc123")
+	assert.NotContains(t, result, "/r/", "click tracking stays off")
+	assert.NotContains(t, result, "<img", "the open pixel stays off too")
+}
+
+// TestTrackingSettings_ValueOmitsIdentityCredentials is the persistence check
+// behind the json:"-" tags: TrackingSettings is stored as
+// transactional_notifications.tracking_settings, and a per-recipient credential
+// must never land in that column.
+func TestTrackingSettings_ValueOmitsIdentityCredentials(t *testing.T) {
+	settings := TrackingSettings{
+		EnableTracking:       true,
+		Endpoint:             "https://track.example.com",
+		WorkspaceID:          "ws-1",
+		MessageID:            "msg-1",
+		IdentifyToken:        "tok-secret",
+		IdentifyAllowedHosts: []string{"shop.example.com"},
+	}
+
+	value, err := settings.Value()
+	require.NoError(t, err)
+	stored, ok := value.([]byte)
+	require.True(t, ok, "Value() must return the JSON bytes the column stores")
+
+	assert.NotContains(t, string(stored), "tok-secret")
+	assert.NotContains(t, string(stored), "shop.example.com")
+	assert.NotContains(t, string(stored), "identify")
+
+	var restored TrackingSettings
+	require.NoError(t, restored.Scan(stored))
+	assert.Empty(t, restored.IdentifyToken)
+	assert.Empty(t, restored.IdentifyAllowedHosts)
+
+	// Everything that is meant to be persisted still round-trips.
+	assert.True(t, restored.EnableTracking)
+	assert.Equal(t, "https://track.example.com", restored.Endpoint)
+	assert.Equal(t, "ws-1", restored.WorkspaceID)
+	assert.Equal(t, "msg-1", restored.MessageID)
+}
+
+// TestTrackingSettings_IsZero walks the struct by reflection instead of listing
+// the fields by hand: a hand-written list is a copy of the very enumeration
+// IsZero makes, so both can be forgotten together. A field added to
+// TrackingSettings and missed in IsZero fails here.
+//
+// IsZero has no production caller left. UpdateTransactionalRequest.Validate
+// used to read it as "the caller sent no tracking settings", which cannot tell
+// an absent block from one the caller deliberately emptied — so switching
+// tracking off came back as "at least one field must be updated" and the write
+// was silently dropped. Presence is recorded at decode now. The helper and this
+// test stay because IsZero is exported and an enumeration that quietly falls
+// behind its struct is worth catching wherever it is reached for next.
+func TestTrackingSettings_IsZero(t *testing.T) {
+	assert.True(t, TrackingSettings{}.IsZero())
+
+	structType := reflect.TypeOf(TrackingSettings{})
+	for i := 0; i < structType.NumField(); i++ {
+		field := structType.Field(i)
+		t.Run(field.Name, func(t *testing.T) {
+			if !field.IsExported() {
+				t.Skipf("unexported field %s cannot be set through reflection", field.Name)
+			}
+
+			probe := reflect.New(structType).Elem()
+			setNonZeroValue(t, probe.Field(i))
+
+			settings, ok := probe.Interface().(TrackingSettings)
+			require.True(t, ok)
+			assert.False(t, settings.IsZero(),
+				"IsZero() must report a struct with only %s set as non-zero", field.Name)
+		})
+	}
+}
+
+// setNonZeroValue writes a distinguishable value into one struct field. An
+// unhandled kind fails the test rather than being skipped: a new field of an
+// unknown type is exactly the case this test exists to catch, so it has to be
+// taught here before it can pass.
+func setNonZeroValue(t *testing.T, field reflect.Value) {
+	t.Helper()
+
+	switch field.Kind() {
+	case reflect.Bool:
+		field.SetBool(true)
+	case reflect.String:
+		field.SetString("non-zero")
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		field.SetInt(1)
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		field.SetUint(1)
+	case reflect.Float32, reflect.Float64:
+		field.SetFloat(1)
+	case reflect.Slice:
+		element := reflect.New(field.Type().Elem()).Elem()
+		setNonZeroValue(t, element)
+		field.Set(reflect.Append(reflect.MakeSlice(field.Type(), 0, 1), element))
+	case reflect.Map:
+		key := reflect.New(field.Type().Key()).Elem()
+		setNonZeroValue(t, key)
+		value := reflect.New(field.Type().Elem()).Elem()
+		setNonZeroValue(t, value)
+		field.Set(reflect.MakeMap(field.Type()))
+		field.SetMapIndex(key, value)
+	case reflect.Pointer:
+		pointed := reflect.New(field.Type().Elem())
+		setNonZeroValue(t, pointed.Elem())
+		field.Set(pointed)
+	default:
+		t.Fatalf("no non-zero value known for kind %s: teach setNonZeroValue about it, "+
+			"then make sure TrackingSettings.IsZero() accounts for the new field", field.Kind())
+	}
+}
+
+func TestMatchesAllowedHost(t *testing.T) {
+	tests := []struct {
+		name         string
+		hostname     string
+		allowedHosts []string
+		want         bool
+	}{
+		{name: "exact match", hostname: "example.com", allowedHosts: []string{"example.com"}, want: true},
+		{name: "case insensitive", hostname: "Example.COM", allowedHosts: []string{"example.com"}, want: true},
+		{name: "trims configured spaces", hostname: "example.com", allowedHosts: []string{"  example.com "}, want: true},
+		{name: "exact entry excludes subdomain", hostname: "shop.example.com", allowedHosts: []string{"example.com"}, want: false},
+		{name: "wildcard covers apex", hostname: "example.com", allowedHosts: []string{"*.example.com"}, want: true},
+		{name: "wildcard covers subdomain", hostname: "shop.example.com", allowedHosts: []string{"*.example.com"}, want: true},
+		{name: "wildcard rejects lookalike", hostname: "notexample.com", allowedHosts: []string{"*.example.com"}, want: false},
+		// A wildcard over a bare TLD would hand the recipient's identity to
+		// every link in the email pointing at that TLD, so it matches nothing —
+		// not the TLD itself, and not anything under it.
+		{name: "bare TLD wildcard matches nothing", hostname: "example.com", allowedHosts: []string{"*.com"}, want: false},
+		{name: "bare TLD wildcard matches no subdomain", hostname: "shop.example.com", allowedHosts: []string{"*.com"}, want: false},
+		{name: "bare TLD wildcard does not match the TLD", hostname: "com", allowedHosts: []string{"*.com"}, want: false},
+		{name: "empty wildcard suffix matches nothing", hostname: "example.com", allowedHosts: []string{"*."}, want: false},
+		{name: "bare TLD entry does not disable later entries", hostname: "shop.example.com", allowedHosts: []string{"*.com", "*.example.com"}, want: true},
+		// Multi-label wildcards stay legitimate.
+		{name: "multi label wildcard covers apex", hostname: "example.co.uk", allowedHosts: []string{"*.example.co.uk"}, want: true},
+		{name: "multi label wildcard covers subdomain", hostname: "shop.example.co.uk", allowedHosts: []string{"*.example.co.uk"}, want: true},
+		{name: "second entry matches", hostname: "b.com", allowedHosts: []string{"a.com", "b.com"}, want: true},
+		{name: "empty list matches nothing", hostname: "example.com", allowedHosts: nil, want: false},
+		{name: "empty host matches nothing", hostname: "", allowedHosts: []string{"example.com"}, want: false},
+		{name: "blank entries are ignored", hostname: "", allowedHosts: []string{"  "}, want: false},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			assert.Equal(t, test.want, MatchesAllowedHost(test.hostname, test.allowedHosts))
+		})
+	}
+}
+
+// TestTrackLinks_RewritesUppercaseHrefAttributes pins the case-insensitivity of
+// the link rewriter.
+//
+// HTML tag and attribute names are case-insensitive, and <A HREF="..."> is what
+// markup pasted from Word or Outlook routinely produces. While the regex was
+// case-sensitive such a link was skipped entirely — no click tracking, no UTM
+// parameters, no identity token — and because its lowercase neighbours in the
+// same email were rewritten normally, the loss was silent and partial.
+func TestTrackLinks_RewritesUppercaseHrefAttributes(t *testing.T) {
+	settings := TrackingSettings{
+		EnableTracking:       false, // isolate the rewrite from the /r/ wrapper
+		UTMSource:            "newsletter",
+		IdentifyToken:        "tok-abc123",
+		IdentifyAllowedHosts: []string{"shop.example.com"},
+	}
+
+	cases := []struct {
+		name string
+		html string
+	}{
+		{"uppercase attribute", `<a HREF="https://shop.example.com/p">x</a>`},
+		{"uppercase tag", `<A href="https://shop.example.com/p">x</A>`},
+		{"both uppercase", `<A HREF="https://shop.example.com/p">x</A>`},
+		{"mixed case, single quotes", `<A HrEf='https://shop.example.com/p'>x</A>`},
+		{"lowercase still works", `<a href="https://shop.example.com/p">x</a>`},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out, err := TrackLinks(tc.html, settings)
+			require.NoError(t, err)
+			assert.Contains(t, out, "utm_source=newsletter", "the link must be rewritten at all")
+			assert.Contains(t, out, "nf_id=tok-abc123", "an uppercase href must still identify")
+		})
+	}
+
+	t.Run("the author's original casing survives the rewrite", func(t *testing.T) {
+		// Only the URL is replaced; the tag and attribute are echoed back from
+		// the captured groups, so a case-insensitive match must not normalise
+		// the markup around it.
+		out, err := TrackLinks(`<A HREF="https://shop.example.com/p">x</A>`, settings)
+		require.NoError(t, err)
+		assert.Contains(t, out, `<A HREF="`, "the rewriter must not rewrite the markup's case")
+	})
+
+	t.Run("a mixed-case block does not lose one link while keeping the other", func(t *testing.T) {
+		// The shape that made this invisible in production: neighbours in one
+		// block behaving differently.
+		html := `<a href="https://shop.example.com/lower">a</a><a HREF="https://shop.example.com/upper">b</a>`
+		out, err := TrackLinks(html, settings)
+		require.NoError(t, err)
+		assert.Equal(t, 2, strings.Count(out, "nf_id=tok-abc123"), "both links must carry the token")
+	})
+}
+
+// TestApplyUTMParameters_PreservesURLBytes pins the byte-exactness of the UTM
+// append, the same guarantee applyIdentityParam already gives. Every case below
+// is one that rebuilding the URL through url.Values corrupts: "sid=1;2" and
+// "discount=50%off" are dropped by ParseQuery outright (so the customer's
+// parameter disappears from the link the recipient follows), the surviving
+// pairs come back sorted alphabetically, a valueless key grows an "=", a
+// literal space becomes "+" and the path is re-escaped.
+func TestApplyUTMParameters_PreservesURLBytes(t *testing.T) {
+	settings := &TrackingSettings{UTMSource: "email"}
+
+	tests := []struct {
+		name    string
+		linkURL string
+		want    string
+	}{
+		{
+			name:    "semicolon separated value survives",
+			linkURL: "https://example.com/page?sid=1;2",
+			want:    "https://example.com/page?sid=1;2&utm_source=email",
+		},
+		{
+			name:    "bare percent sign survives",
+			linkURL: "https://example.com/page?discount=50%off",
+			want:    "https://example.com/page?discount=50%off&utm_source=email",
+		},
+		{
+			name:    "existing parameter order is kept",
+			linkURL: "https://example.com/page?z=1&a=2&sig=abc",
+			want:    "https://example.com/page?z=1&a=2&sig=abc&utm_source=email",
+		},
+		{
+			name:    "valueless flag keeps its missing equals sign",
+			linkURL: "https://example.com/page?flag",
+			want:    "https://example.com/page?flag&utm_source=email",
+		},
+		{
+			name:    "literal space in a value is not re-encoded",
+			linkURL: "https://example.com/page?a=hello world",
+			want:    "https://example.com/page?a=hello world&utm_source=email",
+		},
+		{
+			name:    "path bytes are not re-escaped",
+			linkURL: "https://example.com/my page?a=1",
+			want:    "https://example.com/my page?a=1&utm_source=email",
+		},
+		{
+			name:    "slashes and commas kept",
+			linkURL: "https://example.com/page?redirect=/home&ids=1,2,3",
+			want:    "https://example.com/page?redirect=/home&ids=1,2,3&utm_source=email",
+		},
+		{
+			name:    "fragment stays last",
+			linkURL: "https://example.com/page?a=1#section",
+			want:    "https://example.com/page?a=1&utm_source=email#section",
+		},
+		{
+			name:    "fragment without query",
+			linkURL: "https://example.com/page#section",
+			want:    "https://example.com/page?utm_source=email#section",
+		},
+		{
+			name:    "no query gains a question mark",
+			linkURL: "https://example.com/page",
+			want:    "https://example.com/page?utm_source=email",
+		},
+		{
+			name:    "empty query reuses its question mark",
+			linkURL: "https://example.com/page?",
+			want:    "https://example.com/page?utm_source=email",
+		},
+		{
+			name:    "port survives",
+			linkURL: "https://example.com:8443/page?a=1",
+			want:    "https://example.com:8443/page?a=1&utm_source=email",
+		},
+		{
+			name:    "unicode in a value survives",
+			linkURL: "https://example.com/page?q=café",
+			want:    "https://example.com/page?q=café&utm_source=email",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			assert.Equal(t, test.want, settings.applyUTMParameters(test.linkURL))
+		})
+	}
+}
+
+// TestApplyUTMParameters_AppendsConfiguredFieldsInAscendingKeyOrder documents
+// the shape of what gets added: only the configured fields, ascending by key,
+// with only our own values escaped.
+//
+// Ascending key order is what url.Values.Encode() emitted while this function
+// still re-serialised the query, and it is held deliberately. The rewritten URL
+// is the clicked_links key per-link stats aggregate on, so a link the author
+// left unparameterised — the common case — keeps producing the exact bytes it
+// produced before, and its click history does not split.
+func TestApplyUTMParameters_AppendsConfiguredFieldsInAscendingKeyOrder(t *testing.T) {
+	all := &TrackingSettings{
+		UTMSource:   "newsletter",
+		UTMMedium:   "email",
+		UTMCampaign: "spring sale/2024",
+		UTMContent:  "hero-button",
+		UTMTerm:     "running-shoes",
+	}
+	assert.Equal(t,
+		"https://example.com/p?utm_campaign=spring+sale%2F2024&utm_content=hero-button&utm_medium=email&utm_source=newsletter&utm_term=running-shoes",
+		all.applyUTMParameters("https://example.com/p"))
+
+	// A gap in the middle does not leave an empty pair behind.
+	sparse := &TrackingSettings{UTMSource: "newsletter", UTMContent: "hero"}
+	assert.Equal(t,
+		"https://example.com/p?a=1&utm_content=hero&utm_source=newsletter",
+		sparse.applyUTMParameters("https://example.com/p?a=1"))
+}
+
+// TestApplyUTMParameters_UnchangedShapesKeepTheirHistoricalBytes is the
+// continuity half of this rewrite. Per-link click stats aggregate on the
+// rewritten URL as a jsonb key, so every link whose output changes starts a new
+// bucket the day this ships. These are the shapes that must NOT change, and
+// they are the shapes most links have: the expected strings below are the ones
+// the previous url.Values implementation produced.
+func TestApplyUTMParameters_UnchangedShapesKeepTheirHistoricalBytes(t *testing.T) {
+	broadcast := &TrackingSettings{
+		UTMSource:   "newsletter",
+		UTMMedium:   "email",
+		UTMCampaign: "spring",
+	}
+	transactional := &TrackingSettings{UTMContent: "tpl-1"}
+
+	tests := []struct {
+		name     string
+		settings *TrackingSettings
+		linkURL  string
+		want     string
+	}{
+		{
+			name:     "no existing query, every utm field",
+			settings: broadcast,
+			linkURL:  "https://shop.example.com/product",
+			want:     "https://shop.example.com/product?utm_campaign=spring&utm_medium=email&utm_source=newsletter",
+		},
+		{
+			name:     "no existing query, single utm field",
+			settings: transactional,
+			linkURL:  "https://shop.example.com/product",
+			want:     "https://shop.example.com/product?utm_content=tpl-1",
+		},
+		{
+			name:     "one existing key sorting before utm_",
+			settings: broadcast,
+			linkURL:  "https://shop.example.com/product?ref=email",
+			want:     "https://shop.example.com/product?ref=email&utm_campaign=spring&utm_medium=email&utm_source=newsletter",
+		},
+		{
+			name:     "two existing keys already in ascending order",
+			settings: transactional,
+			linkURL:  "https://shop.example.com/product?a=1&b=2",
+			want:     "https://shop.example.com/product?a=1&b=2&utm_content=tpl-1",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			assert.Equal(t, test.want, test.settings.applyUTMParameters(test.linkURL))
+		})
+	}
+}
+
+// TestApplyUTMParameters_NothingConfiguredLeavesURLUntouched is the case that
+// runs on every send with UTM disabled: with no field set there is nothing to
+// append, so the link must come back byte-for-byte.
+func TestApplyUTMParameters_NothingConfiguredLeavesURLUntouched(t *testing.T) {
+	settings := &TrackingSettings{}
+
+	for _, linkURL := range []string{
+		"https://example.com/page?sid=1;2",
+		"https://example.com/page?discount=50%off",
+		"https://example.com/page?z=1&a=2&sig=abc",
+		"https://example.com/page?flag",
+		"https://example.com/page",
+		"https://example.com/page?",
+		"https://example.com/page?a=1#top",
+	} {
+		assert.Equal(t, linkURL, settings.applyUTMParameters(linkURL))
+	}
+}
+
+// TestApplyUTMParameters_LeavesLinksCarryingUTMAlone keeps the existing
+// "already tagged -> hands off" rule, including the forms url.Values used to
+// normalise away: an uppercase key and a percent-encoded underscore.
+func TestApplyUTMParameters_LeavesLinksCarryingUTMAlone(t *testing.T) {
+	settings := &TrackingSettings{UTMSource: "email", UTMMedium: "newsletter"}
+
+	for _, linkURL := range []string{
+		"https://example.com/page?utm_source=existing",
+		"https://example.com/page?a=1&utm_campaign=mine&b=2",
+		"https://example.com/page?UTM_SOURCE=existing",
+		"https://example.com/page?utm%5Fsource=existing",
+		"https://example.com/page?utm_source=x&sid=1;2",
+		"https://example.com/page?utm_term=x#top",
+	} {
+		assert.Equal(t, linkURL, settings.applyUTMParameters(linkURL))
+	}
+
+	// A value that merely looks like a utm key is not a utm key.
+	assert.Equal(t,
+		"https://example.com/page?ref=utm_source&utm_medium=newsletter&utm_source=email",
+		settings.applyUTMParameters("https://example.com/page?ref=utm_source"))
+}
+
+// TestApplyUTMParameters_DefensiveCases exercises the guards directly, since
+// TrackLinks filters some of these out before the method is reached.
+func TestApplyUTMParameters_DefensiveCases(t *testing.T) {
+	settings := &TrackingSettings{UTMSource: "email"}
+
+	for _, sourceURL := range []string{
+		"",
+		"mailto:hello@example.com",
+		"tel:+33123456789",
+		"{{ unsubscribe_url }}",
+		"{% if x %}https://example.com{% endif %}",
+		"://example.com/broken",
+		"https://example.com/50%off/page", // invalid percent-escape in the path
+	} {
+		assert.Equal(t, sourceURL, settings.applyUTMParameters(sourceURL))
+	}
+
+	// A relative link is still a link: it is what an mj-button pointing at the
+	// hosted page carries, and it must be tagged like any other.
+	assert.Equal(t, "/relative/path?utm_source=email", settings.applyUTMParameters("/relative/path"))
+}
+
+// TestTrackLinks_UTMKeepsHandBuiltQuery is the end-to-end version: a customer's
+// hand-built query must reach the recipient intact even though the send path
+// always has a utm_content to append.
+func TestTrackLinks_UTMKeepsHandBuiltQuery(t *testing.T) {
+	settings := TrackingSettings{
+		EnableTracking: false, // isolate the rewrite from the /r/ wrapper
+		UTMContent:     "tpl-123",
+	}
+
+	html := `<html><body><a href="https://example.com/page?sid=1;2&sig=abc#top">Link</a></body></html>`
+
+	result, err := TrackLinks(html, settings)
+	require.NoError(t, err)
+	assert.Equal(t,
+		`<html><body><a href="https://example.com/page?sid=1;2&sig=abc&utm_content=tpl-123#top">Link</a></body></html>`,
+		result)
+}
+
+// TestMatchesAllowedHost_PortInAllowlistEntry covers a stored allowlist entry
+// that carries a port. The hostname side never has one — every caller passes
+// url.Hostname(), which strips it — so an entry written as "example.com:443"
+// could never match anything at all, silently disabling that entry.
+func TestMatchesAllowedHost_PortInAllowlistEntry(t *testing.T) {
+	tests := []struct {
+		name         string
+		hostname     string
+		allowedHosts []string
+		want         bool
+	}{
+		{name: "exact entry with port", hostname: "example.com", allowedHosts: []string{"example.com:443"}, want: true},
+		{name: "port on the entry is not a host", hostname: "example.com", allowedHosts: []string{"example.com:8443"}, want: true},
+		{name: "wildcard entry with port covers apex", hostname: "example.com", allowedHosts: []string{"*.example.com:443"}, want: true},
+		{name: "wildcard entry with port covers subdomain", hostname: "shop.example.com", allowedHosts: []string{"*.example.com:443"}, want: true},
+		{name: "entry with port keeps its case insensitivity", hostname: "Example.COM", allowedHosts: []string{" EXAMPLE.com:443 "}, want: true},
+		{name: "entry with port still excludes a lookalike", hostname: "notexample.com", allowedHosts: []string{"example.com:443"}, want: false},
+		{name: "bare TLD wildcard with port still matches nothing", hostname: "example.com", allowedHosts: []string{"*.com:443"}, want: false},
+		{name: "ipv6 entry with port", hostname: "::1", allowedHosts: []string{"[::1]:8080"}, want: true},
+		{name: "bare ipv6 entry is not mistaken for a port", hostname: "::1", allowedHosts: []string{"::1"}, want: true},
+		// Only a numeric port comes off. net.SplitHostPort reads
+		// "https://example.com" as host "https" with port "//example.com", and
+		// letting that through would make the entry match the hostname "https",
+		// which it does not name. Everything below is a malformed entry that
+		// simply matches nothing — the direction that releases no identity.
+		{name: "a scheme is not a port", hostname: "https", allowedHosts: []string{"https://example.com"}, want: false},
+		{name: "a path is not a port", hostname: "example.com", allowedHosts: []string{"example.com:443/path"}, want: false},
+		{name: "a trailing colon names no port", hostname: "example.com", allowedHosts: []string{"example.com:"}, want: false},
+		{name: "wildcard with nothing but a port matches nothing", hostname: "example.com", allowedHosts: []string{"*.:443"}, want: false},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			assert.Equal(t, test.want, MatchesAllowedHost(test.hostname, test.allowedHosts))
+		})
+	}
+}
+
+// TestMatchesAllowedHost_ExactEntryNeverCoversSubdomains pins the matcher's
+// narrowness so a later "helpful" relaxation fails here.
+//
+// Only "*.example.com" covers the apex plus its subdomains; a bare
+// "example.com" is that host and nothing else. This matcher is shared with the
+// beat-origin gate (domain.WebAnalyticsSettings.MatchesAllowedDomain delegates
+// to it), so widening it would also start accepting analytics beats from
+// origins the workspace never listed — and on this side it would hand a
+// recipient's bearer identity to a host the workspace never named.
+func TestMatchesAllowedHost_ExactEntryNeverCoversSubdomains(t *testing.T) {
+	for _, hostname := range []string{
+		"www.example.com",
+		"shop.example.com",
+		"a.b.example.com",
+		"evil.example.com",
+	} {
+		assert.False(t, MatchesAllowedHost(hostname, []string{"example.com"}),
+			"a bare entry must cover its own host only: %s", hostname)
+		assert.False(t, MatchesAllowedHost(hostname, []string{"example.com:443"}),
+			"stripping the port must not widen the entry: %s", hostname)
+		assert.True(t, MatchesAllowedHost(hostname, []string{"*.example.com"}),
+			"only the wildcard covers subdomains: %s", hostname)
+	}
+
+	// The apex is still matched by both forms.
+	assert.True(t, MatchesAllowedHost("example.com", []string{"example.com"}))
+	assert.True(t, MatchesAllowedHost("example.com", []string{"*.example.com"}))
 }

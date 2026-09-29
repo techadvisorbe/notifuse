@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"math"
 	"math/rand"
 	"strings"
 	"time"
@@ -39,7 +40,12 @@ type DemoService struct {
 	inboundWebhookEventRepo          domain.InboundWebhookEventRepository
 	broadcastRepo                    domain.BroadcastRepository
 	customEventRepo                  domain.CustomEventRepository
+	webAnalyticsRepo                 domain.WebAnalyticsRepository
+	annotationRepo                   domain.AnnotationRepository
 	webhookSubscriptionService       *WebhookSubscriptionService
+	// Interface-typed, like segmentService above, so the seeded-automation guard tests can build a
+	// DemoService with a generated mock. *AutomationService satisfies it, so app.go passes its own.
+	automationService domain.AutomationService
 }
 
 // Sample data arrays for contact generation
@@ -114,7 +120,10 @@ func NewDemoService(
 	inboundWebhookEventRepo domain.InboundWebhookEventRepository,
 	broadcastRepo domain.BroadcastRepository,
 	customEventRepo domain.CustomEventRepository,
+	webAnalyticsRepo domain.WebAnalyticsRepository,
+	annotationRepo domain.AnnotationRepository,
 	webhookSubscriptionService *WebhookSubscriptionService,
+	automationService domain.AutomationService,
 ) *DemoService {
 	return &DemoService{
 		logger:                           logger,
@@ -140,7 +149,10 @@ func NewDemoService(
 		inboundWebhookEventRepo:          inboundWebhookEventRepo,
 		broadcastRepo:                    broadcastRepo,
 		customEventRepo:                  customEventRepo,
+		webAnalyticsRepo:                 webAnalyticsRepo,
+		annotationRepo:                   annotationRepo,
 		webhookSubscriptionService:       webhookSubscriptionService,
+		automationService:                automationService,
 	}
 }
 
@@ -243,9 +255,9 @@ func (s *DemoService) createDemoWorkspace(ctx context.Context) error {
 	workspace, err := s.workspaceService.CreateWorkspace(
 		authenticatedCtx,
 		workspaceID,
-		"Demo Workspace",
-		"https://demo.notifuse.com",
-		"https://www.notifuse.com/apple-touch-icon.png",
+		"Apple",
+		"https://www.apple.com",
+		"https://www.apple.com/ac/structured-data/images/knowledge_graph_logo.png",
 		"https://demo.notifuse.com/cover.png",
 		"UTC",
 		fileManagerSettings,
@@ -263,23 +275,23 @@ func (s *DemoService) createDemoWorkspace(ctx context.Context) error {
 		// Don't fail the entire operation if SMTP integration creation fails
 	}
 
-	// Add comprehensive sample data to the workspace
-	if err := s.addSampleData(authenticatedCtx, workspace.ID); err != nil {
+	// Add comprehensive sample data to the workspace.
+	//
+	// Detached from the caller's connection for its whole length, not just for
+	// the web analytics step. A reset takes tens of seconds and the server sets
+	// no request timeouts, so the only way this context dies is the operator
+	// closing the tab or a proxy giving up — and every step here aborts the rest
+	// on error. Half a demo, silently, is the worst outcome available; the reset
+	// is manually triggered, HMAC-gated and behind a five-minute rate limit, so
+	// there is nobody for cancellation to protect.
+	if err := s.addSampleData(context.WithoutCancel(authenticatedCtx), workspace.ID); err != nil {
 		s.logger.WithField("workspace_id", workspace.ID).WithField("error", err.Error()).Warn("Failed to add sample data to demo workspace")
 		// Don't fail the entire operation if sample data creation fails
 	}
 
 	// Create webhook subscription AFTER sample data so DB triggers don't fire
 	// for all the seed data, avoiding thousands of unnecessary webhook deliveries
-	_, err = s.webhookSubscriptionService.Create(
-		authenticatedCtx,
-		workspace.ID,
-		"Demo Webhook",
-		"https://webhook.site/demo",
-		domain.WebhookEventTypes, // Subscribe to all event types
-		nil,
-	)
-	if err != nil {
+	if err := s.createDemoWebhookSubscription(authenticatedCtx, workspace.ID); err != nil {
 		s.logger.WithField("workspace_id", workspace.ID).WithField("error", err.Error()).Warn("Failed to create demo webhook subscription")
 		// Non-fatal - continue with demo setup
 	} else {
@@ -289,9 +301,65 @@ func (s *DemoService) createDemoWorkspace(ctx context.Context) error {
 	return nil
 }
 
+// createDemoWebhookSubscription adds the demo's webhook subscription, switched off.
+//
+// It exists so the console has one to show — subscribing to every event type, so
+// the event list is worth reading — but it must not deliver. The trigger
+// functions fan out to `enabled = true` subscriptions only, so an enabled one
+// would write a webhook_deliveries row for every contact, event and message the
+// demo produces, and the delivery worker would then retry each of them up to ten
+// times against a placeholder URL that answers nothing. Anyone who wants to watch
+// it work can point it at their own endpoint and toggle it on.
+//
+// Created enabled and then switched off, because Create has no say in it. If the
+// switch-off fails the subscription is removed rather than left running: shipping
+// an enabled firehose is the one outcome this function exists to prevent, and a
+// demo without a webhook example is a much smaller loss.
+func (s *DemoService) createDemoWebhookSubscription(ctx context.Context, workspaceID string) error {
+	const (
+		name = "Demo Webhook"
+		url  = "https://webhook.site/demo"
+	)
+
+	subscription, err := s.webhookSubscriptionService.Create(
+		ctx, workspaceID, name, url,
+		domain.WebhookEventTypes, // Subscribe to all event types
+		nil,
+		// User-created, and unfiltered on both lists and segments: the demo
+		// subscription exists to show the console what the full event surface
+		// looks like, so narrowing it would defeat the point.
+		domain.WebhookSubscriptionSourceUser, nil, nil,
+	)
+	if err != nil {
+		return err
+	}
+
+	disabled := false
+	if _, err := s.webhookSubscriptionService.Update(
+		ctx, workspaceID, subscription.ID, name, url, domain.WebhookEventTypes, nil, &disabled, nil, nil,
+	); err != nil {
+		if deleteErr := s.webhookSubscriptionService.Delete(ctx, workspaceID, subscription.ID); deleteErr != nil {
+			s.logger.WithField("workspace_id", workspaceID).
+				WithField("subscription_id", subscription.ID).
+				WithField("error", deleteErr.Error()).
+				Error("Demo webhook subscription is enabled and could not be removed")
+		}
+		return fmt.Errorf("failed to disable the demo webhook subscription: %w", err)
+	}
+
+	return nil
+}
+
 // addSampleData adds comprehensive sample data including 1000 contacts, templates, and broadcasts
 func (s *DemoService) addSampleData(ctx context.Context, workspaceID string) error {
 	s.logger.WithField("workspace_id", workspaceID).Info("Adding comprehensive sample data to demo workspace")
+
+	// One clock for the whole run. The traffic window (step 3b) and the launch
+	// annotation that marks its spike (step 10) are separated by the broadcasts,
+	// a thousand contacts' message history, the segments and the automations —
+	// long enough for a reset started just before UTC midnight to read two
+	// different days and leave the marker a day off the peak it explains.
+	now := time.Now().UTC()
 
 	// Step 1: Create sample templates first
 	if err := s.createSampleTemplates(ctx, workspaceID); err != nil {
@@ -311,10 +379,27 @@ func (s *DemoService) addSampleData(ctx context.Context, workspaceID string) err
 		return err
 	}
 
-	// Step 3b: Generate sample custom events to simulate e-commerce transactions
-	if err := s.generateSampleCustomEvents(ctx, workspaceID); err != nil {
-		s.logger.WithField("error", err.Error()).Warn("Failed to create sample custom events")
-		// Don't fail the entire operation if custom events creation fails
+	// Step 3b: Generate the web analytics history, which is also where the demo's
+	// e-commerce transactions come from — every purchase belongs to a session, on
+	// a product page, at the end of a funnel the visitor actually walked.
+	//
+	// Runs after contacts because a share of the sessions are attributed to them,
+	// and before segments (step 8) because a segment built against an empty event
+	// table is only populated later, asynchronously, by the recomputation queue —
+	// which shows up as a demo whose audiences are empty for the first minute
+	// after a reset.
+	//
+	// It stays synchronous deliberately. At this volume the write is seconds, not
+	// minutes, and a goroutine whose only purpose is to let a manually-triggered
+	// admin endpoint return sooner is complexity with no user behind it. The point
+	// where that changes is a measured one: if seeding on the demo host ever runs
+	// past roughly 45 seconds, split it rather than backgrounding it wholesale —
+	// write the most recent ~35 days synchronously, since the default view is the
+	// last 7 days and the demo is complete the moment the response returns, and
+	// finish the older months behind the reset mutex.
+	if err := s.seedWebAnalytics(ctx, workspaceID, now); err != nil {
+		s.logger.WithField("error", err.Error()).Warn("Failed to generate demo web analytics")
+		// Non-fatal: the rest of the demo is still usable without it.
 	}
 
 	// Step 4: Subscribe all contacts to the newsletter list
@@ -342,10 +427,35 @@ func (s *DemoService) addSampleData(ctx context.Context, workspaceID string) err
 		return err
 	}
 
-	// Step 8: Create sample segments
+	// Step 8: Create sample segments, last, so every one of them is built against
+	// data that is already in place.
 	if err := s.createSampleSegments(ctx, workspaceID); err != nil {
 		s.logger.WithField("error", err.Error()).Warn("Failed to create sample segments")
 		return err
+	}
+
+	// Step 9: Create the showcase automations, last of all. Two reasons for the position, and both
+	// are load-bearing.
+	//
+	// After segments (step 8), because two of the five trigger on segment ids that do not exist
+	// until then. And after everything else, because activating an automation installs an AFTER
+	// INSERT trigger on contact_timeline: installed any earlier it would enroll a contact for every
+	// row the rest of the seed writes, and with every_time frequency and repeat buyers that burst
+	// collides with contact_automations' UNIQUE(automation_id, contact_email, entered_at) inside the
+	// custom-events batch transaction — which would abort it and take the demo's whole conversion
+	// history with it.
+	if err := s.createSampleAutomations(ctx, workspaceID); err != nil {
+		s.logger.WithField("error", err.Error()).Warn("Failed to create sample automations")
+		// Non-fatal: the rest of the demo is still usable without them.
+	}
+
+	// Step 10: Annotate the charts. It has to run after the web analytics (step 3b),
+	// which is what puts the launch spike on the chart the manual annotation points
+	// at, and after the broadcasts (step 5), because one annotation per broadcast is
+	// read back from the broadcast rows.
+	if err := s.seedAnnotations(ctx, workspaceID, now); err != nil {
+		s.logger.WithField("error", err.Error()).Warn("Failed to seed demo annotations")
+		// Non-fatal: the rest of the demo is still usable without them.
 	}
 
 	s.logger.WithField("workspace_id", workspaceID).Info("Comprehensive sample data added successfully")
@@ -447,8 +557,20 @@ func (s *DemoService) generateSampleContactsBatch(count int, startIndex int) []*
 		lastName := getRandomElement(lastNames)
 		email := generateEmail(firstName, lastName, startIndex+i)
 
-		// Add some randomness to creation times (spread over last 6 months)
-		createdAt := time.Now().AddDate(0, -6, 0).Add(time.Duration(rand.Intn(180*24)) * time.Hour)
+		// Spread over the same window the web analytics history covers. Six
+		// months used to be enough because the purchase history was invented
+		// alongside the contact; now it comes from the site's own traffic, and a
+		// list that is younger than the traffic leaves contacts whose first
+		// recorded visit predates their own "Contact created" entry.
+		//
+		// Weighted towards the older end (the square root of a uniform draw), so
+		// the list looks like one that grew fast and then settled rather than one
+		// where a third of the members joined last month. It also decides how
+		// much of the demo is worth opening: a contact can only be attributed
+		// visits made after they signed up, so a list skewed recent would leave
+		// half the workspace with an empty browsing history.
+		age := math.Sqrt(rand.Float64()) * float64(demoWebAnalyticsDays) * 24
+		createdAt := time.Now().Add(-time.Duration(age) * time.Hour)
 
 		contact := &domain.Contact{
 			Email:     email,
@@ -467,93 +589,13 @@ func (s *DemoService) generateSampleContactsBatch(count int, startIndex int) []*
 	return contacts
 }
 
-// generateSampleCustomEvents creates sample custom events to simulate e-commerce transactions
-func (s *DemoService) generateSampleCustomEvents(ctx context.Context, workspaceID string) error {
-	s.logger.WithField("workspace_id", workspaceID).Info("Generating sample custom events for e-commerce simulation")
-
-	// Get all contacts to create events for
-	contactsReq := &domain.GetContactsRequest{
-		WorkspaceID: workspaceID,
-		Limit:       1000,
-	}
-
-	contactsResp, err := s.contactService.GetContacts(ctx, contactsReq)
-	if err != nil {
-		return fmt.Errorf("failed to get contacts for custom events: %w", err)
-	}
-
-	if len(contactsResp.Contacts) == 0 {
-		s.logger.WithField("workspace_id", workspaceID).Info("No contacts found, skipping custom events generation")
-		return nil
-	}
-
-	// Sample product names for realistic demo data
-	productNames := []string{
-		"Premium Subscription", "Basic Plan", "Pro License", "Enterprise Package",
-		"Widget Pack", "Service Credit", "Annual Membership", "Monthly Bundle",
-		"Starter Kit", "Professional Tools", "Digital Download", "Consulting Hour",
-	}
-
-	totalEvents := 0
-
-	// 70% of contacts have purchase history
-	for _, contact := range contactsResp.Contacts {
-		if rand.Float32() >= 0.7 {
-			continue // Skip 30% of contacts
-		}
-
-		// Generate 1-5 purchase events per contact
-		numPurchases := 1 + rand.Intn(5)
-		contactCreatedAt := contact.CreatedAt
-
-		for j := 0; j < numPurchases; j++ {
-			// Spread purchases over time after contact creation
-			daysAfterCreation := rand.Intn(180) // Up to 6 months after signup
-			purchaseTime := contactCreatedAt.Add(time.Duration(daysAfterCreation*24) * time.Hour)
-
-			// Don't create events in the future
-			if purchaseTime.After(time.Now()) {
-				purchaseTime = time.Now().Add(-time.Duration(rand.Intn(30*24)) * time.Hour)
-			}
-
-			// Generate purchase value (between $10 and $500)
-			purchaseValue := 10.0 + rand.Float64()*490.0
-			purchaseValue = float64(int(purchaseValue*100)) / 100 // Round to 2 decimal places
-
-			goalType := "purchase"
-			goalName := "E-commerce Purchase"
-
-			customEvent := &domain.CustomEvent{
-				ExternalID: fmt.Sprintf("demo_purchase_%s_%d_%d", contact.Email, j, purchaseTime.Unix()),
-				Email:      contact.Email,
-				EventName:  "purchase",
-				Properties: map[string]interface{}{
-					"product_name": getRandomElement(productNames),
-					"quantity":     1 + rand.Intn(3),
-					"currency":     "USD",
-					"order_id":     fmt.Sprintf("ORD-%d", 10000+rand.Intn(90000)),
-				},
-				OccurredAt: purchaseTime,
-				Source:     "demo",
-				GoalName:   &goalName,
-				GoalType:   &goalType,
-				GoalValue:  &purchaseValue,
-				CreatedAt:  purchaseTime,
-				UpdatedAt:  purchaseTime,
-			}
-
-			if err := s.customEventRepo.Upsert(ctx, workspaceID, customEvent); err != nil {
-				s.logger.WithField("email", contact.Email).WithField("error", err.Error()).Debug("Failed to create custom event")
-				continue
-			}
-
-			totalEvents++
-		}
-	}
-
-	s.logger.WithField("workspace_id", workspaceID).WithField("total_events", totalEvents).Info("Sample custom events generation completed")
-	return nil
-}
+// The demo used to invent its purchase history here: a loop that gave 70% of
+// contacts one to five orders with a random product and a random date. It was
+// deleted when the web analytics funnel started producing real ones. An order
+// with no session, no product page and no cart behind it cannot appear on a
+// timeline next to the visit that produced it, and it made the abandoned-cart
+// audiences meaningless — every contact already had a purchase, so nobody had
+// abandoned anything. See seedDemoWebGoalEvents in demo_web_analytics.go.
 
 // generateEmail creates a realistic email address
 func generateEmail(firstName, lastName string, index int) string {
@@ -594,6 +636,27 @@ func (s *DemoService) createSampleLists(ctx context.Context, workspaceID string)
 
 	if err := s.listService.CreateList(ctx, workspaceID, newsletterList); err != nil {
 		return fmt.Errorf("failed to create newsletter list: %w", err)
+	}
+
+	// A second list, so the automations that move contacts between audiences have somewhere to move
+	// them. With one list, add_to_list, remove_from_list and list_status_branch are all either no-ops
+	// or self-referential.
+	//
+	// The ID has to be alphanumeric — no hyphens, no underscores (domain/list.go, govalidator
+	// .IsAlphanumeric). "vip-club" fails validation here, and because this function returns its error
+	// that would abort the whole seed at step 2: no contacts, no analytics, no segments.
+	vipList := &domain.List{
+		ID:            "vipclub",
+		Name:          "VIP Club",
+		IsDoubleOptin: false,
+		IsPublic:      false,
+		Description:   "Top customers, promoted automatically after their first purchase",
+		CreatedAt:     time.Now(),
+		UpdatedAt:     time.Now(),
+	}
+
+	if err := s.listService.CreateList(ctx, workspaceID, vipList); err != nil {
+		return fmt.Errorf("failed to create VIP club list: %w", err)
 	}
 
 	s.logger.WithField("workspace_id", workspaceID).Info("Sample lists created successfully")
@@ -809,6 +872,12 @@ func (s *DemoService) createSampleTemplates(ctx context.Context, workspaceID str
 
 	if err := s.templateService.CreateTemplate(ctx, workspaceID, passwordResetTemplate); err != nil {
 		s.logger.WithField("error", err.Error()).Warn("Failed to create password reset template")
+	}
+
+	// The templates the showcase automations send. They live in their own file because they share one
+	// MJML builder rather than carrying a bespoke one each.
+	if err := s.createAutomationTemplates(ctx, workspaceID); err != nil {
+		s.logger.WithField("error", err.Error()).Warn("Failed to create automation templates")
 	}
 
 	s.logger.WithField("workspace_id", workspaceID).Info("Sample templates created successfully")
@@ -1413,71 +1482,69 @@ func (s *DemoService) createWelcomeMJMLStructure(c welcomeContent) notifuse_mjml
 	return &notifuse_mjml.MJMLBlock{BaseBlock: rootBase7}
 }
 
+// demoBroadcastUTMSource is the utm_source the sample broadcasts tag their
+// links with.
+const demoBroadcastUTMSource = "demo.notifuse.com"
+
+// demoBroadcastCampaigns are the sample broadcasts, the utm_campaign each one
+// tags its links with, and the template behind each of its variations.
+//
+// The web analytics seeder emits sessions under these same campaign names, one
+// per variation carrying the template id as utm_content, exactly as a real send
+// stamps it (demo_web_analytics_catalog.go). The two seeders ran independently
+// and each picked its own names, which left every broadcast pointing at an
+// empty report.
+var demoBroadcastCampaigns = []struct {
+	Name     string
+	Campaign string
+	// One template id per variation. A send writes utm_content from it, so
+	// these are what a per-variation report filters on.
+	Templates []string
+}{
+	{"Weekly Newsletter #1", "weekly_newsletter_1", []string{"newsletter-weekly"}},
+	{"Weekly Newsletter #2", "weekly_newsletter_2", []string{"newsletter-weekly-v2"}},
+	{"Weekly Newsletter #3", "weekly_newsletter_3", []string{"newsletter-weekly"}},
+	{"Weekly Newsletter #4 - A/B Test", "weekly_newsletter_4",
+		[]string{"newsletter-weekly", "newsletter-weekly-v2"}},
+}
+
 // createSampleBroadcasts creates multiple sample broadcast campaigns and returns their IDs
 func (s *DemoService) createSampleBroadcasts(ctx context.Context, workspaceID string) ([]string, error) {
 	s.logger.WithField("workspace_id", workspaceID).Info("Creating sample broadcasts")
 
 	var broadcastIDs []string
 
-	// Create 4 newsletter broadcasts to simulate recent campaigns
-	broadcasts := []struct {
-		name     string
-		campaign string
-	}{
-		{"Weekly Newsletter #1", "weekly_newsletter_1"},
-		{"Weekly Newsletter #2", "weekly_newsletter_2"},
-		{"Weekly Newsletter #3", "weekly_newsletter_3"},
-		{"Weekly Newsletter #4 - A/B Test", "weekly_newsletter_4"},
-	}
+	broadcasts := demoBroadcastCampaigns
 
 	for i, bc := range broadcasts {
-		var variations []domain.BroadcastVariation
-
-		// Last broadcast has A/B test enabled
-		if i == len(broadcasts)-1 {
-			variations = []domain.BroadcastVariation{
-				{
-					VariationName: "variation-a",
-					TemplateID:    "newsletter-weekly",
-				},
-				{
-					VariationName: "variation-b",
-					TemplateID:    "newsletter-weekly-v2",
-				},
-			}
-		} else {
-			// Alternate between templates for other broadcasts
-			templateID := "newsletter-weekly"
-			if i%2 == 1 {
-				templateID = "newsletter-weekly-v2"
-			}
-			variations = []domain.BroadcastVariation{
-				{
-					VariationName: "variation-a",
-					TemplateID:    templateID,
-				},
-			}
+		// Variations follow the templates declared alongside the campaign, so the
+		// utm_content a send stamps stays in step with the seeded sessions.
+		variations := make([]domain.BroadcastVariation, 0, len(bc.Templates))
+		for v, templateID := range bc.Templates {
+			variations = append(variations, domain.BroadcastVariation{
+				VariationName: fmt.Sprintf("variation-%c", 'a'+rune(v)),
+				TemplateID:    templateID,
+			})
 		}
 
 		broadcastReq := &domain.CreateBroadcastRequest{
 			WorkspaceID: workspaceID,
-			Name:        bc.name,
+			Name:        bc.Name,
 			Audience: domain.AudienceSettings{
 				List:                "newsletter",
 				Segments:            []string{},
 				ExcludeUnsubscribed: true,
 			},
 			TestSettings: domain.BroadcastTestSettings{
-				Enabled:          i == len(broadcasts)-1, // Only enable A/B test for last broadcast
+				Enabled:          len(bc.Templates) > 1, // A broadcast with more than one template is the A/B test
 				SamplePercentage: 10,
 				AutoSendWinner:   false,
 				Variations:       variations,
 			},
-			TrackingEnabled: true,
 			UTMParameters: &domain.UTMParameters{
-				Source:   "demo.notifuse.com",
+				Source:   demoBroadcastUTMSource,
 				Medium:   "email",
-				Campaign: bc.campaign,
+				Campaign: bc.Campaign,
 				Term:     "",
 				Content:  "",
 			},
@@ -1509,7 +1576,7 @@ func (s *DemoService) createSampleBroadcasts(ctx context.Context, workspaceID st
 		// hardcoding it, and set the test/winner phase timestamps so the record matches a
 		// genuine winner selection. WinningTemplate/*SentAt are top-level columns
 		// persisted by UpdateBroadcast below.
-		if i == len(broadcasts)-1 && len(variations) > 0 {
+		if len(variations) > 1 {
 			winner := variations[len(variations)-1].TemplateID
 			winnerSentTime := sentTime.Add(1 * time.Hour)
 			broadcast.WinningTemplate = &winner
@@ -1524,7 +1591,7 @@ func (s *DemoService) createSampleBroadcasts(ctx context.Context, workspaceID st
 		}
 
 		broadcastIDs = append(broadcastIDs, broadcast.ID)
-		s.logger.WithField("broadcast_id", broadcast.ID).WithField("name", bc.name).WithField("status", "sent").Info("Sample broadcast created and marked as sent")
+		s.logger.WithField("broadcast_id", broadcast.ID).WithField("name", bc.Name).WithField("status", "sent").Info("Sample broadcast created and marked as sent")
 	}
 
 	if len(broadcastIDs) == 0 {
@@ -2259,6 +2326,130 @@ func (s *DemoService) createSampleSegments(ctx context.Context, workspaceID stri
 		s.logger.Info("Created Engaged Users segment")
 	}
 
+	// Segment 4: Win-back Opportunities (negated goal) - demonstrates "has not done X in the last
+	// N days", combined with the positive condition that makes it a win-back rather than a
+	// prospecting list: someone who bought at some point, and has not bought since.
+	//
+	// The negated leaf carries the interesting half. Its aggregation compiles to a subquery grouped
+	// by contact, so a contact with zero matching events produces no group and can never satisfy
+	// the comparison however it is written — NOT EXISTS is the only form that also matches the
+	// people who never converted, which is what "has not purchased" has to mean.
+	//
+	// The "anytime" leaf then excludes those never-buyers again. Without it the segment is every
+	// contact who is not a recent customer, which on this demo is over 90% of the workspace: the
+	// purchase history now comes from the web funnel (see seedDemoWebGoalEvents), where a few
+	// hundred contacts have ever bought rather than the 700 the old invented order rows gave
+	// everybody.
+	winbackSegment := &domain.CreateSegmentRequest{
+		WorkspaceID: workspaceID,
+		ID:          "winback_opportunities",
+		Name:        "Win-back Opportunities",
+		Color:       "volcano",
+		Timezone:    "UTC",
+		Tree: demoSegmentAllOf(
+			// Bought at least once, ever.
+			demoGoalLeaf(&domain.CustomEventsGoalCondition{
+				GoalType:          domain.GoalTypePurchase,
+				AggregateOperator: "count",
+				Operator:          "gte",
+				Value:             1.0,
+				TimeframeOperator: "anytime",
+			}),
+			demoNoPurchaseInLast90Days(),
+		),
+	}
+
+	if _, err := s.segmentService.CreateSegment(ctx, winbackSegment); err != nil {
+		s.logger.WithField("error", err.Error()).Warn("Failed to create Win-back Opportunities segment")
+	} else {
+		s.logger.Info("Created Win-back Opportunities segment")
+	}
+
+	// Segments 5 and 6: the abandonment audiences, the pair that shows what web analytics is for.
+	// Both are goals the visitor fired on the site — recorded as custom events by the same bridge
+	// that records live traffic — crossed with the absence of the goal that would have completed
+	// the funnel.
+	//
+	// Matched on event_name rather than goal_type: add_to_cart and checkout_start are both typed
+	// "other" (only a purchase carries revenue), so the type alone cannot tell a cart from a
+	// checkout.
+	abandonment := []struct {
+		id, name, color, eventName string
+	}{
+		{"cart_abandoners", "Cart Abandoners", "orange", "add_to_cart"},
+		{"checkout_abandoners", "Checkout Abandoners", "magenta", "checkout_start"},
+	}
+
+	for _, segment := range abandonment {
+		eventName := segment.eventName
+		request := &domain.CreateSegmentRequest{
+			WorkspaceID: workspaceID,
+			ID:          segment.id,
+			Name:        segment.name,
+			Color:       segment.color,
+			Timezone:    "UTC",
+			Tree: demoSegmentAllOf(
+				demoGoalLeaf(&domain.CustomEventsGoalCondition{
+					// Any type: the cart and checkout steps carry no revenue and so are
+					// typed "other", which "*" covers without naming it.
+					GoalType:          "*",
+					EventName:         &eventName,
+					AggregateOperator: "count",
+					Operator:          "gte",
+					Value:             1.0,
+					TimeframeOperator: "in_the_last_days",
+					TimeframeValues:   []string{"90"},
+				}),
+				demoNoPurchaseInLast90Days(),
+			),
+		}
+
+		if _, err := s.segmentService.CreateSegment(ctx, request); err != nil {
+			s.logger.WithField("segment", segment.id).WithField("error", err.Error()).
+				Warn("Failed to create abandonment segment")
+		} else {
+			s.logger.WithField("segment", segment.id).Info("Created abandonment segment")
+		}
+	}
+
 	s.logger.WithField("workspace_id", workspaceID).Info("Sample segments created successfully")
 	return nil
+}
+
+// demoNoPurchaseInLast90Days is the leaf every abandonment audience hangs on, and the one the
+// win-back segment reuses. Shared so the three cannot drift apart: an audience of people who did
+// not buy is only meaningful next to the others if they all agree on what "did not buy" means.
+func demoNoPurchaseInLast90Days() *domain.TreeNode {
+	return demoGoalLeaf(&domain.CustomEventsGoalCondition{
+		GoalType:          domain.GoalTypePurchase,
+		AggregateOperator: "count",
+		Operator:          "gte",
+		Value:             1.0,
+		TimeframeOperator: "in_the_last_days",
+		TimeframeValues:   []string{"90"},
+		Negate:            true,
+	})
+}
+
+func demoGoalLeaf(condition *domain.CustomEventsGoalCondition) *domain.TreeNode {
+	return &domain.TreeNode{
+		Kind: "leaf",
+		Leaf: &domain.TreeNodeLeaf{
+			Source:           "custom_events_goals",
+			CustomEventsGoal: condition,
+		},
+	}
+}
+
+// demoSegmentAllOf wraps conditions in an AND branch. The root has to be a branch even for a single
+// condition: the console's segment builder renders the root as a branch unconditionally, so a bare
+// leaf compiles and runs correctly but cannot be opened for editing.
+func demoSegmentAllOf(leaves ...*domain.TreeNode) *domain.TreeNode {
+	return &domain.TreeNode{
+		Kind: "branch",
+		Branch: &domain.TreeNodeBranch{
+			Operator: "and",
+			Leaves:   leaves,
+		},
+	}
 }

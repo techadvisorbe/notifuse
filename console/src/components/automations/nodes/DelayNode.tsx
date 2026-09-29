@@ -4,15 +4,15 @@ import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
 import { faHourglass } from '@fortawesome/free-regular-svg-icons'
 import { useLingui } from '@lingui/react/macro'
 import { BaseNode } from './BaseNode'
-import { nodeTypeColors } from './constants'
-import type { AutomationNodeData } from '../utils/flowConverter'
+import { nodeTypeColors, getNodeDescription } from './constants'
+import type { AutomationFlowNode, Structural } from '../utils/flowConverter'
 import type { DelayNodeConfig } from '../../../services/api/automation'
 
-type DelayNodeProps = NodeProps<AutomationNodeData>
+type DelayNodeProps = NodeProps<AutomationFlowNode>
 
 export const DelayNode: React.FC<DelayNodeProps> = ({ data, selected }) => {
   const { t } = useLingui()
-  const config = data.config as DelayNodeConfig
+  const config = data.config as Structural<DelayNodeConfig>
   const duration = config?.duration || 0
   const unit = config?.unit || 'minutes'
 
@@ -43,6 +43,7 @@ export const DelayNode: React.FC<DelayNodeProps> = ({ data, selected }) => {
       <BaseNode
         type="delay"
         label={t`Delay`}
+        description={getNodeDescription(data.config)}
         icon={<FontAwesomeIcon icon={faHourglass} style={{ color: selected ? undefined : nodeTypeColors.delay }} />}
         selected={selected}
         isOrphan={data.isOrphan}

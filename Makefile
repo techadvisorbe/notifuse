@@ -17,8 +17,10 @@ e2e-test-within-cursor-agent:
 	@./run-integration-tests.sh "Test" 2>&1 | grep -E "PASS|FAIL|^ok|===|^---" || true
 	@echo "\n✅ All integration tests completed"
 
+# -tags integration is required: without it the scheduler/dispatch tests are
+# silently excluded, which is exactly the machinery most likely to regress.
 test-integration:
-	INTEGRATION_TESTS=true go test -race -timeout 20m ./tests/integration/ -v
+	INTEGRATION_TESTS=true go test -race -tags integration -timeout 20m ./tests/integration/ -v
 
 test-domain:
 	go test -race -v ./internal/domain
@@ -40,6 +42,23 @@ test-database:
 
 test-pkg:
 	go test -race -v ./pkg/...
+
+# Build on Node 24 — matching .github/workflows/web-analytics-sdk.yml, NOT package.json
+# engines (>=18) and not the Dockerfile's node:22. CI diffs the minified output
+# byte-for-byte, so a different major produces a red build on an unrelated diff.
+# Commit all of dist/ plus package.json. A VERSION bump in config/config.go alone
+# makes the bundle stale: VERSION is injected at build time.
+sdk-build:
+	cd web_analytics_sdk && npm run build
+
+sdk-test:
+	cd web_analytics_sdk && npm test
+
+# Browser suite: drives the built bundle in Chromium against an in-memory
+# collector. Needs the bundle (sdk-build) and, once per machine, the browser
+# (cd web_analytics_sdk && npm run test:e2e:install).
+sdk-test-e2e: sdk-build
+	cd web_analytics_sdk && npm run test:e2e
 
 # Comprehensive test coverage command
 coverage:

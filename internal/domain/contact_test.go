@@ -1033,13 +1033,18 @@ func TestFromJSON(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name: "invalid JSON format for custom JSON",
+			// jsonb holds a scalar, and lists.subscribe has always stored one
+			// here, so upsert stores it too rather than answering 400.
+			name: "scalar custom JSON is stored, not rejected",
 			input: `{
 				"email": "test@example.com",
 				"custom_json_1": "not-a-json-object"
 			}`,
-			want:    nil,
-			wantErr: true,
+			want: &Contact{
+				Email:       "test@example.com",
+				CustomJSON1: &NullableJSON{Data: "not-a-json-object", IsNull: false},
+			},
+			wantErr: false,
 		},
 		{
 			name: "complex custom JSON fields",
@@ -1541,12 +1546,12 @@ func TestFromJSON_AdditionalCases(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name: "invalid custom JSON",
+			name: "custom JSON that is neither object nor array",
 			input: `{
 				"email": "test@example.com",
 				"custom_json_1": "not an object or array"
 			}`,
-			wantErr: true,
+			wantErr: false,
 		},
 	}
 
@@ -2157,16 +2162,52 @@ func TestFromJSON_Comprehensive(t *testing.T) {
 	})
 
 	// Test custom JSON fields with various types
-	t.Run("custom JSON fields with different valid types", func(t *testing.T) {
+	t.Run("custom JSON fields accept every JSON type the column can hold", func(t *testing.T) {
 		jsonStr := `{
 			"email": "test@example.com",
 			"custom_json_1": {"object": true},
 			"custom_json_2": [1, 2, 3],
-			"custom_json_3": "invalid" 
+			"custom_json_3": "gold",
+			"custom_json_4": 42,
+			"custom_json_5": true
 		}`
-		_, err := FromJSON(jsonStr)
-		assert.Error(t, err) // Should fail due to invalid JSON in custom_json_3
-		assert.Contains(t, err.Error(), "invalid JSON value for custom_json_3")
+		contact, err := FromJSON(jsonStr)
+		require.NoError(t, err)
+		assert.Equal(t, map[string]interface{}{"object": true}, contact.CustomJSON1.Data)
+		assert.Equal(t, []interface{}{float64(1), float64(2), float64(3)}, contact.CustomJSON2.Data)
+		// A scalar is the case that used to be refused. jsonb holds it, and
+		// lists.subscribe has always stored it, so refusing it here made the two
+		// endpoints disagree about the same five columns.
+		assert.Equal(t, "gold", contact.CustomJSON3.Data)
+		assert.False(t, contact.CustomJSON3.IsNull)
+		assert.Equal(t, float64(42), contact.CustomJSON4.Data)
+		assert.Equal(t, true, contact.CustomJSON5.Data)
+	})
+
+	// The bug this pins is a cross-endpoint disagreement, so it takes both
+	// decoders to state it: contacts.upsert reads the contact through FromJSON
+	// (gjson), lists.subscribe reads it through encoding/json into the same
+	// Contact struct. The same request body has to land the same value in the
+	// same column, whichever door it came through.
+	t.Run("a scalar custom_json lands identically through upsert and subscribe", func(t *testing.T) {
+		body := `{"email":"test@example.com","custom_json_1":"gold"}`
+
+		upserted, err := FromJSON(body)
+		require.NoError(t, err)
+
+		var subscribe SubscribeToListsRequest
+		require.NoError(t, json.Unmarshal(
+			[]byte(`{"workspace_id":"ws1","list_ids":["l1"],"contact":`+body+`}`), &subscribe))
+
+		require.NotNil(t, upserted.CustomJSON1)
+		require.NotNil(t, subscribe.Contact.CustomJSON1)
+		assert.Equal(t, subscribe.Contact.CustomJSON1.Data, upserted.CustomJSON1.Data)
+		assert.Equal(t, subscribe.Contact.CustomJSON1.IsNull, upserted.CustomJSON1.IsNull)
+
+		// And the value both agree on is what reaches the column.
+		stored, err := upserted.CustomJSON1.Value()
+		require.NoError(t, err)
+		assert.Equal(t, `"gold"`, string(stored.([]byte)))
 	})
 }
 
@@ -2882,4 +2923,76 @@ func TestTrimUnicodeSpace(t *testing.T) {
 			assert.Equal(t, tt.expected, result)
 		})
 	}
+}
+
+// TestUpsertContactOperation_ContactIsAdditive pins the wire contract of the
+// upsert response. The contact is what an integration maps its next step from, so
+// it has to be there on a real upsert — and absent, not null, when the read-back
+// did not happen, because clients written against the older shape parse this same
+// payload.
+func TestUpsertContactOperation_ContactIsAdditive(t *testing.T) {
+	t.Run("omitted entirely when no contact was read back", func(t *testing.T) {
+		encoded, err := json.Marshal(UpsertContactOperation{
+			Email:  "test@example.com",
+			Action: UpsertContactOperationCreate,
+		})
+		require.NoError(t, err)
+
+		// Byte-for-byte, not "does not contain a contact": a null under the key
+		// would already break a client that assumes the key means a contact.
+		assert.JSONEq(t, `{"email":"test@example.com","action":"create"}`, string(encoded))
+
+		var decoded map[string]interface{}
+		require.NoError(t, json.Unmarshal(encoded, &decoded))
+		_, present := decoded["contact"]
+		assert.False(t, present)
+	})
+
+	t.Run("marshals the contact when set", func(t *testing.T) {
+		encoded, err := json.Marshal(UpsertContactOperation{
+			Email:  "test@example.com",
+			Action: UpsertContactOperationUpdate,
+			Contact: &Contact{
+				Email:      "test@example.com",
+				ExternalID: &NullableString{String: "crm-42"},
+				Timezone:   &NullableString{String: "Europe/Paris"},
+			},
+		})
+		require.NoError(t, err)
+
+		assert.Equal(t, "test@example.com", gjson.GetBytes(encoded, "contact.email").String())
+		assert.Equal(t, "crm-42", gjson.GetBytes(encoded, "contact.external_id").String())
+		assert.Equal(t, "Europe/Paris", gjson.GetBytes(encoded, "contact.timezone").String())
+	})
+
+	t.Run("an old client still reads the fields it always read", func(t *testing.T) {
+		encoded, err := json.Marshal(UpsertContactOperation{
+			Email:   "test@example.com",
+			Action:  UpsertContactOperationCreate,
+			Contact: &Contact{Email: "test@example.com"},
+		})
+		require.NoError(t, err)
+
+		// The shape a client that predates the contact field declares.
+		var legacy struct {
+			Email  string `json:"email"`
+			Action string `json:"action"`
+			Error  string `json:"error,omitempty"`
+		}
+		require.NoError(t, json.Unmarshal(encoded, &legacy))
+		assert.Equal(t, "test@example.com", legacy.Email)
+		assert.Equal(t, UpsertContactOperationCreate, legacy.Action)
+		assert.Empty(t, legacy.Error)
+	})
+
+	t.Run("Err stays off the wire", func(t *testing.T) {
+		encoded, err := json.Marshal(UpsertContactOperation{
+			Email:  "test@example.com",
+			Action: UpsertContactOperationError,
+			Error:  "Insufficient permissions",
+			Err:    NewPermissionError(PermissionResourceContacts, PermissionTypeWrite, "Insufficient permissions"),
+		})
+		require.NoError(t, err)
+		assert.False(t, gjson.GetBytes(encoded, "Err").Exists())
+	})
 }

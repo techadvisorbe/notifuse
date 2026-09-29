@@ -52,7 +52,7 @@ export function GlobalFeedSettings({
       return broadcastApi.refreshGlobalFeed({
         workspace_id: workspaceId,
         broadcast_id: broadcastId,
-        url: settings.url,
+        url: settings.url ?? '',
         headers: settings.headers || []
       })
     },
@@ -176,7 +176,7 @@ export function GlobalFeedSettings({
                   </Highlight>
                 </>
               ) : (
-                <Alert type="error" message={t`No data returned`} />
+                <Alert type="error" title={t`No data returned`} />
               )}
             </div>
           </Modal>

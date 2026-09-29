@@ -1,10 +1,10 @@
 import { Layout, Menu, Select, Space, Button, Dropdown, message, Avatar } from 'antd'
+import type { MenuProps } from 'antd'
 import { Outlet, Link, useParams, useMatches, useNavigate } from '@tanstack/react-router'
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
 import { useLingui } from '@lingui/react/macro'
 import md5 from 'blueimp-md5'
 import {
-  faImage,
   faPaperPlane,
   faFileLines,
   faQuestionCircle
@@ -25,8 +25,10 @@ import { useState, useEffect } from 'react'
 import { FileManagerProvider } from '../components/file_manager/context'
 import { FileManagerSettings } from '../components/file_manager/interfaces'
 import { workspaceService } from '../services/api/workspace'
+import { createEmptyPermissions, createFullPermissions } from '../services/api/permissions'
 import { isRootUser } from '../services/api/auth'
 import {
+  AppstoreOutlined,
   FolderOpenOutlined,
   LineChartOutlined,
   SettingOutlined,
@@ -35,6 +37,17 @@ import {
 } from '@ant-design/icons'
 
 const { Content, Sider, Header } = Layout
+
+/** Web analytics sub-entries, mirroring the routes under /web-analytics. */
+const WEB_ANALYTICS_SECTIONS = ['dashboard', 'live', 'explore', 'goals', 'filters', 'annotations']
+
+/** Collapsible sidebar groups, and the path fragments living inside each. */
+const MENU_GROUPS: Record<string, string[]> = {
+  'web-analytics': ['/web-analytics'],
+  content: ['/templates', '/blog', '/file-manager']
+}
+
+type MenuItem = NonNullable<MenuProps['items']>[number]
 
 // Helper function to generate Gravatar URL from email
 const getGravatarUrl = (email: string | undefined, size: number = 32): string => {
@@ -57,6 +70,27 @@ export function WorkspaceLayout() {
   const currentPath = matches[matches.length - 1]?.pathname || ''
   const isSettingsPage = currentPath.includes('/settings') || currentPath.includes('/blog')
 
+  // The web analytics settings live at /settings/web-analytics and belong to
+  // the settings entry, so a settings path belongs to no group.
+  const activeGroup = currentPath.includes('/settings')
+    ? null
+    : (Object.entries(MENU_GROUPS).find(([, fragments]) =>
+        fragments.some((fragment) => currentPath.includes(fragment))
+      )?.[0] ?? null)
+  const inWebAnalytics = activeGroup === 'web-analytics'
+
+  const [openKeys, setOpenKeys] = useState<string[]>(activeGroup ? [activeGroup] : [])
+
+  // Entering a group reveals it and leaving reclaims the rows it costs, so the
+  // sidebar only pays for the group you are actually in. One group at a time,
+  // and depending on the two flags rather than the path leaves a manual toggle
+  // alone for as long as you stay put. While collapsed the rail shows flyouts
+  // and rc-menu drives openKeys itself; this restores them on expanding back.
+  useEffect(() => {
+    if (collapsed) return
+    setOpenKeys(activeGroup ? [activeGroup] : [])
+  }, [activeGroup, collapsed])
+
   // Fetch user permissions for the current workspace
   useEffect(() => {
     const fetchUserPermissions = async () => {
@@ -67,17 +101,7 @@ export function WorkspaceLayout() {
 
       // If user is root, they have full permissions
       if (isRootUser(user.email)) {
-        setUserPermissions({
-          contacts: { read: true, write: true },
-          lists: { read: true, write: true },
-          templates: { read: true, write: true },
-          broadcasts: { read: true, write: true },
-          transactional: { read: true, write: true },
-          workspace: { read: true, write: true },
-          message_history: { read: true, write: true },
-          blog: { read: true, write: true },
-          automations: { read: true, write: true }
-        })
+        setUserPermissions(createFullPermissions())
         setLoadingPermissions(false)
         return
       }
@@ -87,35 +111,17 @@ export function WorkspaceLayout() {
         const currentUserMember = response.members.find((member) => member.user_id === user.id)
 
         if (currentUserMember) {
-          setUserPermissions(currentUserMember.permissions)
+          // The stored map may be partial or null; a resource it does not mention is denied,
+          // which is what the empty base spells out.
+          setUserPermissions({ ...createEmptyPermissions(), ...currentUserMember.permissions })
         } else {
           // User is not a member of this workspace, set empty permissions
-          setUserPermissions({
-            contacts: { read: false, write: false },
-            lists: { read: false, write: false },
-            templates: { read: false, write: false },
-            broadcasts: { read: false, write: false },
-            transactional: { read: false, write: false },
-            workspace: { read: false, write: false },
-            message_history: { read: false, write: false },
-            blog: { read: false, write: false },
-            automations: { read: false, write: false }
-          })
+          setUserPermissions(createEmptyPermissions())
         }
       } catch (error) {
         console.error('Failed to fetch user permissions', error)
         // On error, assume no permissions
-        setUserPermissions({
-          contacts: { read: false, write: false },
-          lists: { read: false, write: false },
-          templates: { read: false, write: false },
-          broadcasts: { read: false, write: false },
-          transactional: { read: false, write: false },
-          workspace: { read: false, write: false },
-          message_history: { read: false, write: false },
-          blog: { read: false, write: false },
-          automations: { read: false, write: false }
-        })
+        setUserPermissions(createEmptyPermissions())
       } finally {
         setLoadingPermissions(false)
       }
@@ -132,10 +138,42 @@ export function WorkspaceLayout() {
     return permissions?.read || permissions?.write || false
   }
 
+  // Group titles are plain text, so a click on one only toggles it. Opening a
+  // group also lands on its first entry, which is what the click was reaching
+  // for; closing it goes nowhere, so the caret keeps its meaning. The collapsed
+  // rail opens these submenus on hover, where navigating would follow the mouse.
+  const handleOpenChange: MenuProps['onOpenChange'] = (keys) => {
+    const opened = keys.find((key) => !openKeys.includes(key))
+    setOpenKeys(keys)
+    if (collapsed || !opened) return
+    if (opened === 'web-analytics') {
+      navigate({
+        to: '/console/workspace/$workspaceId/web-analytics/$tab',
+        params: { workspaceId, tab: 'dashboard' }
+      })
+    } else if (opened === 'content') {
+      // Mirrors the first child the group actually renders.
+      if (hasAccess('templates')) {
+        navigate({ to: '/console/workspace/$workspaceId/templates', params: { workspaceId } })
+      } else {
+        navigate({ to: '/console/workspace/$workspaceId/blog', params: { workspaceId } })
+      }
+    }
+  }
+
   // Determine which key should be selected based on the current path
   let selectedKey = 'analytics' // Default to analytics/dashboard
   if (currentPath.includes('/settings')) {
+    // Must be checked before '/web-analytics': the web analytics settings live
+    // at /settings/web-analytics and belong to the settings entry.
     selectedKey = 'settings'
+  } else if (inWebAnalytics) {
+    // /web-analytics alone redirects to the dashboard, so an unrecognized
+    // trailing segment lands on the same entry the user ends up looking at.
+    const section = currentPath.split('/web-analytics/')[1]?.split('/')[0] ?? ''
+    selectedKey = WEB_ANALYTICS_SECTIONS.includes(section)
+      ? `web-analytics-${section}`
+      : 'web-analytics-dashboard'
   } else if (currentPath.includes('/lists')) {
     selectedKey = 'lists'
   } else if (currentPath.includes('/templates')) {
@@ -199,16 +237,124 @@ export function WorkspaceLayout() {
     }
   }
 
+  // Templates, Blog and File Manager are the material you author and reuse.
+  // Built here rather than inline so the group can be dropped entirely when a
+  // member can reach none of it, instead of showing an empty expandable row.
+  // Children carry no icons, matching the Web Analytics submenu.
+  const contentChildren: MenuItem[] = []
+  if (hasAccess('templates')) {
+    contentChildren.push({
+      key: 'templates',
+      label: (
+        <Link to="/console/workspace/$workspaceId/templates" params={{ workspaceId }}>
+          {t`Templates`}
+        </Link>
+      )
+    })
+  }
+  if (hasAccess('workspace')) {
+    contentChildren.push(
+      {
+        key: 'blog',
+        label: (
+          <Link to="/console/workspace/$workspaceId/blog" params={{ workspaceId }}>
+            {t`Blog`}
+          </Link>
+        )
+      },
+      {
+        key: 'file-manager',
+        label: (
+          <Link to="/console/workspace/$workspaceId/file-manager" params={{ workspaceId }}>
+            {t`File Manager`}
+          </Link>
+        )
+      }
+    )
+  }
+
   const menuItems = [
     hasAccess('message_history') && {
       key: 'analytics',
       // icon: <FontAwesomeIcon icon={faChartLine} size="sm" style={{ opacity: 0.7 }} />,
-      icon: <LineChartOutlined />,
+      icon: <AppstoreOutlined />,
       label: (
         <Link to="/console/workspace/$workspaceId" params={{ workspaceId }}>
           {t`Dashboard`}
         </Link>
       )
+    },
+    hasAccess('web_analytics') && {
+      key: 'web-analytics',
+      icon: <LineChartOutlined />,
+      // A submenu rather than a link: the caret on the right toggles the
+      // section, and handleOpenChange lands on the dashboard when it opens.
+      label: t`Web Analytics`,
+      children: [
+        {
+          key: 'web-analytics-dashboard',
+          label: (
+            <Link
+              to="/console/workspace/$workspaceId/web-analytics/$tab"
+              params={{ workspaceId, tab: 'dashboard' }}
+            >
+              {t`Dashboard`}
+            </Link>
+          )
+        },
+        {
+          key: 'web-analytics-live',
+          label: (
+            <Link to="/console/workspace/$workspaceId/web-analytics/live" params={{ workspaceId }}>
+              {t`Live`}
+            </Link>
+          )
+        },
+        {
+          key: 'web-analytics-explore',
+          label: (
+            <Link
+              to="/console/workspace/$workspaceId/web-analytics/$tab"
+              params={{ workspaceId, tab: 'explore' }}
+            >
+              {t`Explore`}
+            </Link>
+          )
+        },
+        {
+          key: 'web-analytics-goals',
+          label: (
+            <Link
+              to="/console/workspace/$workspaceId/web-analytics/$tab"
+              params={{ workspaceId, tab: 'goals' }}
+            >
+              {t`Goals`}
+            </Link>
+          )
+        },
+        {
+          key: 'web-analytics-filters',
+          label: (
+            <Link
+              to="/console/workspace/$workspaceId/web-analytics/$tab"
+              params={{ workspaceId, tab: 'filters' }}
+            >
+              {t`Filters`}
+            </Link>
+          )
+        },
+        {
+          key: 'web-analytics-annotations',
+          label: (
+            <Link
+              to="/console/workspace/$workspaceId/web-analytics/$tab"
+              params={{ workspaceId, tab: 'annotations' }}
+            >
+              {t`Annotations`}
+            </Link>
+          )
+        }
+      ]
     },
     hasAccess('contacts') && {
       key: 'contacts',
@@ -244,32 +390,6 @@ export function WorkspaceLayout() {
       label: (
         <Link to="/console/workspace/$workspaceId/lists" params={{ workspaceId }}>
           {t`Lists`}
-        </Link>
-      )
-    },
-    hasAccess('templates') && {
-      key: 'templates',
-      icon: (
-        <svg
-          xmlns="http://www.w3.org/2000/svg"
-          width="16"
-          height="16"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          className="lucide lucide-layout-panel-top-icon lucide-layout-panel-top opacity-70"
-        >
-          <rect width="18" height="7" x="3" y="3" rx="1" />
-          <rect width="7" height="7" x="3" y="14" rx="1" />
-          <rect width="7" height="7" x="14" y="14" rx="1" />
-        </svg>
-      ),
-      label: (
-        <Link to="/console/workspace/$workspaceId/templates" params={{ workspaceId }}>
-          {t`Templates`}
         </Link>
       )
     },
@@ -320,8 +440,8 @@ export function WorkspaceLayout() {
         </Link>
       )
     },
-    hasAccess('workspace') && {
-      key: 'blog',
+    contentChildren.length > 0 && {
+      key: 'content',
       icon: (
         <svg
           xmlns="http://www.w3.org/2000/svg"
@@ -333,44 +453,15 @@ export function WorkspaceLayout() {
           strokeWidth="2"
           strokeLinecap="round"
           strokeLinejoin="round"
-          className="lucide lucide-pen-line-icon lucide-pen-line"
+          className="lucide lucide-files-icon lucide-files opacity-70"
         >
-          <path d="M13 21h8" />
-          <path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z" />
+          <path d="M20 7h-3a2 2 0 0 1-2-2V2" />
+          <path d="M9 18a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h7l4 4v10a2 2 0 0 1-2 2Z" />
+          <path d="M3 7.6v12.8A1.6 1.6 0 0 0 4.6 22h9.8" />
         </svg>
       ),
-      label: (
-        <Link to="/console/workspace/$workspaceId/blog" params={{ workspaceId }}>
-          {t`Blog`}
-        </Link>
-      )
-    },
-    hasAccess('workspace') && {
-      key: 'file-manager',
-      icon: <FontAwesomeIcon icon={faImage} size="sm" style={{ opacity: 0.6 }} />,
-      // icon: (
-      //   <svg
-      //     xmlns="http://www.w3.org/2000/svg"
-      //     width="16"
-      //     height="16"
-      //     viewBox="0 0 24 24"
-      //     fill="none"
-      //     stroke="currentColor"
-      //     strokeWidth="2"
-      //     strokeLinecap="round"
-      //     strokeLinejoin="round"
-      //     className="lucide lucide-image-icon lucide-image opacity-70"
-      //   >
-      //     <rect width="18" height="18" x="3" y="3" rx="2" ry="2" />
-      //     <circle cx="9" cy="9" r="2" />
-      //     <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21" />
-      //   </svg>
-      // ),
-      label: (
-        <Link to="/console/workspace/$workspaceId/file-manager" params={{ workspaceId }}>
-          {t`File Manager`}
-        </Link>
-      )
+      label: t`Content`,
+      children: contentChildren
     },
     hasAccess('message_history') && {
       key: 'logs',
@@ -404,17 +495,20 @@ export function WorkspaceLayout() {
               height: '100vh',
               left: 0,
               top: 0,
-              overflow: 'auto',
+              // The nav inside owns the scrolling; the panel must not also
+              // scroll, or the logo and the collapse button travel with it.
+              overflow: 'hidden',
               zIndex: 10,
               backgroundColor: '#F9F9F9'
             }}
             collapsible
             collapsed={collapsed}
             trigger={null}
-            className="border-r border-gray-200"
+            className="workspace-sider border-r border-gray-200"
           >
             <div
               style={{
+                flex: '0 0 auto',
                 padding: '16px 0 16px 27px',
                 textAlign: 'center',
                 borderBottom: '1px solid #f0f0f0'
@@ -430,39 +524,40 @@ export function WorkspaceLayout() {
                 }}
               />
             </div>
-            <Menu
-              mode="inline"
-              selectedKeys={[selectedKey]}
-              style={{
-                height: 'calc(100% - 120px)',
-                borderRight: 0,
-                backgroundColor: '#F9F9F9',
-                fontSize: '13px',
-                fontWeight: 600
-              }}
-              items={loadingPermissions ? [] : menuItems}
-              theme="light"
-            />
+            <div className="workspace-sider-nav">
+              <Menu
+                mode="inline"
+                selectedKeys={[selectedKey]}
+                openKeys={openKeys}
+                onOpenChange={handleOpenChange}
+                style={{
+                  borderRight: 0,
+                  backgroundColor: '#F9F9F9',
+                  fontSize: '13px',
+                  // Item labels are <Link> anchors, which index.css pins to 500.
+                  // Submenu titles are plain text and inherit this instead, so it
+                  // has to match or the group rows read heavier than the rest.
+                  fontWeight: 500
+                }}
+                items={loadingPermissions ? [] : menuItems}
+                theme="light"
+              />
+            </div>
             <div
               style={{
-                position: 'fixed',
-                bottom: 0,
-                left: 0,
-                width: collapsed ? '80px' : '249px',
+                flex: '0 0 auto',
                 padding: '16px',
-                // backgroundColor: '#F9F9F9',
-                zIndex: 1
+                borderTop: '1px solid #f0f0f0',
+                backgroundColor: '#F9F9F9'
               }}
             >
               <div
                 style={{
-                  borderBottom: '1px solid #f0f0f0',
                   textAlign: 'center',
                   fontSize: '9px',
                   color: '#000',
                   opacity: 0.7,
-                  marginBottom: '8px',
-                  paddingBottom: '8px'
+                  marginBottom: '8px'
                 }}
               >
                 v{window.VERSION || '1.0'}

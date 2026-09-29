@@ -145,7 +145,7 @@ const MjStyleSettingsPanel: React.FC<MjStyleSettingsPanelProps> = ({
           placement="right"
           open={isDrawerOpen}
           onClose={handleDrawerCancel}
-          width="60vw"
+          size="60vw"
           styles={{
             body: { padding: 0 }
           }}
@@ -217,9 +217,9 @@ export class MjStyleBlock extends BaseEmailBlock {
    */
   renderSettingsPanel(
     onUpdate: OnUpdateAttributesFunction,
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars -- Required by interface
+    // Required by interface
     _blockDefaults: MergedBlockAttributes,
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars -- Required by interface
+    // Required by interface
     _emailTree?: EmailBlock
   ): React.ReactNode {
     const currentAttributes = (this.block.attributes ?? {}) as MJStyleAttributes

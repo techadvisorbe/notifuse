@@ -3,11 +3,12 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 	"go.opencensus.io/trace"
 
 	"github.com/Notifuse/notifuse/internal/domain"
@@ -53,9 +54,14 @@ func (r *userRepository) CreateUser(ctx context.Context, user *domain.User) erro
 		user.UpdatedAt,
 	)
 	if err != nil {
-		// Check for duplicate key constraint violation (PostgreSQL error code 23505)
-		if strings.Contains(err.Error(), "duplicate key value violates unique constraint") ||
-			strings.Contains(err.Error(), "UNIQUE constraint failed") {
+		// Match the SQLSTATE, never the message: PostgreSQL translates error text per
+		// lc_messages, so a non-English server renders this same 23505 in its own locale
+		// and no text match survives it. Three callers branch on ErrUserExists and each
+		// degrades differently on a miss - setup stops treating an existing root user as
+		// success, the OIDC JIT path stops recovering onto the winner of a create race,
+		// and workspace API-user creation reports an outage instead of a duplicate.
+		var pqErr *pq.Error
+		if errors.As(err, &pqErr) && pqErr.Code == "23505" {
 			return &domain.ErrUserExists{Message: "user already exists"}
 		}
 		return fmt.Errorf("failed to create user: %w", err)
@@ -63,6 +69,10 @@ func (r *userRepository) CreateUser(ctx context.Context, user *domain.User) erro
 	return nil
 }
 
+// GetUserByEmail matches the address EXACTLY. That is load-bearing for magic-code and
+// root sign-in, and it is why GetUserByEmailInsensitive exists separately rather than
+// this one being relaxed: only the OIDC bridge wants case-insensitive matching. The
+// two look like duplicates and must not be collapsed into one.
 func (r *userRepository) GetUserByEmail(ctx context.Context, email string) (*domain.User, error) {
 	var user domain.User
 	query := `
@@ -363,7 +373,12 @@ func (r *userRepository) UpdateSession(ctx context.Context, session *domain.Sess
 	return nil
 }
 
-// Delete removes a user by their ID
+// Delete removes a user by their ID.
+//
+// Sessions are cleared by hand below; federated_identities is NOT, because it carries
+// the only foreign key in the system schema and its ON DELETE CASCADE does the work.
+// The dependency is invisible from here — a schema change that drops that FK would
+// leave orphaned SSO identities behind with nothing in this function to notice.
 func (r *userRepository) Delete(ctx context.Context, id string) error {
 	// First delete all sessions for this user
 	deleteSessionsQuery := `DELETE FROM user_sessions WHERE user_id = $1`

@@ -4,7 +4,7 @@ import { i18n } from '@lingui/core'
 import { I18nProvider } from '@lingui/react'
 import type { NodeProps } from '@xyflow/react'
 import { EmailNode } from './EmailNode'
-import type { AutomationNodeData } from '../utils/flowConverter'
+import type { AutomationFlowNode, AutomationNodeData } from '../utils/flowConverter'
 import type { Template } from '../../../services/api/types'
 
 // EmailNode only needs Handle/Position/useConnection from @xyflow/react; render
@@ -27,10 +27,9 @@ const makeTemplate = (id: string, name: string, category: string): Template =>
   ({ id, name, category, channel: 'email' } as Template)
 
 const renderNode = (config: Record<string, unknown>) => {
-  const props = {
-    data: { nodeType: 'email', config } as unknown as AutomationNodeData,
-    selected: false
-  } as unknown as NodeProps<AutomationNodeData>
+  const data: AutomationNodeData = { nodeType: 'email', config, label: 'Email' }
+  // EmailNode only reads `data` and `selected`; the rest of NodeProps is inert here.
+  const props = { data, selected: false } as NodeProps<AutomationFlowNode>
   return render(
     <I18nProvider i18n={i18n}>
       <EmailNode {...props} />
@@ -65,5 +64,15 @@ describe('EmailNode', () => {
     renderNode({})
 
     expect(screen.getByText('Select')).toBeInTheDocument()
+  })
+
+  it('shows the author description alongside the template name', () => {
+    // Every node type carries an optional description; this covers the wiring from the config bag
+    // through to BaseNode, which the other eight node components repeat verbatim.
+    mockTemplates = [makeTemplate('welcome-pdf', 'Send Checklist PDF', 'welcome')]
+    renderNode({ template_id: 'welcome-pdf', description: 'Welcome — day 1' })
+
+    expect(screen.getByText('Welcome — day 1')).toBeInTheDocument()
+    expect(screen.getByText('Send Checklist PDF')).toBeInTheDocument()
   })
 })

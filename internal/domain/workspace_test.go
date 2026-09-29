@@ -811,6 +811,7 @@ func TestInviteMemberRequest_Validate(t *testing.T) {
 			request: InviteMemberRequest{
 				WorkspaceID: "test123",
 				Email:       "test@example.com",
+				Permissions: NewFullPermissions(),
 			},
 			wantErr: false,
 		},
@@ -819,6 +820,7 @@ func TestInviteMemberRequest_Validate(t *testing.T) {
 			request: InviteMemberRequest{
 				WorkspaceID: "",
 				Email:       "test@example.com",
+				Permissions: NewFullPermissions(),
 			},
 			wantErr: true,
 		},
@@ -827,6 +829,7 @@ func TestInviteMemberRequest_Validate(t *testing.T) {
 			request: InviteMemberRequest{
 				WorkspaceID: "test123",
 				Email:       "",
+				Permissions: NewFullPermissions(),
 			},
 			wantErr: true,
 		},
@@ -835,6 +838,36 @@ func TestInviteMemberRequest_Validate(t *testing.T) {
 			request: InviteMemberRequest{
 				WorkspaceID: "test123",
 				Email:       "invalid-email",
+				Permissions: NewFullPermissions(),
+			},
+			wantErr: true,
+		},
+		{
+			name: "nil permissions",
+			request: InviteMemberRequest{
+				WorkspaceID: "test123",
+				Email:       "test@example.com",
+				Permissions: nil,
+			},
+			wantErr: true,
+		},
+		{
+			name: "empty permissions",
+			request: InviteMemberRequest{
+				WorkspaceID: "test123",
+				Email:       "test@example.com",
+				Permissions: UserPermissions{},
+			},
+			wantErr: true,
+		},
+		{
+			name: "unknown resource",
+			request: InviteMemberRequest{
+				WorkspaceID: "test123",
+				Email:       "test@example.com",
+				Permissions: UserPermissions{
+					PermissionResource("nope"): ResourcePermissions{Read: true},
+				},
 			},
 			wantErr: true,
 		},
@@ -2434,6 +2467,85 @@ func TestCreateAPIKeyRequest_Validate(t *testing.T) {
 			},
 			wantErr: true,
 		},
+		{
+			name: "email prefix with hyphen",
+			request: CreateAPIKeyRequest{
+				WorkspaceID: "workspace-123",
+				EmailPrefix: "ci-bot_2",
+			},
+			wantErr: false,
+		},
+		{
+			name: "email prefix with uppercase",
+			request: CreateAPIKeyRequest{
+				WorkspaceID: "workspace-123",
+				EmailPrefix: "CiBot",
+			},
+			wantErr: true,
+		},
+		{
+			name: "email prefix with space",
+			request: CreateAPIKeyRequest{
+				WorkspaceID: "workspace-123",
+				EmailPrefix: "ci bot",
+			},
+			wantErr: true,
+		},
+		{
+			name: "email prefix with at sign",
+			request: CreateAPIKeyRequest{
+				WorkspaceID: "workspace-123",
+				EmailPrefix: "ci@bot",
+			},
+			wantErr: true,
+		},
+		{
+			name: "email prefix at the length limit",
+			request: CreateAPIKeyRequest{
+				WorkspaceID: "workspace-123",
+				EmailPrefix: strings.Repeat("a", 64),
+			},
+			wantErr: false,
+		},
+		{
+			name: "email prefix over the length limit",
+			request: CreateAPIKeyRequest{
+				WorkspaceID: "workspace-123",
+				EmailPrefix: strings.Repeat("a", 65),
+			},
+			wantErr: true,
+		},
+		{
+			name: "valid permissions",
+			request: CreateAPIKeyRequest{
+				WorkspaceID: "workspace-123",
+				EmailPrefix: "api",
+				Permissions: UserPermissions{
+					PermissionResourceTransactional: ResourcePermissions{Write: true},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "empty permissions",
+			request: CreateAPIKeyRequest{
+				WorkspaceID: "workspace-123",
+				EmailPrefix: "api",
+				Permissions: UserPermissions{},
+			},
+			wantErr: false,
+		},
+		{
+			name: "unknown permission resource",
+			request: CreateAPIKeyRequest{
+				WorkspaceID: "workspace-123",
+				EmailPrefix: "api",
+				Permissions: UserPermissions{
+					PermissionResource("unicorns"): ResourcePermissions{Read: true},
+				},
+			},
+			wantErr: true,
+		},
 	}
 
 	for _, tc := range testCases {
@@ -3725,20 +3837,25 @@ func TestSetBlogSettingsRequest_Validate(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			workspaceID, enabled, settings, err := tc.request.Validate()
+			workspaceID, enabled, settings, settingsSpecified, err := tc.request.Validate()
 			if tc.wantErr {
 				assert.Error(t, err)
 				if tc.errMsg != "" {
 					assert.Contains(t, err.Error(), tc.errMsg)
 				}
 				assert.Empty(t, workspaceID)
-				assert.False(t, enabled)
+				assert.Nil(t, enabled)
 				assert.Nil(t, settings)
+				assert.False(t, settingsSpecified)
 			} else {
 				assert.NoError(t, err)
 				assert.Equal(t, tc.request.WorkspaceID, workspaceID)
-				assert.Equal(t, tc.wantEnabled, enabled)
+				// Every request here is built in Go, so the flag and the settings are
+				// always specified: a struct literal has no body to have left a key out of.
+				require.NotNil(t, enabled)
+				assert.Equal(t, tc.wantEnabled, *enabled)
 				assert.Equal(t, tc.wantSettings, settings)
+				assert.True(t, settingsSpecified)
 			}
 		})
 	}
@@ -4452,9 +4569,9 @@ func TestUserPermissions_Value(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name:    "empty permissions",
+			name:    "empty non-nil permissions",
 			input:   UserPermissions{},
-			wantNil: true,
+			wantNil: false,
 			wantErr: false,
 		},
 		{
@@ -5431,4 +5548,459 @@ func TestWorkspaceSettings_ResolveEndpoint(t *testing.T) {
 			assert.Equal(t, tc.expected, ws.ResolveEndpoint(apiEndpoint))
 		})
 	}
+}
+
+func TestAllPermissionResources(t *testing.T) {
+	assert.Equal(t, []PermissionResource{
+		"contacts",
+		"segments",
+		"lists",
+		"templates",
+		"blog",
+		"broadcasts",
+		"transactional",
+		"automations",
+		"message_history",
+		"web_analytics",
+		"webhook_subscriptions",
+		"webhook_events",
+		"llm",
+		"workspace",
+	}, AllPermissionResources)
+}
+
+func TestNewFullPermissions(t *testing.T) {
+	t.Run("grants read and write on every resource", func(t *testing.T) {
+		permissions := NewFullPermissions()
+
+		for _, resource := range AllPermissionResources {
+			granted, ok := permissions[resource]
+			require.True(t, ok, "resource %s is missing", resource)
+			assert.True(t, granted.Read, "resource %s is missing read", resource)
+			assert.True(t, granted.Write, "resource %s is missing write", resource)
+		}
+		assert.Len(t, permissions, len(AllPermissionResources))
+	})
+
+	t.Run("returns a fresh map on every call", func(t *testing.T) {
+		first := NewFullPermissions()
+		second := NewFullPermissions()
+
+		first[PermissionResourceContacts] = ResourcePermissions{}
+
+		assert.Equal(t, ResourcePermissions{Read: true, Write: true}, second[PermissionResourceContacts])
+	})
+
+	t.Run("does not share the FullPermissions map", func(t *testing.T) {
+		permissions := NewFullPermissions()
+
+		delete(permissions, PermissionResourceContacts)
+		permissions[PermissionResourceWorkspace] = ResourcePermissions{Read: false, Write: false}
+
+		assert.Equal(t, ResourcePermissions{Read: true, Write: true}, FullPermissions[PermissionResourceContacts])
+		assert.Equal(t, ResourcePermissions{Read: true, Write: true}, FullPermissions[PermissionResourceWorkspace])
+	})
+}
+
+func TestUserPermissions_Validate(t *testing.T) {
+	t.Run("accepts every known resource", func(t *testing.T) {
+		for _, resource := range AllPermissionResources {
+			permissions := UserPermissions{resource: ResourcePermissions{Read: true, Write: true}}
+			assert.NoError(t, permissions.Validate(), "resource %s was rejected", resource)
+		}
+	})
+
+	t.Run("accepts the full set", func(t *testing.T) {
+		assert.NoError(t, NewFullPermissions().Validate())
+	})
+
+	t.Run("accepts nil", func(t *testing.T) {
+		var permissions UserPermissions
+		assert.NoError(t, permissions.Validate())
+	})
+
+	t.Run("accepts empty", func(t *testing.T) {
+		assert.NoError(t, UserPermissions{}.Validate())
+	})
+
+	t.Run("rejects an unknown resource and names it", func(t *testing.T) {
+		permissions := UserPermissions{
+			PermissionResourceContacts:       ResourcePermissions{Read: true},
+			PermissionResource("dashboards"): ResourcePermissions{Read: true},
+		}
+
+		err := permissions.Validate()
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "dashboards")
+	})
+}
+
+func TestUserPermissions_ValueNilVersusEmpty(t *testing.T) {
+	t.Run("nil map is SQL NULL", func(t *testing.T) {
+		var permissions UserPermissions
+
+		value, err := permissions.Value()
+
+		require.NoError(t, err)
+		assert.Nil(t, value)
+	})
+
+	t.Run("empty non-nil map marshals to an empty object", func(t *testing.T) {
+		value, err := UserPermissions{}.Value()
+
+		require.NoError(t, err)
+		assert.Equal(t, []byte("{}"), value)
+	})
+
+	t.Run("populated map round-trips through Scan", func(t *testing.T) {
+		original := UserPermissions{
+			PermissionResourceSegments:             ResourcePermissions{Read: true, Write: false},
+			PermissionResourceWebhookSubscriptions: ResourcePermissions{Read: true, Write: true},
+			PermissionResourceWebhookEvents:        ResourcePermissions{Read: true, Write: false},
+		}
+
+		value, err := original.Value()
+		require.NoError(t, err)
+
+		var scanned UserPermissions
+		require.NoError(t, scanned.Scan(value))
+		assert.Equal(t, original, scanned)
+	})
+}
+
+// The address is what a Zapier connection persists, and it is server-derived: ZapierSettings
+// carries nothing encrypted, so its Validate takes no passphrase.
+func TestIntegration_Validate_ZapierIntegration(t *testing.T) {
+	passphrase := "test-passphrase"
+
+	t.Run("accepts a zapier integration carrying its minted address", func(t *testing.T) {
+		integration := Integration{
+			ID:             "int-zapier",
+			Name:           "Marketing",
+			Type:           IntegrationTypeZapier,
+			ZapierSettings: &ZapierSettings{APIKeyEmail: "zapier-marketing-3f9a1c02@v3.notifuse.com"},
+		}
+
+		assert.NoError(t, integration.Validate(passphrase))
+	})
+
+	// The create switches in the service layer fill no zapier settings, and demo_service is a
+	// service-layer caller that never reaches CreateIntegrationRequest.Validate. This is the
+	// layer that closes that path.
+	t.Run("rejects a zapier integration with no settings", func(t *testing.T) {
+		integration := Integration{
+			ID:   "int-zapier",
+			Name: "Marketing",
+			Type: IntegrationTypeZapier,
+		}
+
+		err := integration.Validate(passphrase)
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "zapier settings are required")
+	})
+
+	t.Run("rejects a zapier integration whose address is blank", func(t *testing.T) {
+		integration := Integration{
+			ID:             "int-zapier",
+			Name:           "Marketing",
+			Type:           IntegrationTypeZapier,
+			ZapierSettings: &ZapierSettings{},
+		}
+
+		err := integration.Validate(passphrase)
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid zapier settings")
+	})
+
+	// The rejecting default had no test of its own until the zapier case was threaded in front
+	// of it, and it is load-bearing: Workspace.Validate loops every stored integration through
+	// here, so a type this switch does not know makes the whole workspace unsavable.
+	t.Run("still rejects a genuinely unknown type", func(t *testing.T) {
+		integration := Integration{ID: "int-x", Name: "Mystery", Type: "unknown-type"}
+
+		err := integration.Validate(passphrase)
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "unsupported integration type: unknown-type")
+	})
+}
+
+// Driven from a raw body rather than a struct literal because the point of the rejection is
+// what an API client can and cannot express: the body below carries zapier_settings the way a
+// hopeful client would, the request type has no such field to receive it, and the call is
+// refused regardless.
+func TestCreateIntegrationRequest_Validate_RejectsZapier(t *testing.T) {
+	body := []byte(`{
+		"workspace_id": "workspace123",
+		"name": "Marketing",
+		"type": "zapier",
+		"zapier_settings": {"api_key_email": "zapier-marketing-3f9a1c02@v3.notifuse.com"}
+	}`)
+
+	var req CreateIntegrationRequest
+	require.NoError(t, json.Unmarshal(body, &req))
+
+	err := req.Validate("test-passphrase")
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "connectZapier")
+}
+
+// UpdateWorkspace runs this on every general-settings save, so a stored zapier record has to
+// pass or connecting Zapier would lock the workspace out of its own settings screen.
+func TestWorkspace_Validate_WithZapierIntegration(t *testing.T) {
+	workspace := Workspace{
+		ID:   "testws",
+		Name: "Test Workspace",
+		Settings: WorkspaceSettings{
+			WebsiteURL:      "https://example.com",
+			LogoURL:         "https://example.com/logo.png",
+			Timezone:        "UTC",
+			DefaultLanguage: "en",
+			Languages:       []string{"en"},
+			FileManager: FileManagerSettings{
+				Endpoint:  "https://s3.amazonaws.com",
+				Bucket:    "my-bucket",
+				AccessKey: "AKIAIOSFODNN7EXAMPLE",
+			},
+		},
+		Integrations: Integrations{{
+			ID:             "int-zapier",
+			Name:           "Marketing",
+			Type:           IntegrationTypeZapier,
+			ZapierSettings: &ZapierSettings{APIKeyEmail: "zapier-marketing-3f9a1c02@v3.notifuse.com"},
+		}},
+	}
+
+	assert.NoError(t, workspace.Validate("test-passphrase"))
+}
+
+// Asserted after BeforeSave alone, never across a BeforeSave/AfterLoad round trip: a symmetric
+// encrypt-decrypt pair would pass a round trip just as happily, and what matters is that the
+// address reaches the column readable. Nothing on a zapier record is a secret worth encrypting
+// — the token the address belongs to is handed over once at connect time and never stored.
+func TestIntegration_BeforeSave_ZapierAddressStaysPlaintext(t *testing.T) {
+	const address = "zapier-marketing-3f9a1c02@v3.notifuse.com"
+	integration := Integration{
+		ID:             "int-zapier",
+		Name:           "Marketing",
+		Type:           IntegrationTypeZapier,
+		ZapierSettings: &ZapierSettings{APIKeyEmail: address},
+	}
+
+	require.NoError(t, integration.BeforeSave("test-passphrase"))
+
+	assert.Equal(t, address, integration.ZapierSettings.APIKeyEmail)
+}
+
+// The wire contract behind the email-integration wipe: "no provider in the body"
+// and "an empty provider in the body" have to stay distinguishable after the
+// decode, because the service can only preserve what it can still see.
+func TestUpdateIntegrationRequest_ProviderSpecified(t *testing.T) {
+	decode := func(t *testing.T, body string) UpdateIntegrationRequest {
+		t.Helper()
+		var req UpdateIntegrationRequest
+		require.NoError(t, json.Unmarshal([]byte(body), &req))
+		return req
+	}
+
+	t.Run("key absent", func(t *testing.T) {
+		req := decode(t, `{"workspace_id":"ws1","integration_id":"i1","name":"Renamed"}`)
+		assert.False(t, req.ProviderSpecified())
+		assert.Equal(t, "Renamed", req.Name, "the rest of the body still decodes")
+	})
+
+	t.Run("key null - read as absent", func(t *testing.T) {
+		req := decode(t, `{"workspace_id":"ws1","integration_id":"i1","name":"Renamed","provider":null}`)
+		assert.False(t, req.ProviderSpecified(),
+			"an email integration with no provider is not a state a caller can mean")
+	})
+
+	t.Run("key present", func(t *testing.T) {
+		req := decode(t, `{"workspace_id":"ws1","integration_id":"i1","name":"Renamed","provider":{"kind":"smtp"}}`)
+		assert.True(t, req.ProviderSpecified())
+		assert.Equal(t, EmailProviderKindSMTP, req.Provider.Kind)
+	})
+
+	t.Run("key present but empty - an explicit clear", func(t *testing.T) {
+		req := decode(t, `{"workspace_id":"ws1","integration_id":"i1","name":"Renamed","provider":{}}`)
+		assert.True(t, req.ProviderSpecified())
+	})
+
+	t.Run("built in Go - counts as specified", func(t *testing.T) {
+		// A request assembled in code has no body to read a key set from, so it has
+		// to keep meaning exactly what its fields say.
+		req := UpdateIntegrationRequest{Provider: EmailProvider{Kind: EmailProviderKindSES}}
+		assert.True(t, req.ProviderSpecified())
+	})
+}
+
+// The wire contract behind the settings wipe. Every field workspaces.update copies
+// has a meaningful zero, so the decode is the last place that can still tell an
+// absent key from a deliberate blank.
+func TestUpdateWorkspaceRequest_PreserveOmitted(t *testing.T) {
+	storedEndpoint := "https://track.example.com"
+	stored := WorkspaceSettings{
+		WebsiteURL: "https://stored.example.com",
+		LogoURL:    "https://stored.example.com/logo.png",
+		CoverURL:   "https://stored.example.com/cover.png",
+		FileManager: FileManagerSettings{
+			Endpoint:           "https://s3.example.com",
+			Bucket:             "stored-bucket",
+			AccessKey:          "AKIASTORED",
+			EncryptedSecretKey: "STORED-CIPHERTEXT",
+		},
+		TransactionalEmailProviderID: "provider-transactional",
+		MarketingEmailProviderID:     "provider-marketing",
+		EmailTrackingEnabled:         true,
+		CustomEndpointURL:            &storedEndpoint,
+	}
+
+	decode := func(t *testing.T, body string) WorkspaceSettings {
+		t.Helper()
+		var req UpdateWorkspaceRequest
+		require.NoError(t, json.Unmarshal([]byte(body), &req))
+		return req.Settings
+	}
+
+	t.Run("keys the body leaves out come back from the stored workspace", func(t *testing.T) {
+		got := decode(t, `{"id":"ws1","name":"Renamed","settings":{"timezone":"UTC","default_language":"en","languages":["en"]}}`)
+		got.PreserveOmitted(stored)
+
+		assert.Equal(t, stored.WebsiteURL, got.WebsiteURL)
+		assert.Equal(t, stored.LogoURL, got.LogoURL)
+		assert.Equal(t, stored.CoverURL, got.CoverURL)
+		assert.Equal(t, stored.FileManager, got.FileManager)
+		assert.Equal(t, stored.TransactionalEmailProviderID, got.TransactionalEmailProviderID)
+		assert.Equal(t, stored.MarketingEmailProviderID, got.MarketingEmailProviderID)
+		assert.True(t, got.EmailTrackingEnabled)
+		assert.Equal(t, stored.CustomEndpointURL, got.CustomEndpointURL)
+		assert.Equal(t, "UTC", got.Timezone, "the keys the body did carry are untouched")
+	})
+
+	t.Run("a key that is there wins, whatever its value", func(t *testing.T) {
+		got := decode(t, `{"id":"ws1","name":"Renamed","settings":{
+			"timezone":"UTC","default_language":"en","languages":["en"],
+			"email_tracking_enabled": false,
+			"logo_url": null,
+			"marketing_email_provider_id": "",
+			"custom_endpoint_url": "https://new.example.com"
+		}}`)
+		got.PreserveOmitted(stored)
+
+		assert.False(t, got.EmailTrackingEnabled, "an explicit false must still turn tracking off")
+		assert.Empty(t, got.LogoURL, "null clears: it is how the console clears a URL")
+		assert.Empty(t, got.MarketingEmailProviderID, "an empty string still unassigns")
+		require.NotNil(t, got.CustomEndpointURL)
+		assert.Equal(t, "https://new.example.com", *got.CustomEndpointURL)
+	})
+
+	t.Run("settings built in Go apply whole", func(t *testing.T) {
+		// No body means no key set to read absence from, so the fields have to mean
+		// exactly what they say — otherwise every Go caller silently stops updating.
+		got := WorkspaceSettings{Timezone: "UTC"}
+		got.PreserveOmitted(stored)
+
+		assert.Empty(t, got.WebsiteURL)
+		assert.False(t, got.EmailTrackingEnabled)
+		assert.Empty(t, got.FileManager.EncryptedSecretKey)
+	})
+
+	t.Run("settings decoded outside an update request record nothing", func(t *testing.T) {
+		// Only UpdateWorkspaceRequest.UnmarshalJSON records absences, so a stored row
+		// read back from the database is still applied whole.
+		var got WorkspaceSettings
+		require.NoError(t, json.Unmarshal([]byte(`{"timezone":"UTC"}`), &got))
+		got.PreserveOmitted(stored)
+
+		assert.Empty(t, got.WebsiteURL)
+		assert.False(t, got.EmailTrackingEnabled)
+	})
+}
+
+// The wire contract behind the blog going dark: blog_enabled has two meaningful
+// values, so the decode is the last place that can tell an absent key from a
+// deliberate "off".
+func TestSetBlogSettingsRequest_EnabledFlagPresence(t *testing.T) {
+	decode := func(t *testing.T, body string) *bool {
+		t.Helper()
+		var req SetBlogSettingsRequest
+		require.NoError(t, json.Unmarshal([]byte(body), &req))
+		_, enabled, _, _, err := req.Validate()
+		require.NoError(t, err)
+		return enabled
+	}
+
+	t.Run("key absent", func(t *testing.T) {
+		assert.Nil(t, decode(t, `{"workspace_id":"ws1","blog_settings":{"title":"My Blog"}}`))
+	})
+
+	t.Run("key null - read as absent", func(t *testing.T) {
+		assert.Nil(t, decode(t, `{"workspace_id":"ws1","blog_enabled":null}`),
+			"there is no bool a null could have meant")
+	})
+
+	t.Run("explicit false", func(t *testing.T) {
+		enabled := decode(t, `{"workspace_id":"ws1","blog_enabled":false}`)
+		require.NotNil(t, enabled, "turning the blog off must stay expressible")
+		assert.False(t, *enabled)
+	})
+
+	t.Run("explicit true", func(t *testing.T) {
+		enabled := decode(t, `{"workspace_id":"ws1","blog_enabled":true}`)
+		require.NotNil(t, enabled)
+		assert.True(t, *enabled)
+	})
+
+	t.Run("built in Go - counts as specified", func(t *testing.T) {
+		req := SetBlogSettingsRequest{WorkspaceID: "ws1", BlogEnabled: true}
+		_, enabled, _, _, err := req.Validate()
+		require.NoError(t, err)
+		require.NotNil(t, enabled)
+		assert.True(t, *enabled)
+	})
+}
+
+// The wire contract behind a blog losing its configuration: the stored settings are
+// replaced by whatever the request carries, so the decode is the last place that can tell
+// an absent blog_settings from a deliberate null.
+func TestSetBlogSettingsRequest_BlogSettingsPresence(t *testing.T) {
+	decode := func(t *testing.T, body string) (*BlogSettings, bool) {
+		t.Helper()
+		var req SetBlogSettingsRequest
+		require.NoError(t, json.Unmarshal([]byte(body), &req))
+		_, _, settings, specified, err := req.Validate()
+		require.NoError(t, err)
+		return settings, specified
+	}
+
+	t.Run("key absent", func(t *testing.T) {
+		settings, specified := decode(t, `{"workspace_id":"ws1","blog_enabled":false}`)
+		assert.False(t, specified, "a body flipping the switch says nothing about the configuration")
+		assert.Nil(t, settings)
+	})
+
+	t.Run("key null - an explicit clear, not an absence", func(t *testing.T) {
+		settings, specified := decode(t, `{"workspace_id":"ws1","blog_settings":null}`)
+		assert.True(t, specified, "an object has a null that means something")
+		assert.Nil(t, settings)
+	})
+
+	t.Run("key present", func(t *testing.T) {
+		settings, specified := decode(t, `{"workspace_id":"ws1","blog_settings":{"title":"My Blog"}}`)
+		assert.True(t, specified)
+		require.NotNil(t, settings)
+		assert.Equal(t, "My Blog", settings.Title)
+	})
+
+	t.Run("built in Go - counts as specified", func(t *testing.T) {
+		req := SetBlogSettingsRequest{WorkspaceID: "ws1"}
+		_, _, settings, specified, err := req.Validate()
+		require.NoError(t, err)
+		assert.True(t, specified, "a request with no body to have left a key out of means what its fields say")
+		assert.Nil(t, settings)
+	})
 }

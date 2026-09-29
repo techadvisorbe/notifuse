@@ -3,15 +3,15 @@ import { Handle, Position, useConnection, type NodeProps } from '@xyflow/react'
 import { Filter } from 'lucide-react'
 import { useLingui } from '@lingui/react/macro'
 import { BaseNode } from './BaseNode'
-import { nodeTypeColors } from './constants'
-import type { AutomationNodeData } from '../utils/flowConverter'
+import { nodeTypeColors, getNodeDescription } from './constants'
+import type { AutomationFlowNode, Structural } from '../utils/flowConverter'
 import type { FilterNodeConfig } from '../../../services/api/automation'
 
-type FilterNodeProps = NodeProps<AutomationNodeData>
+type FilterNodeProps = NodeProps<AutomationFlowNode>
 
 export const FilterNode: React.FC<FilterNodeProps> = ({ data, selected }) => {
   const { t } = useLingui()
-  const config = data.config as FilterNodeConfig
+  const config = data.config as Structural<FilterNodeConfig>
   const hasConditions = config?.conditions !== undefined
 
   const connection = useConnection()
@@ -46,6 +46,7 @@ export const FilterNode: React.FC<FilterNodeProps> = ({ data, selected }) => {
       <BaseNode
         type="filter"
         label={t`Filter`}
+        description={getNodeDescription(data.config)}
         icon={
           <Filter
             size={14}
@@ -59,22 +60,10 @@ export const FilterNode: React.FC<FilterNodeProps> = ({ data, selected }) => {
         {!hasConditions ? (
           <div className="text-orange-500 text-xs">{t`No conditions`}</div>
         ) : (
-          <div
-            className="text-xs text-gray-600 truncate max-w-[180px]"
-            title={
-              config.description
-                ? `${config.description} (${conditionCount} ${conditionCount !== 1 ? t`conditions` : t`condition`})`
-                : undefined
-            }
-          >
-            {config.description ? (
-              <>
-                {config.description}
-                <span className="text-gray-400 ml-1">({conditionCount})</span>
-              </>
-            ) : (
-              `${conditionCount} ${conditionCount !== 1 ? t`conditions` : t`condition`}`
-            )}
+          // Just the count: the description used to be folded into this line, but it is now
+          // rendered by BaseNode like every other node type's.
+          <div className="text-xs text-gray-600">
+            {`${conditionCount} ${conditionCount !== 1 ? t`conditions` : t`condition`}`}
           </div>
         )}
         {/* Yes/No labels for handles */}

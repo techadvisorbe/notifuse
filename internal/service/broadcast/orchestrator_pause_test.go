@@ -189,6 +189,9 @@ func TestBroadcastOrchestrator_Process_PausedDuringProcessing(t *testing.T) {
 	mockTimeProvider := mocks.NewMockTimeProvider(ctrl)
 	mockEventBus := domainmocks.NewMockEventBus(ctrl)
 
+	// The run that begins sending announces itself; this test is not about that event.
+	mockEventBus.EXPECT().Publish(gomock.Any(), eventOfType(domain.EventBroadcastSendingStarted)).AnyTimes()
+
 	// Setup logger expectations
 	mockLogger.EXPECT().WithFields(gomock.Any()).Return(mockLogger).AnyTimes()
 	mockLogger.EXPECT().WithField(gomock.Any(), gomock.Any()).Return(mockLogger).AnyTimes()
@@ -356,7 +359,7 @@ func TestBroadcastOrchestrator_Process_PausedDuringProcessing(t *testing.T) {
 
 	// Mock message sender - may or may not be called before pause is detected
 	mockMessageSender.EXPECT().
-		SendBatch(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+		SendBatch(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
 		Return(len(mockContacts), 0, nil).
 		MaxTimes(1)
 

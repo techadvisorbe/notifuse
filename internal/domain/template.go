@@ -38,7 +38,13 @@ func validateTemplateID(id string) error {
 	return nil
 }
 
-// Channel constants for templates
+// Channel constants for templates.
+//
+// A template's channel is a classification, not a filter: it decides which content
+// object the template must carry, which Validate enforces below, and it scopes the
+// template list. It is unrelated to the per-block visibility feature that was
+// removed — that shared the word "channel" and nothing else, so finding a leftover
+// of that removal here is a false trail.
 const (
 	ChannelEmail = "email"
 	ChannelWeb   = "web"
@@ -356,6 +362,12 @@ func (e *EmailTemplate) Validate(testData MapOfAny) error {
 		}
 	} else {
 		// Visual mode validation (default)
+		// VisualEditorTree is an interface: an API payload whose "email" object omits
+		// visual_editor_tree entirely leaves it nil, so it must be checked before any
+		// method call on it.
+		if e.VisualEditorTree == nil {
+			return fmt.Errorf("invalid email template: visual_editor_tree is required, or set editor_mode to '%s' and provide mjml_source", EditorModeCode)
+		}
 		if e.VisualEditorTree.GetType() != notifuse_mjml.MJMLComponentMjml {
 			return fmt.Errorf("invalid email template: visual_editor_tree must have type 'mjml'")
 		}
@@ -846,6 +858,18 @@ func (e *ErrTemplateNotFound) Error() string {
 	return e.Message
 }
 
+// ErrTemplateExists is returned on a UNIQUE violation (PG 23505) of the templates
+// primary key (id, version). Creation always writes version 1, so this means the id
+// is taken. The handler turns it into a 400 naming the id; without it the caller gets
+// a 500 and no way to learn the id is already in use.
+type ErrTemplateExists struct {
+	Message string
+}
+
+func (e *ErrTemplateExists) Error() string {
+	return e.Message
+}
+
 // ErrEditorModeChange is returned when attempting to switch a template's editor mode
 type ErrEditorModeChange struct {
 	Message string
@@ -1014,7 +1038,10 @@ func BuildTemplateData(req TemplateDataRequest) (MapOfAny, error) {
 		templateData["confirm_subscription_url"] = confirmURL
 	}
 
-	// Add global feed data if broadcast has pre-fetched data
+	// Add global feed data if the broadcast carries a payload. Presence is the only condition:
+	// a disabled feed with data is the client supplying its own payload rather than asking for a
+	// fetch, and dropping a payload the client no longer wants happens on the broadcast save that
+	// switches the feed off, not here.
 	if req.Broadcast != nil && req.Broadcast.DataFeed != nil && req.Broadcast.DataFeed.GlobalFeedData != nil {
 		templateData["global_feed"] = req.Broadcast.DataFeed.GlobalFeedData
 	}

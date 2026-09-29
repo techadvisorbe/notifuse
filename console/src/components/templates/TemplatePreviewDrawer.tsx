@@ -226,26 +226,24 @@ const TemplatePreviewDrawer: React.FC<TemplatePreviewDrawerProps> = ({
   // server rendered with (includes the injected workspace object); fall back to the
   // local data before the first compile resolves.
   const testData = effectiveTestData || templateData || record.test_data || {}
-  const messageMetadata = messageHistory?.message_data?.metadata
   items.push({
     key: '3',
     label: t`Template Data`,
-    children:
-      messageMetadata && Object.keys(messageMetadata).length > 0 ? (
-        <Space direction="vertical" size="middle" className="w-full">
-          <div>
-            <Text strong className="block mb-1">{t`Metadata`}</Text>
-            <JsonDataViewer data={messageMetadata} />
-          </div>
-          <div>
-            <Text strong className="block mb-1">{t`Data`}</Text>
-            <JsonDataViewer data={testData} />
-          </div>
-        </Space>
-      ) : (
-        <JsonDataViewer data={testData} />
-      )
+    children: <JsonDataViewer data={testData} />
   })
+
+  // Only transactional sends carry metadata, so this tab is pushed only when there is
+  // something in it — an always-present tab reading {} on every broadcast preview is
+  // worse than no tab. The table column, not this, is what guarantees metadata is
+  // reachable: this drawer opens only once a template id resolves to a fetched template.
+  const messageMetadata = messageHistory?.message_data?.metadata
+  if (messageMetadata && Object.keys(messageMetadata).length > 0) {
+    items.push({
+      key: '4',
+      label: t`Metadata`,
+      children: <JsonDataViewer data={messageMetadata} />
+    })
+  }
 
   const emailProvider = workspace.integrations?.find(
     (i) =>
@@ -332,7 +330,7 @@ const TemplatePreviewDrawer: React.FC<TemplatePreviewDrawerProps> = ({
           <Descriptions.Item label={t`CC`}>
             <Space size={[0, 4]} wrap>
               {messageHistory.channel_options.cc.map((email, idx) => (
-                <Tag bordered={false} key={idx} color="blue" className="text-xs">
+                <Tag variant="filled" key={idx} color="blue" className="text-xs">
                   {email}
                 </Tag>
               ))}
@@ -344,7 +342,7 @@ const TemplatePreviewDrawer: React.FC<TemplatePreviewDrawerProps> = ({
           <Descriptions.Item label={t`BCC`}>
             <Space size={[0, 4]} wrap>
               {messageHistory.channel_options.bcc.map((email, idx) => (
-                <Tag bordered={false} key={idx} color="purple" className="text-xs">
+                <Tag variant="filled" key={idx} color="purple" className="text-xs">
                   {email}
                 </Tag>
               ))}
@@ -373,14 +371,14 @@ const TemplatePreviewDrawer: React.FC<TemplatePreviewDrawerProps> = ({
           error &&
           !mjmlError && ( // General error (not MJML compilation error)
             <div className="p-4">
-              <Alert message={t`Error loading preview`} description={error} type="error" showIcon />
+              <Alert title={t`Error loading preview`} description={error} type="error" showIcon />
             </div>
           )}
         {!isLoading && mjmlError && (
           // MJML Compilation Error
           <div className="p-4 overflow-auto flex-grow flex flex-col">
             <Alert
-              message={t`MJML Compilation Error: ${mjmlError.message}`}
+              title={t`MJML Compilation Error: ${mjmlError.message}`}
               type="error"
               showIcon
               description={
@@ -430,12 +428,11 @@ const TemplatePreviewDrawer: React.FC<TemplatePreviewDrawerProps> = ({
       <Drawer
         title={`${record.name}`}
         placement="right"
-        width={650}
+        size={650}
         open={isOpen}
         onClose={() => setIsOpen(false)}
-        destroyOnClose={true}
-        maskClosable={true}
-        mask={true}
+        destroyOnHidden={true}
+        mask={{ enabled: true, closable: true }}
         keyboard={true}
         forceRender={false}
       >

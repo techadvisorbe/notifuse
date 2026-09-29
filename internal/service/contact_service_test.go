@@ -5,16 +5,18 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/Notifuse/notifuse/internal/domain"
 	"github.com/Notifuse/notifuse/internal/domain/mocks"
 	pkgmocks "github.com/Notifuse/notifuse/pkg/mocks"
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // createContactServiceWithMocks creates a ContactService with all required mocks
-func createContactServiceWithMocks(ctrl *gomock.Controller) (*ContactService, *mocks.MockContactRepository, *mocks.MockWorkspaceRepository, *mocks.MockAuthService, *mocks.MockMessageHistoryRepository, *mocks.MockInboundWebhookEventRepository, *mocks.MockContactListRepository, *mocks.MockContactTimelineRepository, *pkgmocks.MockLogger) {
+func createContactServiceWithMocks(ctrl *gomock.Controller) (*ContactService, *mocks.MockContactRepository, *mocks.MockWorkspaceRepository, *mocks.MockAuthService, *mocks.MockMessageHistoryRepository, *mocks.MockInboundWebhookEventRepository, *mocks.MockContactListRepository, *mocks.MockContactTimelineRepository, *mocks.MockEmailQueueRepository, *mocks.MockCustomEventRepository, *mocks.MockSegmentRepository, *mocks.MockContactSegmentQueueRepository, *pkgmocks.MockLogger) {
 	mockRepo := mocks.NewMockContactRepository(ctrl)
 	mockWorkspaceRepo := mocks.NewMockWorkspaceRepository(ctrl)
 	mockAuthService := mocks.NewMockAuthService(ctrl)
@@ -22,6 +24,10 @@ func createContactServiceWithMocks(ctrl *gomock.Controller) (*ContactService, *m
 	mockInboundWebhookEventRepo := mocks.NewMockInboundWebhookEventRepository(ctrl)
 	mockContactListRepo := mocks.NewMockContactListRepository(ctrl)
 	mockContactTimelineRepo := mocks.NewMockContactTimelineRepository(ctrl)
+	mockEmailQueueRepo := mocks.NewMockEmailQueueRepository(ctrl)
+	mockCustomEventRepo := mocks.NewMockCustomEventRepository(ctrl)
+	mockSegmentRepo := mocks.NewMockSegmentRepository(ctrl)
+	mockSegmentQueueRepo := mocks.NewMockContactSegmentQueueRepository(ctrl)
 	mockLogger := pkgmocks.NewMockLogger(ctrl)
 
 	service := NewContactService(
@@ -32,17 +38,22 @@ func createContactServiceWithMocks(ctrl *gomock.Controller) (*ContactService, *m
 		mockInboundWebhookEventRepo,
 		mockContactListRepo,
 		mockContactTimelineRepo,
+		nil, // web analytics repo: optional, and these tests do not exercise it
+		mockEmailQueueRepo,
+		mockCustomEventRepo,
+		mockSegmentRepo,
+		mockSegmentQueueRepo,
 		mockLogger,
 	)
 
-	return service, mockRepo, mockWorkspaceRepo, mockAuthService, mockMessageHistoryRepo, mockInboundWebhookEventRepo, mockContactListRepo, mockContactTimelineRepo, mockLogger
+	return service, mockRepo, mockWorkspaceRepo, mockAuthService, mockMessageHistoryRepo, mockInboundWebhookEventRepo, mockContactListRepo, mockContactTimelineRepo, mockEmailQueueRepo, mockCustomEventRepo, mockSegmentRepo, mockSegmentQueueRepo, mockLogger
 }
 
 func TestContactService_GetContactByEmail(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	service, mockRepo, _, mockAuthService, _, _, _, _, mockLogger := createContactServiceWithMocks(ctrl)
+	service, mockRepo, _, mockAuthService, _, _, _, _, _, _, _, _, mockLogger := createContactServiceWithMocks(ctrl)
 
 	ctx := context.Background()
 	workspaceID := "workspace123"
@@ -156,7 +167,7 @@ func TestContactService_GetContactByExternalID(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	service, mockRepo, _, mockAuthService, _, _, _, _, mockLogger := createContactServiceWithMocks(ctrl)
+	service, mockRepo, _, mockAuthService, _, _, _, _, _, _, _, _, mockLogger := createContactServiceWithMocks(ctrl)
 
 	ctx := context.Background()
 	workspaceID := "workspace123"
@@ -247,7 +258,7 @@ func TestContactService_GetContacts(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	service, mockRepo, _, mockAuthService, _, _, _, _, mockLogger := createContactServiceWithMocks(ctrl)
+	service, mockRepo, _, mockAuthService, _, _, _, _, _, _, _, _, mockLogger := createContactServiceWithMocks(ctrl)
 
 	ctx := context.Background()
 	workspaceID := "workspace123"
@@ -302,7 +313,13 @@ func TestContactService_DeleteContact(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	service, mockContactRepo, _, mockAuthService, mockMessageHistoryRepo, mockInboundWebhookEventRepo, mockContactListRepo, mockContactTimelineRepo, mockLogger := createContactServiceWithMocks(ctrl)
+	service, mockContactRepo, _, mockAuthService, mockMessageHistoryRepo, mockInboundWebhookEventRepo, mockContactListRepo, mockContactTimelineRepo, mockEmailQueueRepo, mockCustomEventRepo, mockSegmentRepo, mockSegmentQueueRepo, mockLogger := createContactServiceWithMocks(ctrl)
+
+	// The erasure purges added in S3. Armed loosely here on purpose — the order
+	// they run in is pinned by TestContactService_DeleteContactPurgeOrder.
+	mockCustomEventRepo.EXPECT().DeleteForEmail(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+	mockSegmentRepo.EXPECT().DeleteForEmail(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+	mockSegmentQueueRepo.EXPECT().RemoveFromQueue(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 
 	ctx := context.Background()
 	workspaceID := "test-workspace"
@@ -319,6 +336,7 @@ func TestContactService_DeleteContact(t *testing.T) {
 
 	t.Run("successful deletion", func(t *testing.T) {
 		mockAuthService.EXPECT().AuthenticateUserForWorkspace(ctx, workspaceID).Return(ctx, &domain.User{}, userWorkspace, nil)
+		mockEmailQueueRepo.EXPECT().DeleteForEmail(ctx, workspaceID, email).Return(int64(0), nil)
 		mockMessageHistoryRepo.EXPECT().DeleteForEmail(ctx, workspaceID, email).Return(nil)
 		mockInboundWebhookEventRepo.EXPECT().DeleteForEmail(ctx, workspaceID, email).Return(nil)
 		mockContactListRepo.EXPECT().DeleteForEmail(ctx, workspaceID, email).Return(nil)
@@ -337,19 +355,29 @@ func TestContactService_DeleteContact(t *testing.T) {
 		assert.Contains(t, err.Error(), "failed to authenticate user")
 	})
 
-	t.Run("contact not found", func(t *testing.T) {
+	t.Run("an already-absent contact still has its dependent rows cleaned up", func(t *testing.T) {
+		// The contact row is deleted FIRST so an in-flight web analytics flush
+		// cannot re-insert timeline rows behind the purge — see DeleteContact.
+		// The consequence that has to be pinned is the retry: the repository
+		// reports a zero-row delete as "contact not found", so a run that removed
+		// the contact and then failed part-way could only be finished by retrying,
+		// and treating that as fatal would strand the timeline and the address on
+		// the web analytics rows with nothing able to remove them.
 		mockAuthService.EXPECT().AuthenticateUserForWorkspace(ctx, workspaceID).Return(ctx, &domain.User{}, userWorkspace, nil)
+		mockEmailQueueRepo.EXPECT().DeleteForEmail(ctx, workspaceID, email).Return(int64(0), nil)
 		mockMessageHistoryRepo.EXPECT().DeleteForEmail(ctx, workspaceID, email).Return(nil)
 		mockInboundWebhookEventRepo.EXPECT().DeleteForEmail(ctx, workspaceID, email).Return(nil)
 		mockContactListRepo.EXPECT().DeleteForEmail(ctx, workspaceID, email).Return(nil)
-		mockContactTimelineRepo.EXPECT().DeleteForEmail(ctx, workspaceID, email).Return(nil)
 		mockLogger.EXPECT().WithField("email", email).Return(mockLogger)
 		mockContactRepo.EXPECT().DeleteContact(ctx, workspaceID, email).Return(fmt.Errorf("contact not found"))
-		mockLogger.EXPECT().Error(fmt.Sprintf("Failed to delete contact: %v", fmt.Errorf("contact not found")))
+		mockLogger.EXPECT().Info(gomock.Any())
+		// The cleanup MUST continue past the missing contact row.
+		// The web analytics repo is nil in this harness, so AnonymizeContact is
+		// skipped; the timeline purge is the part that must still run.
+		mockContactTimelineRepo.EXPECT().DeleteForEmail(ctx, workspaceID, email).Return(nil)
 
-		err := service.DeleteContact(ctx, workspaceID, email)
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "failed to delete contact")
+		assert.NoError(t, service.DeleteContact(ctx, workspaceID, email),
+			"a retry has to be able to finish an interrupted erasure")
 	})
 }
 
@@ -357,7 +385,7 @@ func TestContactService_UpsertContact(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	service, mockRepo, _, mockAuthService, _, _, _, _, mockLogger := createContactServiceWithMocks(ctrl)
+	service, mockRepo, _, mockAuthService, _, _, _, _, _, _, _, _, mockLogger := createContactServiceWithMocks(ctrl)
 
 	ctx := context.Background()
 	workspaceID := "workspace123"
@@ -375,21 +403,52 @@ func TestContactService_UpsertContact(t *testing.T) {
 	}
 
 	t.Run("successful create", func(t *testing.T) {
+		// Deliberately not the struct that was passed in: the response has to carry
+		// the row as stored, which is the only place the assigned timestamps and the
+		// merged fields exist.
+		stored := &domain.Contact{
+			Email:       "test@example.com",
+			ExternalID:  &domain.NullableString{String: "crm-42"},
+			DBCreatedAt: time.Now().UTC(),
+		}
 		mockAuthService.EXPECT().AuthenticateUserForWorkspace(ctx, workspaceID).Return(ctx, &domain.User{}, userWorkspace, nil)
 		mockRepo.EXPECT().UpsertContact(ctx, workspaceID, contact).Return(true, nil)
+		mockRepo.EXPECT().GetContactByEmail(ctx, workspaceID, contact.Email).Return(stored, nil)
 
 		result := service.UpsertContact(ctx, workspaceID, contact)
 		assert.Equal(t, domain.UpsertContactOperationCreate, result.Action)
 		assert.Empty(t, result.Error)
+		assert.Same(t, stored, result.Contact)
 	})
 
 	t.Run("successful update", func(t *testing.T) {
+		stored := &domain.Contact{
+			Email:     "test@example.com",
+			FirstName: &domain.NullableString{String: "Kept from an earlier write"},
+		}
 		mockAuthService.EXPECT().AuthenticateUserForWorkspace(ctx, workspaceID).Return(ctx, &domain.User{}, userWorkspace, nil)
 		mockRepo.EXPECT().UpsertContact(ctx, workspaceID, contact).Return(false, nil)
+		mockRepo.EXPECT().GetContactByEmail(ctx, workspaceID, contact.Email).Return(stored, nil)
 
 		result := service.UpsertContact(ctx, workspaceID, contact)
 		assert.Equal(t, domain.UpsertContactOperationUpdate, result.Action)
 		assert.Empty(t, result.Error)
+		assert.Same(t, stored, result.Contact)
+	})
+
+	t.Run("read-back failure leaves the successful write reported as a success", func(t *testing.T) {
+		mockAuthService.EXPECT().AuthenticateUserForWorkspace(ctx, workspaceID).Return(ctx, &domain.User{}, userWorkspace, nil)
+		mockRepo.EXPECT().UpsertContact(ctx, workspaceID, contact).Return(true, nil)
+		mockRepo.EXPECT().GetContactByEmail(ctx, workspaceID, contact.Email).Return(nil, errors.New("read error"))
+		mockLogger.EXPECT().WithField("email", contact.Email).Return(mockLogger)
+		mockLogger.EXPECT().Error("Failed to read back upserted contact: read error")
+
+		result := service.UpsertContact(ctx, workspaceID, contact)
+		// The row is written; degrading that to an error would have the caller
+		// retry a write that already landed.
+		assert.Equal(t, domain.UpsertContactOperationCreate, result.Action)
+		assert.Empty(t, result.Error)
+		assert.Nil(t, result.Contact)
 	})
 
 	t.Run("authentication error", func(t *testing.T) {
@@ -432,7 +491,7 @@ func TestContactService_UpsertContactWithPartialUpdates(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	service, mockRepo, _, mockAuthService, _, _, _, _, _ := createContactServiceWithMocks(ctrl)
+	service, mockRepo, _, mockAuthService, _, _, _, _, _, _, _, _, _ := createContactServiceWithMocks(ctrl)
 
 	ctx := context.Background()
 	workspaceID := "workspace123"
@@ -461,6 +520,8 @@ func TestContactService_UpsertContactWithPartialUpdates(t *testing.T) {
 				assert.Equal(t, "minimal@example.com", contact.Email)
 				return true, nil
 			})
+
+		mockRepo.EXPECT().GetContactByEmail(ctx, workspaceID, "minimal@example.com").Return(&domain.Contact{Email: "minimal@example.com"}, nil)
 
 		result := service.UpsertContact(ctx, workspaceID, minimalContact)
 		assert.Equal(t, domain.UpsertContactOperationCreate, result.Action)
@@ -492,6 +553,8 @@ func TestContactService_UpsertContactWithPartialUpdates(t *testing.T) {
 				assert.Nil(t, contact.CustomJSON1)
 				return false, nil
 			})
+
+		mockRepo.EXPECT().GetContactByEmail(ctx, workspaceID, "partial@example.com").Return(&domain.Contact{Email: "partial@example.com"}, nil)
 
 		result := service.UpsertContact(ctx, workspaceID, partialContact)
 		assert.Equal(t, domain.UpsertContactOperationUpdate, result.Action)
@@ -525,6 +588,8 @@ func TestContactService_UpsertContactWithPartialUpdates(t *testing.T) {
 				return true, nil
 			})
 
+		mockRepo.EXPECT().GetContactByEmail(ctx, workspaceID, "json@example.com").Return(&domain.Contact{Email: "json@example.com"}, nil)
+
 		result := service.UpsertContact(ctx, workspaceID, jsonContact)
 		assert.Equal(t, domain.UpsertContactOperationCreate, result.Action)
 		assert.Empty(t, result.Error)
@@ -555,6 +620,8 @@ func TestContactService_UpsertContactWithPartialUpdates(t *testing.T) {
 				return false, nil
 			})
 
+		mockRepo.EXPECT().GetContactByEmail(ctx, workspaceID, "null@example.com").Return(&domain.Contact{Email: "null@example.com"}, nil)
+
 		result := service.UpsertContact(ctx, workspaceID, contactWithNulls)
 		assert.Equal(t, domain.UpsertContactOperationUpdate, result.Action)
 		assert.Empty(t, result.Error)
@@ -565,7 +632,7 @@ func TestContactService_BatchImportContacts(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	service, mockRepo, _, mockAuthService, _, _, _, _, mockLogger := createContactServiceWithMocks(ctrl)
+	service, mockRepo, _, mockAuthService, _, _, _, _, _, _, _, _, mockLogger := createContactServiceWithMocks(ctrl)
 
 	ctx := context.Background()
 	workspaceID := "workspace123"
@@ -682,7 +749,7 @@ func TestContactService_BatchImportContacts_WithBulkOperations(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	service, mockRepo, _, mockAuthService, _, _, mockContactListRepo, _, mockLogger := createContactServiceWithMocks(ctrl)
+	service, mockRepo, _, mockAuthService, _, _, mockContactListRepo, _, _, _, _, _, mockLogger := createContactServiceWithMocks(ctrl)
 
 	ctx := context.Background()
 	workspaceID := "workspace123"
@@ -872,7 +939,7 @@ func TestContactService_BatchImportContacts_DuplicateEmails(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	service, mockRepo, _, mockAuthService, _, _, _, _, _ := createContactServiceWithMocks(ctrl)
+	service, mockRepo, _, mockAuthService, _, _, _, _, _, _, _, _, _ := createContactServiceWithMocks(ctrl)
 
 	ctx := context.Background()
 	workspaceID := "workspace123"
@@ -975,7 +1042,7 @@ func TestContactService_BatchImportContacts_Chunking(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	service, mockRepo, _, mockAuthService, _, _, _, _, mockLogger := createContactServiceWithMocks(ctrl)
+	service, mockRepo, _, mockAuthService, _, _, _, _, _, _, _, _, mockLogger := createContactServiceWithMocks(ctrl)
 
 	ctx := context.Background()
 	workspaceID := "workspace123"
@@ -1087,7 +1154,7 @@ func TestContactService_CountContacts(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	service, mockRepo, _, mockAuthService, _, _, _, _, mockLogger := createContactServiceWithMocks(ctrl)
+	service, mockRepo, _, mockAuthService, _, _, _, _, _, _, _, _, mockLogger := createContactServiceWithMocks(ctrl)
 
 	ctx := context.Background()
 	workspaceID := "workspace123"
@@ -1148,4 +1215,372 @@ func TestContactService_CountContacts(t *testing.T) {
 		assert.Equal(t, 0, count)
 		assert.Contains(t, err.Error(), "failed to count contacts")
 	})
+}
+
+func TestContactService_DeleteContactPurgesEmailQueue(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	service, mockContactRepo, _, mockAuthService, mockMessageHistoryRepo, mockInboundWebhookEventRepo, mockContactListRepo, mockContactTimelineRepo, mockEmailQueueRepo, mockCustomEventRepo, mockSegmentRepo, mockSegmentQueueRepo, mockLogger := createContactServiceWithMocks(ctrl)
+
+	// The erasure purges added in S3. Armed loosely here on purpose — the order
+	// they run in is pinned by TestContactService_DeleteContactPurgeOrder.
+	mockCustomEventRepo.EXPECT().DeleteForEmail(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+	mockSegmentRepo.EXPECT().DeleteForEmail(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+	mockSegmentQueueRepo.EXPECT().RemoveFromQueue(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+
+	ctx := context.Background()
+	workspaceID := "test-workspace"
+	email := "test@example.com"
+
+	userWorkspace := &domain.UserWorkspace{
+		UserID:      "user123",
+		WorkspaceID: workspaceID,
+		Role:        "member",
+		Permissions: domain.UserPermissions{
+			domain.PermissionResourceContacts: {Read: true, Write: true},
+		},
+	}
+
+	t.Run("queued mail to the deleted address is dropped before anything else", func(t *testing.T) {
+		// Ordering is the assertion. Every other step is cleanup of rows that
+		// already exist; this one is the only step that stops an email from
+		// being sent, so it runs first to keep the window in which a worker can
+		// claim a row as small as possible.
+		gomock.InOrder(
+			mockEmailQueueRepo.EXPECT().DeleteForEmail(ctx, workspaceID, email).Return(int64(2), nil),
+			mockMessageHistoryRepo.EXPECT().DeleteForEmail(ctx, workspaceID, email).Return(nil),
+		)
+		mockAuthService.EXPECT().AuthenticateUserForWorkspace(ctx, workspaceID).Return(ctx, &domain.User{}, userWorkspace, nil)
+		mockInboundWebhookEventRepo.EXPECT().DeleteForEmail(ctx, workspaceID, email).Return(nil)
+		mockContactListRepo.EXPECT().DeleteForEmail(ctx, workspaceID, email).Return(nil)
+		mockContactRepo.EXPECT().DeleteContact(ctx, workspaceID, email).Return(nil)
+		mockContactTimelineRepo.EXPECT().DeleteForEmail(ctx, workspaceID, email).Return(nil)
+
+		assert.NoError(t, service.DeleteContact(ctx, workspaceID, email))
+	})
+
+	t.Run("a failed purge aborts the deletion", func(t *testing.T) {
+		// Fatal, not best-effort. Continuing would report the contact erased
+		// while their queued mail is still on its way to them.
+		mockAuthService.EXPECT().AuthenticateUserForWorkspace(ctx, workspaceID).Return(ctx, &domain.User{}, userWorkspace, nil)
+		mockEmailQueueRepo.EXPECT().DeleteForEmail(ctx, workspaceID, email).Return(int64(0), fmt.Errorf("db down"))
+		mockLogger.EXPECT().WithField("email", email).Return(mockLogger)
+		mockLogger.EXPECT().Error(gomock.Any())
+
+		err := service.DeleteContact(ctx, workspaceID, email)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to delete queued emails")
+	})
+}
+
+// TestContactService_DeleteContactPurgeOrder pins the order the purges run in,
+// because two of them are chained through database triggers.
+//
+//	contact_segments DELETE
+//	  -> contact_segment_changes_trigger (AFTER INSERT OR DELETE)
+//	     INSERTs a segment.left row into contact_timeline carrying OLD.email
+//	     -> contact_timeline_queue_trigger (AFTER INSERT)
+//	        INSERTs that address into contact_segment_queue
+//
+// So the segment purge must come BEFORE the timeline purge, or it puts the
+// deleted address straight back on the timeline it just cleared; and the queue
+// purge must come AFTER the timeline purge, or it runs before the row the
+// cascade is about to create even exists.
+//
+// Every one of these steps individually "works" in any order. Only the
+// composition is wrong, and only against a real database — which is why the
+// ordering is asserted here as well as end to end.
+func TestContactService_DeleteContactPurgeOrder(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	service, mockContactRepo, _, mockAuthService, mockMessageHistoryRepo, mockInboundWebhookEventRepo,
+		mockContactListRepo, mockContactTimelineRepo, mockEmailQueueRepo, mockCustomEventRepo,
+		mockSegmentRepo, mockSegmentQueueRepo, mockLogger := createContactServiceWithMocks(ctrl)
+	_ = mockLogger
+
+	ctx := context.Background()
+	workspaceID := "test-workspace"
+	email := "test@example.com"
+
+	userWorkspace := &domain.UserWorkspace{
+		UserID:      "user123",
+		WorkspaceID: workspaceID,
+		Role:        "member",
+		Permissions: domain.UserPermissions{
+			domain.PermissionResourceContacts: {Read: true, Write: true},
+		},
+	}
+
+	mockAuthService.EXPECT().AuthenticateUserForWorkspace(ctx, workspaceID).Return(ctx, &domain.User{}, userWorkspace, nil)
+
+	gomock.InOrder(
+		// Stops mail going out; everything after only cleans up.
+		mockEmailQueueRepo.EXPECT().DeleteForEmail(ctx, workspaceID, email).Return(int64(0), nil),
+		mockMessageHistoryRepo.EXPECT().DeleteForEmail(ctx, workspaceID, email).Return(nil),
+		mockInboundWebhookEventRepo.EXPECT().DeleteForEmail(ctx, workspaceID, email).Return(nil),
+		mockContactListRepo.EXPECT().DeleteForEmail(ctx, workspaceID, email).Return(nil),
+		// The contact row goes before its dependents, so an in-flight web
+		// analytics flush fails its EXISTS guard instead of re-inserting.
+		mockContactRepo.EXPECT().DeleteContact(ctx, workspaceID, email).Return(nil),
+		mockCustomEventRepo.EXPECT().DeleteForEmail(ctx, workspaceID, email).Return(nil),
+		mockSegmentRepo.EXPECT().DeleteForEmail(ctx, workspaceID, email).Return(nil),
+		mockContactTimelineRepo.EXPECT().DeleteForEmail(ctx, workspaceID, email).Return(nil),
+		mockSegmentQueueRepo.EXPECT().RemoveFromQueue(ctx, workspaceID, email).Return(nil),
+	)
+
+	require.NoError(t, service.DeleteContact(ctx, workspaceID, email))
+}
+
+// Each new purge is fatal on error: reporting a contact as erased while a copy of
+// their address survives is the outcome the whole slice exists to prevent.
+func TestContactService_DeleteContactFailsLoudlyOnEachPurge(t *testing.T) {
+	cases := []struct {
+		name string
+		arm  func(*mocks.MockCustomEventRepository, *mocks.MockSegmentRepository, *mocks.MockContactSegmentQueueRepository)
+		want string
+	}{
+		{
+			"custom events",
+			func(ce *mocks.MockCustomEventRepository, _ *mocks.MockSegmentRepository, _ *mocks.MockContactSegmentQueueRepository) {
+				ce.EXPECT().DeleteForEmail(gomock.Any(), gomock.Any(), gomock.Any()).Return(errors.New("db down"))
+			},
+			"failed to delete custom events",
+		},
+		{
+			"segment memberships",
+			func(ce *mocks.MockCustomEventRepository, sg *mocks.MockSegmentRepository, _ *mocks.MockContactSegmentQueueRepository) {
+				ce.EXPECT().DeleteForEmail(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil)
+				sg.EXPECT().DeleteForEmail(gomock.Any(), gomock.Any(), gomock.Any()).Return(errors.New("db down"))
+			},
+			"failed to delete contact segments",
+		},
+		{
+			// The last purge in the sequence, and the one most easily forgotten
+			// precisely because it runs after everything else has succeeded.
+			"segment queue",
+			func(ce *mocks.MockCustomEventRepository, sg *mocks.MockSegmentRepository, q *mocks.MockContactSegmentQueueRepository) {
+				ce.EXPECT().DeleteForEmail(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil)
+				sg.EXPECT().DeleteForEmail(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil)
+				q.EXPECT().RemoveFromQueue(gomock.Any(), gomock.Any(), gomock.Any()).Return(errors.New("db down"))
+			},
+			"failed to remove contact from the segment queue",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			service, mockContactRepo, _, mockAuthService, mockMessageHistoryRepo, mockInboundWebhookEventRepo,
+				mockContactListRepo, mockContactTimelineRepo, mockEmailQueueRepo, mockCustomEventRepo,
+				mockSegmentRepo, mockSegmentQueueRepo, mockLogger := createContactServiceWithMocks(ctrl)
+
+			// The queue purge runs last, after the timeline purge, so reaching it
+			// means everything before it succeeded.
+			mockContactTimelineRepo.EXPECT().DeleteForEmail(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+
+			ctx := context.Background()
+			workspaceID := "test-workspace"
+			email := "test@example.com"
+
+			mockAuthService.EXPECT().AuthenticateUserForWorkspace(ctx, workspaceID).Return(ctx, &domain.User{},
+				&domain.UserWorkspace{
+					UserID: "u", WorkspaceID: workspaceID, Role: "member",
+					Permissions: domain.UserPermissions{
+						domain.PermissionResourceContacts: {Read: true, Write: true},
+					},
+				}, nil)
+			mockEmailQueueRepo.EXPECT().DeleteForEmail(ctx, workspaceID, email).Return(int64(0), nil)
+			mockMessageHistoryRepo.EXPECT().DeleteForEmail(ctx, workspaceID, email).Return(nil)
+			mockInboundWebhookEventRepo.EXPECT().DeleteForEmail(ctx, workspaceID, email).Return(nil)
+			mockContactListRepo.EXPECT().DeleteForEmail(ctx, workspaceID, email).Return(nil)
+			mockContactRepo.EXPECT().DeleteContact(ctx, workspaceID, email).Return(nil)
+			mockLogger.EXPECT().WithField("email", email).Return(mockLogger).AnyTimes()
+			mockLogger.EXPECT().Error(gomock.Any()).AnyTimes()
+
+			tc.arm(mockCustomEventRepo, mockSegmentRepo, mockSegmentQueueRepo)
+
+			err := service.DeleteContact(ctx, workspaceID, email)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.want)
+		})
+	}
+}
+
+// TestContactService_PermissionDenialsAreTyped pins the typed denial the handler
+// needs. UpsertContact and BatchImportContacts report through a struct rather than
+// an error return, so the *domain.PermissionError has to travel on the struct's Err
+// field: with only the prose in Error, errors.As finds nothing and the route answers
+// 500 instead of 403. A genuine per-contact failure keeps reporting through Error
+// alone and leaves Err nil.
+func TestContactService_PermissionDenialsAreTyped(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	service, _, _, mockAuthService, _, _, _, _, _, _, _, _, mockLogger := createContactServiceWithMocks(ctrl)
+
+	ctx := context.Background()
+	workspaceID := "workspace123"
+
+	userWorkspace := func(permissions domain.UserPermissions) *domain.UserWorkspace {
+		return &domain.UserWorkspace{
+			UserID:      "user123",
+			WorkspaceID: workspaceID,
+			Role:        "member",
+			Permissions: permissions,
+		}
+	}
+	noContactWrite := userWorkspace(domain.UserPermissions{
+		domain.PermissionResourceContacts: {Read: true, Write: false},
+	})
+	noListWrite := userWorkspace(domain.UserPermissions{
+		domain.PermissionResourceContacts: {Read: true, Write: true},
+		domain.PermissionResourceLists:    {Read: true, Write: false},
+	})
+	fullWrite := userWorkspace(domain.UserPermissions{
+		domain.PermissionResourceContacts: {Read: true, Write: true},
+	})
+
+	t.Run("UpsertContact denied on contacts write", func(t *testing.T) {
+		contact := &domain.Contact{Email: "test@example.com"}
+		mockAuthService.EXPECT().AuthenticateUserForWorkspace(ctx, workspaceID).Return(ctx, &domain.User{}, noContactWrite, nil)
+		mockLogger.EXPECT().WithField("email", contact.Email).Return(mockLogger)
+		mockLogger.EXPECT().Error("Insufficient permissions: write access to contacts required")
+
+		result := service.UpsertContact(ctx, workspaceID, contact)
+		assert.Equal(t, domain.UpsertContactOperationError, result.Action)
+		assert.Equal(t, "Insufficient permissions: write access to contacts required", result.Error)
+
+		var permErr *domain.PermissionError
+		require.True(t, errors.As(result.Err, &permErr))
+		assert.Equal(t, domain.PermissionResourceContacts, permErr.Resource)
+		assert.Equal(t, domain.PermissionTypeWrite, permErr.Permission)
+	})
+
+	t.Run("BatchImportContacts denied on contacts write", func(t *testing.T) {
+		contacts := []*domain.Contact{{Email: "contact1@example.com"}}
+		mockAuthService.EXPECT().AuthenticateUserForWorkspace(ctx, workspaceID).Return(ctx, &domain.User{}, noContactWrite, nil)
+
+		response := service.BatchImportContacts(ctx, workspaceID, contacts, nil)
+		assert.Equal(t, "Insufficient permissions: write access to contacts required", response.Error)
+
+		var permErr *domain.PermissionError
+		require.True(t, errors.As(response.Err, &permErr))
+		assert.Equal(t, domain.PermissionResourceContacts, permErr.Resource)
+		assert.Equal(t, domain.PermissionTypeWrite, permErr.Permission)
+	})
+
+	t.Run("BatchImportContacts denied on lists write", func(t *testing.T) {
+		contacts := []*domain.Contact{{Email: "contact1@example.com"}}
+		mockAuthService.EXPECT().AuthenticateUserForWorkspace(ctx, workspaceID).Return(ctx, &domain.User{}, noListWrite, nil)
+
+		response := service.BatchImportContacts(ctx, workspaceID, contacts, []string{"list123"})
+		assert.Equal(t, "Insufficient permissions: write access to lists required", response.Error)
+
+		var permErr *domain.PermissionError
+		require.True(t, errors.As(response.Err, &permErr))
+		assert.Equal(t, domain.PermissionResourceLists, permErr.Resource)
+		assert.Equal(t, domain.PermissionTypeWrite, permErr.Permission)
+	})
+
+	t.Run("UpsertContact validation failure carries no typed error", func(t *testing.T) {
+		invalidContact := &domain.Contact{Email: ""}
+		mockAuthService.EXPECT().AuthenticateUserForWorkspace(ctx, workspaceID).Return(ctx, &domain.User{}, fullWrite, nil)
+		mockLogger.EXPECT().WithField("email", invalidContact.Email).Return(mockLogger)
+		mockLogger.EXPECT().Error(gomock.Any())
+
+		result := service.UpsertContact(ctx, workspaceID, invalidContact)
+		assert.Equal(t, domain.UpsertContactOperationError, result.Action)
+		assert.NotEmpty(t, result.Error)
+		assert.NoError(t, result.Err)
+	})
+}
+
+// TestContactService_AuthenticationFailureCarriesTypedError pins the companion to
+// the permission cases above: an authentication failure must travel on Err too,
+// not only on the display string.
+//
+// Both methods report through a response struct instead of returning an error, so
+// Err is the sole channel that survives with a type attached. Setting only Error
+// left the handler with a nil to match on, and every authentication failure —
+// revoked key, non-member, unknown workspace — collapsed into the handler's
+// catch-all status. A revoked key answering anything but 401 is the expensive one:
+// integrations key off that status to prompt for re-authentication, so the Zap
+// stops with a generic failure and nobody is ever asked to reconnect.
+func TestContactService_AuthenticationFailureCarriesTypedError(t *testing.T) {
+	ctx := context.Background()
+	workspaceID := "workspace123"
+
+	testCases := []struct {
+		name string
+		// authErr is wrapped the way AuthenticateUserForWorkspace wraps on its way
+		// up, so the assertions also pin that Err stays unwrappable through it.
+		authErr error
+		assert  func(t *testing.T, err error)
+	}{
+		{
+			name:    "revoked api key",
+			authErr: fmt.Errorf("api key has been revoked: %w", domain.ErrAPIKeyRevoked),
+			assert: func(t *testing.T, err error) {
+				assert.True(t, errors.Is(err, domain.ErrAPIKeyRevoked))
+			},
+		},
+		{
+			name:    "not a member",
+			authErr: fmt.Errorf("failed to get user workspace: %w", domain.ErrUserNotInWorkspace),
+			assert: func(t *testing.T, err error) {
+				assert.True(t, errors.Is(err, domain.ErrUserNotInWorkspace))
+			},
+		},
+		{
+			name:    "unknown workspace",
+			authErr: fmt.Errorf("failed to get workspace: %w", &domain.ErrWorkspaceNotFound{WorkspaceID: workspaceID}),
+			assert: func(t *testing.T, err error) {
+				var notFound *domain.ErrWorkspaceNotFound
+				require.True(t, errors.As(err, &notFound))
+				assert.Equal(t, workspaceID, notFound.WorkspaceID)
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run("UpsertContact/"+tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			service, _, _, mockAuthService, _, _, _, _, _, _, _, _, mockLogger := createContactServiceWithMocks(ctrl)
+			mockLogger.EXPECT().WithField(gomock.Any(), gomock.Any()).Return(mockLogger).AnyTimes()
+			mockLogger.EXPECT().Error(gomock.Any()).AnyTimes()
+
+			mockAuthService.EXPECT().AuthenticateUserForWorkspace(ctx, workspaceID).
+				Return(ctx, nil, nil, tc.authErr)
+
+			result := service.UpsertContact(ctx, workspaceID, &domain.Contact{Email: "test@example.com"})
+			assert.Equal(t, domain.UpsertContactOperationError, result.Action)
+			assert.NotEmpty(t, result.Error)
+			require.Error(t, result.Err)
+			tc.assert(t, result.Err)
+		})
+
+		t.Run("BatchImportContacts/"+tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			service, _, _, mockAuthService, _, _, _, _, _, _, _, _, mockLogger := createContactServiceWithMocks(ctrl)
+			mockLogger.EXPECT().WithField(gomock.Any(), gomock.Any()).Return(mockLogger).AnyTimes()
+			mockLogger.EXPECT().Error(gomock.Any()).AnyTimes()
+
+			mockAuthService.EXPECT().AuthenticateUserForWorkspace(ctx, workspaceID).
+				Return(ctx, nil, nil, tc.authErr)
+
+			response := service.BatchImportContacts(ctx, workspaceID, []*domain.Contact{{Email: "contact1@example.com"}}, nil)
+			require.NotNil(t, response)
+			assert.Contains(t, response.Error, "failed to authenticate user")
+			require.Error(t, response.Err)
+			tc.assert(t, response.Err)
+		})
+	}
 }

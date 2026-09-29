@@ -61,13 +61,25 @@ export const InputDimensionFilters = (props: {
               return (
                 <tr key={key}>
                   <td style={{ lineHeight: '32px' }}>
-                    {!fieldTypeRenderer && (
+                    {/* A filter naming a field this schema does not have. The
+                        schema can change under an existing filter — the Activity
+                        condition swaps it when the event kind changes — and every
+                        line below dereferences `field`, so without this the whole
+                        segment builder throws during render. Show it and let it
+                        be deleted. */}
+                    {!field && (
                       <Alert
                         type="error"
-                        message={t`type ${filter.field_type} is not implemented`}
+                        title={t`${filter.field_name} does not apply to this event`}
                       />
                     )}
-                    {fieldTypeRenderer && (
+                    {field && !fieldTypeRenderer && (
+                      <Alert
+                        type="error"
+                        title={t`type ${filter.field_type} is not implemented`}
+                      />
+                    )}
+                    {field && fieldTypeRenderer && (
                       <Space>
                         <Popover title={t`field: ${filter.field_name}`} content={field.description}>
                           <b>{props.customFieldLabels?.[filter.field_name] || field.title}</b>
@@ -133,6 +145,11 @@ const AddFilterButton = (props: {
     setModalVisible(true)
   }
 
+  const btnType = props.btnType || 'primary'
+  // antd never paints a link/text button as ghost, it only warns, so keep ghost to the
+  // bordered variants
+  const btnGhost = btnType === 'link' || btnType === 'text' ? undefined : props.btnGhost
+
   // clone fields, and remove existing filters
   const availableFields = clone(props.schema.fields)
   if (props.existingFilters) {
@@ -145,8 +162,8 @@ const AddFilterButton = (props: {
     <>
       <Button
         className={props.existingFilters && props.existingFilters.length > 0 ? 'mt-3' : ''}
-        type={props.btnType || 'primary'}
-        ghost={props.btnGhost}
+        type={btnType}
+        ghost={btnGhost}
         onClick={onClicked}
         size="small"
       >
@@ -192,7 +209,7 @@ const AddFilterButton = (props: {
                   // style={{ width: 200 }}
                   listHeight={500}
                   showSearch
-                  dropdownMatchSelectWidth={false}
+                  popupMatchSelectWidth={false}
                   placeholder={t`Select a field`}
                   options={map(availableFields, (field, fieldName) => {
                     // console.log('field', field)
@@ -253,7 +270,7 @@ const AddFilterButton = (props: {
                     return (
                       <Alert
                         type="error"
-                        message={t`type ${selectedField.type} is not implemented`}
+                        title={t`type ${selectedField.type} is not implemented`}
                       />
                     )
 

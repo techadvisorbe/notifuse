@@ -21,7 +21,8 @@ import {
   Tooltip,
   Row,
   Col,
-  Table
+  Table,
+  AutoComplete
 } from 'antd'
 import { useLingui } from '@lingui/react/macro'
 
@@ -38,6 +39,8 @@ import {
 } from '../../services/api/types'
 import { workspaceService } from '../../services/api/workspace'
 import { emailService } from '../../services/api/email'
+import { useSESDiscovery } from './useSESDiscovery'
+import { enableSESTenantIsolation, SESAccessDeniedError } from '../../services/api/ses'
 import { listsApi } from '../../services/api/list'
 import { INBOUND_REPLY_PROVIDER_KINDS } from '../../services/api/automation'
 import {
@@ -67,6 +70,8 @@ import { LLMIntegration } from '../integrations/LLMIntegration'
 import { llmProviders, getLLMProviderIcon, getLLMProviderName } from '../integrations/LLMProviders'
 import { FirecrawlIntegration } from '../integrations/FirecrawlIntegration'
 import { firecrawlProvider } from '../integrations/FirecrawlProviders'
+import { ZapierSettings } from './ZapierSettings'
+import { zapierProvider } from '../integrations/ZapierProviders'
 import { LLMProviderKind } from '../../services/api/types'
 import { v4 as uuidv4 } from 'uuid'
 import { SettingsSectionHeader } from './SettingsSectionHeader'
@@ -87,6 +92,14 @@ const generateSupabaseWebhookURL = (
   const apiEndpoint = window.API_ENDPOINT?.trim() || defaultOrigin
 
   return `${apiEndpoint}/webhooks/supabase/${hookType}?workspace_id=${workspaceID}&integration_id=${integrationID}`
+}
+
+// The zapier card guards on zapier_settings because a record can be hand-written into the
+// integrations column; the same record can carry no usable created_at, and `new Date(undefined)`
+// stringifies to the literal "Invalid Date" rather than throwing.
+const formatConnectedOn = (value?: string): string => {
+  const at = value ? new Date(value) : null
+  return at && !Number.isNaN(at.getTime()) ? at.toLocaleDateString() : '\u2014'
 }
 
 // Component Props
@@ -212,7 +225,7 @@ const EmailIntegration = ({
         <Tooltip
           title={t`Forwards inbound replies to Notifuse so automations can stop when a contact replies (Exit on reply). Registering webhooks creates the provider-side route; you must also point your domain's MX records at your email provider.`}
         >
-          <Tag bordered={false} color={inboundRegistered ? 'green' : 'orange'}>
+          <Tag variant="filled" color={inboundRegistered ? 'green' : 'orange'}>
             {inboundRegistered ? (
               <FontAwesomeIcon icon={faCheck} className="text-green-500 mr-1" />
             ) : (
@@ -243,15 +256,15 @@ const EmailIntegration = ({
       return (
         <Descriptions.Item label={t`Webhooks`}>
           <div className="mb-2">
-            <Tag bordered={false} color="orange">
+            <Tag variant="filled" color="orange">
               <FontAwesomeIcon icon={faExclamationTriangle} className="text-yellow-500 mr-1" />
               {t`delivered`}
             </Tag>
-            <Tag bordered={false} color="orange">
+            <Tag variant="filled" color="orange">
               <FontAwesomeIcon icon={faExclamationTriangle} className="text-yellow-500 mr-1" />
               {t`bounce`}
             </Tag>
-            <Tag bordered={false} color="orange">
+            <Tag variant="filled" color="orange">
               <FontAwesomeIcon icon={faExclamationTriangle} className="text-yellow-500 mr-1" />
               {t`complaint`}
             </Tag>
@@ -280,7 +293,7 @@ const EmailIntegration = ({
               {webhookStatus.endpoints.map((endpoint, index) => (
                 <span key={index}>
                   <Tooltip title={endpoint.webhook_id + ' - ' + endpoint.url}>
-                    <Tag bordered={false} color={endpoint.active ? 'green' : 'orange'}>
+                    <Tag variant="filled" color={endpoint.active ? 'green' : 'orange'}>
                       {endpoint.active ? (
                         <FontAwesomeIcon icon={faCheck} className="text-green-500 mr-1" />
                       ) : (
@@ -320,7 +333,7 @@ const EmailIntegration = ({
             )}
           </div>
           {webhookStatus.error && (
-            <Alert message={webhookStatus.error} type="error" showIcon className="mt-2" />
+            <Alert title={webhookStatus.error} type="error" showIcon className="mt-2" />
           )}
         </div>
       </Descriptions.Item>
@@ -379,7 +392,7 @@ const EmailIntegration = ({
                 <div key={sender.id || index} className="mb-1">
                   {sender.name} &lt;{sender.email}&gt;
                   {sender.is_default && (
-                    <Tag bordered={false} color="blue" className="!ml-2">
+                    <Tag variant="filled" color="blue" className="!ml-2">
                       {t`Default`}
                     </Tag>
                   )}
@@ -395,23 +408,23 @@ const EmailIntegration = ({
             {isIntegrationInUse(integration.id) ? (
               <>
                 {purposes.includes('Marketing Emails') && (
-                  <Tag bordered={false} color="blue">
+                  <Tag variant="filled" color="blue">
                     <FontAwesomeIcon icon={faPaperPlane} className="mr-1" /> {t`Marketing Emails`}
                   </Tag>
                 )}
                 {purposes.includes('Transactional Emails') && (
-                  <Tag bordered={false} color="purple">
+                  <Tag variant="filled" color="purple">
                     <FontAwesomeIcon icon={faTerminal} className="mr-1" /> {t`Transactional Emails`}
                   </Tag>
                 )}
                 {purposes.length === 0 && (
-                  <Tag bordered={false} color="red">
+                  <Tag variant="filled" color="red">
                     {t`Not assigned`}
                   </Tag>
                 )}
               </>
             ) : (
-              <Tag bordered={false} color="red">
+              <Tag variant="filled" color="red">
                 {t`Not assigned`}
               </Tag>
             )}
@@ -525,6 +538,7 @@ export function Integrations({ workspace, onSave, loading, isOwner }: Integratio
 
   // Drawer state
   const [providerDrawerVisible, setProviderDrawerVisible] = useState(false)
+
   const [supabaseDrawerVisible, setSupabaseDrawerVisible] = useState(false)
   const [editingSupabaseIntegration, setEditingSupabaseIntegration] = useState<Integration | null>(
     null
@@ -545,6 +559,13 @@ export function Integrations({ workspace, onSave, loading, isOwner }: Integratio
     useState<Integration | null>(null)
   const [firecrawlSaving, setFirecrawlSaving] = useState(false)
   const firecrawlFormRef = React.useRef<{ submit: () => void } | null>(null)
+
+  // Zapier Integration state. `zapierSaving` is the rename only — the connect action lives in the
+  // drawer body and owns its own in-flight state, because it is the one that must not fire twice.
+  const [zapierDrawerVisible, setZapierDrawerVisible] = useState(false)
+  const [editingZapierIntegration, setEditingZapierIntegration] = useState<Integration | null>(null)
+  const [zapierSaving, setZapierSaving] = useState(false)
+  const zapierFormRef = React.useRef<{ submit: () => void } | null>(null)
 
   // Test email modal state
   const [testModalVisible, setTestModalVisible] = useState(false)
@@ -572,6 +593,33 @@ export function Integrations({ workspace, onSave, loading, isOwner }: Integratio
   // eslint-disable-next-line react-hooks/exhaustive-deps -- Only re-run on workspace change
   }, [workspace?.id])
 
+  // Credentials typed into the create drawer arrive keystroke by keystroke, so these are watched
+  // rather than read once: reading them when the drawer opens would leave the pickers
+  // permanently empty for a new integration.
+  const watchedSESRegion = Form.useWatch(['ses', 'region'], emailProviderForm)
+  const watchedSESAccessKey = Form.useWatch(['ses', 'access_key'], emailProviderForm)
+  const watchedSESSecretKey = Form.useWatch(['ses', 'secret_key'], emailProviderForm)
+
+  // The IAM permissions isolation needs are only worth reading once it is being turned on, so the
+  // list is revealed by the switch rather than sitting under it permanently.
+  const sesTenantIsolationEnabled = Form.useWatch(
+    ['ses', 'tenant_isolation_enabled'],
+    emailProviderForm
+  )
+
+  const {
+    tenantOptions: sesTenantOptions,
+    configurationSetOptions: sesConfigurationSetOptions,
+    denied: sesDiscoveryDenied
+  } = useSESDiscovery({
+    active: providerDrawerVisible && selectedProviderType === 'ses',
+    workspaceId: workspace?.id,
+    integrationId: editingIntegrationId,
+    region: watchedSESRegion,
+    accessKey: watchedSESAccessKey,
+    secretKey: watchedSESSecretKey
+  })
+
   if (!workspace) {
     return null
   }
@@ -579,6 +627,16 @@ export function Integrations({ workspace, onSave, loading, isOwner }: Integratio
   // Get integration by id
   const getIntegrationById = (id: string): Integration | undefined => {
     return workspace.integrations?.find((i) => i.id === id)
+  }
+
+  // Placeholder for a credential field. The server returns only the last few
+  // characters of a configured credential, never the credential itself, so an
+  // owner can tell which key is in place. Leaving the field blank on save keeps
+  // the stored one — the server preserves it.
+  const secretPlaceholder = (hintKey: string, fallback: string): string => {
+    if (!editingIntegrationId) return fallback
+    const hint = getIntegrationById(editingIntegrationId)?.credential_hints?.[hintKey]
+    return hint ? `••••••••${hint}` : t`Leave blank to keep the current value`
   }
 
   // Is the integration being used
@@ -759,6 +817,10 @@ export function Integrations({ workspace, onSave, loading, isOwner }: Integratio
       name: provider.charAt(0).toUpperCase() + provider.slice(1),
       senders: []
     })
+    // Creation, not an edit. Nothing else clears this, and both the required
+    // rules and the credential placeholders key off it — leaving a previous
+    // edit's id here would make a new integration's credentials optional.
+    setEditingIntegrationId(null)
     setProviderDrawerVisible(true)
   }
 
@@ -915,15 +977,138 @@ export function Integrations({ workspace, onSave, loading, isOwner }: Integratio
     }
   }
 
+  // Handle Zapier selection
+  const handleSelectZapier = () => {
+    setEditingZapierIntegration(null)
+    setZapierDrawerVisible(true)
+  }
+
+  // Start editing a Zapier integration
+  const startEditZapierIntegration = (integration: Integration) => {
+    setEditingZapierIntegration(integration)
+    setZapierDrawerVisible(true)
+  }
+
+  const closeZapierDrawer = () => {
+    setZapierDrawerVisible(false)
+    setEditingZapierIntegration(null)
+  }
+
+  // Connecting writes the card server-side, so all this does is pull the new list. It must not
+  // close the drawer: the token comes back in exactly one response and nothing can reissue it, so
+  // the panel showing it stands until the user dismisses it. Failures are swallowed on purpose —
+  // the connection succeeded whatever the refetch did, and rethrowing would reach the drawer body
+  // as a failed connect.
+  const refreshAfterZapierConnect = async () => {
+    try {
+      const response = await workspaceService.get(workspace.id)
+      await onSave(response.workspace)
+    } catch (error) {
+      console.error('Error refreshing workspace after connecting Zapier:', error)
+      message.error(t`Zapier is connected, but the integration list could not be refreshed`)
+    }
+  }
+
+  // Renames only. The minted address is server-owned and the update request carries no settings
+  // field, so a rename cannot disturb it — which is why a renamed card and its key address can
+  // read differently, and why the card shows both.
+  const saveZapierIntegration = async (integration: Integration) => {
+    setZapierSaving(true)
+    try {
+      await workspaceService.updateIntegration({
+        workspace_id: workspace.id,
+        integration_id: integration.id,
+        name: integration.name
+      })
+
+      // Refresh workspace data
+      const response = await workspaceService.get(workspace.id)
+      await onSave(response.workspace)
+
+      closeZapierDrawer()
+      message.success(t`Zapier integration saved successfully`)
+    } catch (error) {
+      console.error('Error saving Zapier integration:', error)
+      message.error(t`Failed to save Zapier integration`)
+      throw error
+    } finally {
+      setZapierSaving(false)
+    }
+  }
+
   // Close provider drawer
   const closeProviderDrawer = () => {
     setProviderDrawerVisible(false)
     setSelectedProviderType(null)
+    setEditingIntegrationId(null)
     setSenders([])
     emailProviderForm.resetFields()
   }
 
   // Save new or edited integration
+  // Provision managed SES tenant isolation after the integration itself is saved.
+  //
+  // Saving records the operator's intent; the tenant is a billable AWS resource, so creating it
+  // is a separate, confirmed step. Re-running it is safe and deliberate: EnsureTenantIsolation
+  // converges, which is how a sender added later gets associated instead of silently failing to
+  // send.
+  const provisionSESTenantIsolation = async (integrationId: string, provider: EmailProvider) => {
+    if (!workspace) return
+    if (provider.kind !== 'ses' || !provider.ses?.tenant_isolation_enabled) return
+
+    const alreadyProvisioned = Boolean(
+      getIntegrationById(integrationId)?.email_provider?.ses?.managed_tenant_name
+    )
+
+    if (!alreadyProvisioned) {
+      const confirmed = await new Promise<boolean>((resolve) => {
+        Modal.confirm({
+          title: t`Create an SES tenant for this integration?`,
+          content: t`Notifuse will create a tenant in your AWS account, give it its own suppression list, and associate this integration's configuration set and sender identities with it. AWS bills per tenant per month, based on volume.`,
+          okText: t`Create tenant`,
+          cancelText: t`Not now`,
+          onOk: () => resolve(true),
+          onCancel: () => resolve(false)
+        })
+      })
+      if (!confirmed) return
+    }
+
+    try {
+      const result = await enableSESTenantIsolation({
+        workspace_id: workspace.id,
+        integration_id: integrationId
+      })
+
+      if (result.provisioned_but_unsaved) {
+        message.warning(
+          t`Tenant ${result.tenant_name} exists in AWS but could not be saved here. Save again to finish — you are already being billed for it.`
+        )
+      } else if (!result.configuration_set_associated) {
+        // Recording the tenant now would make SES reject every send, so the server did not.
+        message.warning(
+          t`Tenant ${result.tenant_name} was created but its configuration set is not associated, so it is not in use yet. Missing permissions: ${(result.missing_permissions ?? []).join(', ') || 'none reported'}`
+        )
+      } else if (result.unverified_senders?.length) {
+        message.warning(
+          t`Reputation isolation is on. These senders have no verified identity and will fail to send: ${result.unverified_senders.join(', ')}`
+        )
+      } else {
+        message.success(t`Reputation isolation is active for this integration`)
+      }
+    } catch (error) {
+      if (error instanceof SESAccessDeniedError) {
+        message.warning(
+          t`Your AWS credentials cannot create SES tenants. Grant ses:CreateTenant and ses:CreateTenantResourceAssociation, then save again.`
+        )
+        return
+      }
+      message.error(
+        error instanceof Error ? error.message : t`Failed to enable reputation isolation`
+      )
+    }
+  }
+
   const saveEmailProvider = async (values: EmailProviderFormValues & { name?: string }) => {
     if (!workspace) return
 
@@ -954,6 +1139,8 @@ export function Integrations({ workspace, onSave, loading, isOwner }: Integratio
 
         await workspaceService.updateIntegration(updateRequest)
         message.success(t`Integration updated successfully`)
+
+        await provisionSESTenantIsolation(editingIntegrationId, provider)
       }
       // Creating a new integration
       else {
@@ -964,8 +1151,12 @@ export function Integrations({ workspace, onSave, loading, isOwner }: Integratio
           provider
         }
 
-        await workspaceService.createIntegration(createRequest)
+        const created = await workspaceService.createIntegration(createRequest)
         message.success(t`Integration created successfully`)
+
+        if (created?.integration_id) {
+          await provisionSESTenantIsolation(created.integration_id, provider)
+        }
       }
 
       // Refresh workspace data
@@ -1032,7 +1223,8 @@ export function Integrations({ workspace, onSave, loading, isOwner }: Integratio
       const response = await emailService.testProvider(
         workspace.id,
         providerToTest,
-        testEmailAddress
+        testEmailAddress,
+        testingIntegrationId ?? undefined
       )
 
       if (response.success) {
@@ -1146,6 +1338,28 @@ export function Integrations({ workspace, onSave, loading, isOwner }: Integratio
             Configure
           </Button>
         </div>
+
+        {/* Zapier */}
+        <div
+          onClick={() => handleSelectZapier()}
+          className="flex justify-between items-center p-4 border border-gray-200 rounded-lg hover:border-gray-300 transition-all cursor-pointer mb-4 relative"
+        >
+          <div className="flex items-center">
+            {zapierProvider.getIcon('', 'large')}
+            <span className="ml-3 font-medium">{zapierProvider.name}</span>
+          </div>
+          <Button
+            type="primary"
+            ghost
+            size="small"
+            onClick={(e) => {
+              e.stopPropagation()
+              handleSelectZapier()
+            }}
+          >
+            {t`Connect`}
+          </Button>
+        </div>
       </>
     )
   }
@@ -1180,8 +1394,14 @@ export function Integrations({ workspace, onSave, loading, isOwner }: Integratio
           }
 
           if (integration.type === 'supabase') {
-            const hasAuthEmailHook = !!integration.supabase_settings?.auth_email_hook?.signature_key
+            // The encrypted form, not the plaintext: credentials are no longer
+            // served to clients, so keying off signature_key would show every
+            // configured hook as unconfigured.
+            const hasAuthEmailHook =
+              !!integration.supabase_settings?.auth_email_hook?.encrypted_signature_key ||
+              !!integration.supabase_settings?.auth_email_hook?.signature_key
             const hasBeforeUserCreatedHook =
+              !!integration.supabase_settings?.before_user_created_hook?.encrypted_signature_key ||
               !!integration.supabase_settings?.before_user_created_hook?.signature_key
             const addToLists =
               integration.supabase_settings?.before_user_created_hook?.add_user_to_lists || []
@@ -1245,8 +1465,8 @@ export function Integrations({ workspace, onSave, loading, isOwner }: Integratio
                     <Descriptions.Item label={t`Name`}>{integration.name}</Descriptions.Item>
                     <Descriptions.Item label={t`Auth Email Hook`}>
                       {hasAuthEmailHook ? (
-                        <Space direction="vertical">
-                          <Tag bordered={false} color="green" className="mb-2">
+                        <Space orientation="vertical">
+                          <Tag variant="filled" color="green" className="mb-2">
                             <FontAwesomeIcon icon={faCheck} className="mr-1" /> {t`Configured`}
                           </Tag>
                           <div className="mt-2 text-xs text-gray-500">{t`Webhook endpoint:`}</div>
@@ -1275,15 +1495,15 @@ export function Integrations({ workspace, onSave, loading, isOwner }: Integratio
                           />
                         </Space>
                       ) : (
-                        <Tag bordered={false} color="default">
+                        <Tag variant="filled" color="default">
                           {t`Not configured`}
                         </Tag>
                       )}
                     </Descriptions.Item>
                     <Descriptions.Item label={t`Before User Created Hook`}>
                       {hasBeforeUserCreatedHook ? (
-                        <Space direction="vertical">
-                          <Tag bordered={false} color="green" className="mb-2">
+                        <Space orientation="vertical">
+                          <Tag variant="filled" color="green" className="mb-2">
                             <FontAwesomeIcon icon={faCheck} className="mr-1" /> {t`Configured`}
                           </Tag>
                           <div className="mt-2 text-xs text-gray-500">{t`Webhook endpoint:`}</div>
@@ -1312,7 +1532,7 @@ export function Integrations({ workspace, onSave, loading, isOwner }: Integratio
                           />
                         </Space>
                       ) : (
-                        <Tag bordered={false} color="default">
+                        <Tag variant="filled" color="default">
                           {t`Not configured`}
                         </Tag>
                       )}
@@ -1322,7 +1542,7 @@ export function Integrations({ workspace, onSave, loading, isOwner }: Integratio
                         {addToLists.map((listId) => {
                           const list = lists.find((l) => l.id === listId)
                           return (
-                            <Tag key={listId} bordered={false} color="blue" className="mb-1">
+                            <Tag key={listId} variant="filled" color="blue" className="mb-1">
                               {list?.name || listId}
                             </Tag>
                           )
@@ -1331,7 +1551,7 @@ export function Integrations({ workspace, onSave, loading, isOwner }: Integratio
                     )}
                     {hasBeforeUserCreatedHook && customJsonField && (
                       <Descriptions.Item label={t`User Metadata Field`}>
-                        <Tag bordered={false} color="purple">
+                        <Tag variant="filled" color="purple">
                           {workspace.settings?.custom_field_labels?.[customJsonField] ||
                             customJsonField}
                         </Tag>
@@ -1339,7 +1559,7 @@ export function Integrations({ workspace, onSave, loading, isOwner }: Integratio
                     )}
                     {hasBeforeUserCreatedHook && (
                       <Descriptions.Item label={t`Reject Disposable Email`}>
-                        <Tag bordered={false} color={rejectDisposableEmail ? 'green' : 'default'}>
+                        <Tag variant="filled" color={rejectDisposableEmail ? 'green' : 'default'}>
                           {rejectDisposableEmail ? (
                             <>
                               <FontAwesomeIcon icon={faCheck} className="mr-1" /> {t`Enabled`}
@@ -1403,7 +1623,7 @@ export function Integrations({ workspace, onSave, loading, isOwner }: Integratio
                   <Descriptions bordered size="small" column={1} className="mt-2">
                     <Descriptions.Item label={t`Name`}>{integration.name}</Descriptions.Item>
                     <Descriptions.Item label={t`Model`}>
-                      <Tag bordered={false} color="purple">
+                      <Tag variant="filled" color="purple">
                         {provider.kind === 'openai'
                           ? provider.openai?.model || 'Not configured'
                           : provider.kind === 'gemini'
@@ -1413,13 +1633,13 @@ export function Integrations({ workspace, onSave, loading, isOwner }: Integratio
                     </Descriptions.Item>
                     {provider.kind === 'openai' && provider.openai?.base_url && (
                       <Descriptions.Item label={t`Base URL`}>
-                        <Tag bordered={false} color="blue">
+                        <Tag variant="filled" color="blue">
                           {provider.openai.base_url}
                         </Tag>
                       </Descriptions.Item>
                     )}
                     <Descriptions.Item label={t`API Key`}>
-                      <Tag bordered={false} color="green">
+                      <Tag variant="filled" color="green">
                         <FontAwesomeIcon icon={faCheck} className="mr-1" /> {t`Configured`}
                       </Tag>
                     </Descriptions.Item>
@@ -1470,19 +1690,79 @@ export function Integrations({ workspace, onSave, loading, isOwner }: Integratio
                   <Descriptions bordered size="small" column={1} className="mt-2">
                     <Descriptions.Item label={t`Name`}>{integration.name}</Descriptions.Item>
                     <Descriptions.Item label={t`API Key`}>
-                      <Tag bordered={false} color="green">
+                      <Tag variant="filled" color="green">
                         <FontAwesomeIcon icon={faCheck} className="mr-1" /> {t`Configured`}
                       </Tag>
                     </Descriptions.Item>
                     <Descriptions.Item label={t`Tools`}>
                       <Space>
-                        <Tag bordered={false} color="blue">
+                        <Tag variant="filled" color="blue">
                           scrape_url
                         </Tag>
-                        <Tag bordered={false} color="blue">
+                        <Tag variant="filled" color="blue">
                           search_web
                         </Tag>
                       </Space>
+                    </Descriptions.Item>
+                  </Descriptions>
+                </Card>
+              </div>
+            )
+          }
+
+          // Guarded on the settings object, not on the type alone: a record written before this
+          // release, or by a build that has been rolled back, has none, and reading
+          // api_key_email off it would take the whole screen down. It degrades to the card below.
+          if (integration.type === 'zapier' && integration.zapier_settings) {
+            return (
+              <div key={integration.id} className="mb-4">
+                <Card
+                  title={
+                    <>
+                      <div className="float-right">
+                        {isOwner && (
+                          <Space>
+                            <Tooltip title={t`Edit`}>
+                              <Button
+                                type="text"
+                                onClick={() => startEditZapierIntegration(integration)}
+                                size="small"
+                              >
+                                <FontAwesomeIcon icon={faPenToSquare} />
+                              </Button>
+                            </Tooltip>
+                            <Popconfirm
+                              title={t`Delete this connection?`}
+                              description={t`Deleting revokes the API key this connection minted, so any Zap still using it stops working. This action cannot be undone.`}
+                              onConfirm={() => deleteIntegration(integration.id)}
+                              okText={t`Yes`}
+                              cancelText={t`No`}
+                            >
+                              <Tooltip title={t`Delete`}>
+                                <Button size="small" type="text">
+                                  <FontAwesomeIcon icon={faTrashCan} />
+                                </Button>
+                              </Tooltip>
+                            </Popconfirm>
+                          </Space>
+                        )}
+                      </div>
+                      <Tooltip title={integration.id}>{zapierProvider.getIcon('', 14)}</Tooltip>
+                    </>
+                  }
+                >
+                  <Descriptions bordered size="small" column={1} className="mt-2">
+                    <Descriptions.Item label={t`Name`}>{integration.name}</Descriptions.Item>
+                    {/* Shown alongside the name because the two can disagree: renaming the card
+                        never re-mints the key, so the address keeps the label it was created
+                        under, and this is where an owner matches it to Settings → Team. */}
+                    <Descriptions.Item label={t`API key address`}>
+                      <Tag variant="filled" color="blue">
+                        {integration.zapier_settings.api_key_email}
+                      </Tag>
+                    </Descriptions.Item>
+                    <Descriptions.Item label={t`Connected`}>
+                      {formatConnectedOn(integration.created_at)}
                     </Descriptions.Item>
                   </Descriptions>
                 </Card>
@@ -1576,7 +1856,7 @@ export function Integrations({ workspace, onSave, loading, isOwner }: Integratio
               <Input placeholder={t`Access Key`} disabled={!isOwner} />
             </Form.Item>
             <Form.Item name={['ses', 'secret_key']} label={t`AWS Secret Key`}>
-              <Input.Password placeholder={t`Secret Key`} disabled={!isOwner} />
+              <Input.Password placeholder={secretPlaceholder('ses.secret_key', t`Secret Key`)} disabled={!isOwner} />
             </Form.Item>
           </>
         )}
@@ -1700,11 +1980,19 @@ export function Integrations({ workspace, onSave, loading, isOwner }: Integratio
                                 <Form.Item
                                   name={['smtp', 'oauth2_client_secret']}
                                   label="Client Secret"
-                                  rules={[{ required: true, message: 'Client Secret is required' }]}
+                                  rules={[
+                                    {
+                                      required: !editingIntegrationId,
+                                      message: 'Client Secret is required'
+                                    }
+                                  ]}
                                   tooltip={t`Create this in Azure Portal > App registrations > Your App > Certificates & secrets`}
                                 >
                                   <Input.Password
-                                    placeholder="Client Secret Value"
+                                    placeholder={secretPlaceholder(
+                                      'smtp.oauth2_client_secret',
+                                      t`Client Secret Value`
+                                    )}
                                     disabled={!isOwner}
                                   />
                                 </Form.Item>
@@ -1726,17 +2014,28 @@ export function Integrations({ workspace, onSave, loading, isOwner }: Integratio
                                 <Form.Item
                                   name={['smtp', 'oauth2_client_secret']}
                                   label="Client Secret"
-                                  rules={[{ required: true, message: 'Client Secret is required' }]}
+                                  rules={[
+                                    {
+                                      required: !editingIntegrationId,
+                                      message: 'Client Secret is required'
+                                    }
+                                  ]}
                                   tooltip={t`Find this in Google Cloud Console > APIs & Services > Credentials`}
                                 >
-                                  <Input.Password placeholder="Client Secret" disabled={!isOwner} />
+                                  <Input.Password
+                                    placeholder={secretPlaceholder(
+                                      'smtp.oauth2_client_secret',
+                                      t`Client Secret`
+                                    )}
+                                    disabled={!isOwner}
+                                  />
                                 </Form.Item>
                                 <Form.Item
                                   name={['smtp', 'oauth2_refresh_token']}
                                   label="Refresh Token"
                                   rules={[
                                     {
-                                      required: true,
+                                      required: !editingIntegrationId,
                                       message: 'Refresh Token is required for Google'
                                     }
                                   ]}
@@ -1765,7 +2064,7 @@ export function Integrations({ workspace, onSave, loading, isOwner }: Integratio
                     </Col>
                     <Col span={12}>
                       <Form.Item name={['smtp', 'password']} label={t`SMTP Password`}>
-                        <Input.Password placeholder="Password (optional)" disabled={!isOwner} />
+                        <Input.Password placeholder={secretPlaceholder('smtp.password', t`Password (optional)`)} disabled={!isOwner} />
                       </Form.Item>
                     </Col>
                   </Row>
@@ -1799,7 +2098,7 @@ export function Integrations({ workspace, onSave, loading, isOwner }: Integratio
               />
             </Form.Item>
             <Form.Item name={['sparkpost', 'api_key']} label={t`SparkPost API Key`}>
-              <Input.Password placeholder="API Key" disabled={!isOwner} />
+              <Input.Password placeholder={secretPlaceholder('sparkpost.api_key', t`API Key`)} disabled={!isOwner} />
             </Form.Item>
             <Form.Item
               name={['sparkpost', 'sandbox_mode']}
@@ -1817,9 +2116,9 @@ export function Integrations({ workspace, onSave, loading, isOwner }: Integratio
             <Form.Item
               name={['postmark', 'server_token']}
               label={t`Server Token`}
-              rules={[{ required: true }]}
+              rules={[{ required: !editingIntegrationId }]}
             >
-              <Input.Password placeholder="Server Token" disabled={!isOwner} />
+              <Input.Password placeholder={secretPlaceholder('postmark.server_token', t`Server Token`)} disabled={!isOwner} />
             </Form.Item>
             <Form.Item
               name={['postmark', 'message_stream']}
@@ -1837,8 +2136,8 @@ export function Integrations({ workspace, onSave, loading, isOwner }: Integratio
             <Form.Item name={['mailgun', 'domain']} label={t`Domain`} rules={[{ required: true }]}>
               <Input placeholder="mail.yourdomain.com" disabled={!isOwner} />
             </Form.Item>
-            <Form.Item name={['mailgun', 'api_key']} label={t`API Key`} rules={[{ required: true }]}>
-              <Input.Password placeholder="API Key" disabled={!isOwner} />
+            <Form.Item name={['mailgun', 'api_key']} label={t`API Key`} rules={[{ required: !editingIntegrationId }]}>
+              <Input.Password placeholder={secretPlaceholder('mailgun.api_key', t`API Key`)} disabled={!isOwner} />
             </Form.Item>
             <Form.Item name={['mailgun', 'region']} label={t`Region`} initialValue="US">
               <Select
@@ -1855,15 +2154,15 @@ export function Integrations({ workspace, onSave, loading, isOwner }: Integratio
 
         {providerType === 'mailjet' && (
           <>
-            <Form.Item name={['mailjet', 'api_key']} label={t`API Key`} rules={[{ required: true }]}>
-              <Input.Password placeholder="API Key" disabled={!isOwner} />
+            <Form.Item name={['mailjet', 'api_key']} label={t`API Key`} rules={[{ required: !editingIntegrationId }]}>
+              <Input.Password placeholder={secretPlaceholder('mailjet.api_key', t`API Key`)} disabled={!isOwner} />
             </Form.Item>
             <Form.Item
               name={['mailjet', 'secret_key']}
               label={t`Secret Key`}
-              rules={[{ required: true }]}
+              rules={[{ required: !editingIntegrationId }]}
             >
-              <Input.Password placeholder="Secret Key" disabled={!isOwner} />
+              <Input.Password placeholder={secretPlaceholder('mailjet.secret_key', t`Secret Key`)} disabled={!isOwner} />
             </Form.Item>
             <Form.Item
               name={['mailjet', 'sandbox_mode']}
@@ -1877,8 +2176,8 @@ export function Integrations({ workspace, onSave, loading, isOwner }: Integratio
         )}
 
         {providerType === 'sendgrid' && (
-          <Form.Item name={['sendgrid', 'api_key']} label={t`API Key`} rules={[{ required: true }]}>
-            <Input.Password placeholder="API Key (starts with SG.)" disabled={!isOwner} />
+          <Form.Item name={['sendgrid', 'api_key']} label={t`API Key`} rules={[{ required: !editingIntegrationId }]}>
+            <Input.Password placeholder={secretPlaceholder('sendgrid.api_key', t`API Key (starts with SG.)`)} disabled={!isOwner} />
           </Form.Item>
         )}
 
@@ -1902,6 +2201,97 @@ export function Integrations({ workspace, onSave, loading, isOwner }: Integratio
         )}
 
         {renderSendersField()}
+
+        {providerType === 'ses' && (
+          <>
+            <Form.Item
+              name={['ses', 'tenant_isolation_enabled']}
+              label={t`SES tenant isolation`}
+              valuePropName="checked"
+              tooltip={t`Gives this integration its own SES reputation profile and its own suppression list, so another workspace's bounces can't pause or suppress this one. AWS bills per tenant per month, based on volume.`}
+              extra={
+                sesTenantIsolationEnabled
+                  ? t`Needs these extra IAM permissions: ses:CreateTenant, ses:CreateTenantResourceAssociation, ses:GetTenant, ses:PutTenantSuppressionAttributes, ses:ListEmailIdentities. Add ses:ListTenants and ses:ListTenantResources for the pickers below, and ses:DeleteTenant plus ses:DeleteTenantResourceAssociation so the tenant is removed with the integration instead of billing forever.`
+                  : undefined
+              }
+            >
+              <Switch disabled={!isOwner} />
+            </Form.Item>
+
+            <Form.Item
+              name={['ses', 'configuration_set_name']}
+              label={t`Configuration set`}
+              // extra, not help: help replaces the whole explain area, which would hide the
+              // pattern rule's message below and leave an invalid name rejected without a reason.
+              extra={t`Leave empty to use the one Notifuse manages for this integration.`}
+              rules={[
+                {
+                  pattern: /^[A-Za-z0-9_-]{1,64}$/,
+                  message: t`Up to 64 letters, numbers, hyphens or underscores.`
+                }
+              ]}
+            >
+              <AutoComplete
+                allowClear
+                disabled={!isOwner}
+                options={sesConfigurationSetOptions}
+                placeholder={t`notifuse-…`}
+                filterOption={(input, option) =>
+                  String(option?.value ?? '')
+                    .toLowerCase()
+                    .includes(input.toLowerCase())
+                }
+              />
+            </Form.Item>
+
+            <Form.Item
+              name={['ses', 'tenant_name']}
+              label={t`SES tenant`}
+              // Re-validate when the switch moves, so turning isolation on with a tenant already
+              // typed names the conflict straight away instead of at save time.
+              dependencies={[['ses', 'tenant_isolation_enabled']]}
+              extra={t`Use a tenant you manage yourself. Requires a configuration set associated with it in AWS.`}
+              rules={[
+                {
+                  pattern: /^[A-Za-z0-9_-]{1,64}$/,
+                  message: t`Up to 64 letters, numbers, hyphens or underscores.`
+                },
+                // The server refuses both at once (AmazonSESSettings.Validate): a Notifuse-managed
+                // tenant and a hand-managed one are two sources of truth for the same value. The
+                // field is left editable rather than disabled, because the value may be the one
+                // worth keeping — the operator chooses which side to clear.
+                ({ getFieldValue }) => ({
+                  validator: (_, value) =>
+                    value && getFieldValue(['ses', 'tenant_isolation_enabled'])
+                      ? Promise.reject(
+                          new Error(
+                            t`Turn off SES tenant isolation to use your own tenant, or clear this field.`
+                          )
+                        )
+                      : Promise.resolve()
+                })
+              ]}
+            >
+              <AutoComplete
+                allowClear
+                disabled={!isOwner}
+                options={sesTenantOptions}
+                placeholder={t`my-tenant`}
+                filterOption={(input, option) =>
+                  String(option?.value ?? '')
+                    .toLowerCase()
+                    .includes(input.toLowerCase())
+                }
+              />
+            </Form.Item>
+
+            {sesDiscoveryDenied && (
+              <div className="text-xs text-gray-400 -mt-2 mb-2">
+                {t`These AWS credentials can't list tenants or configuration sets (needs ses:ListTenants). Type the names instead.`}
+              </div>
+            )}
+          </>
+        )}
       </>
     )
   }
@@ -1917,7 +2307,7 @@ export function Integrations({ workspace, onSave, loading, isOwner }: Integratio
           <span>
             {text}
             {record.is_default && (
-              <Tag bordered={false} color="blue" className="!ml-2">
+              <Tag variant="filled" color="blue" className="!ml-2">
                 Default
               </Tag>
             )}
@@ -2033,9 +2423,46 @@ export function Integrations({ workspace, onSave, loading, isOwner }: Integratio
         )
       }
     } else if (provider.kind === 'ses' && provider.ses) {
+      const ses = provider.ses
+      const configurationSet = ses.configuration_set_name || ses.managed_configuration_set
+      const tenant = ses.tenant_name || ses.managed_tenant_name
+
       items.push(
         <Descriptions.Item key="region" label={t`AWS Region`}>
-          {provider.ses.region}
+          {ses.region}
+        </Descriptions.Item>,
+        <Descriptions.Item key="configuration_set" label={t`Configuration set`}>
+          {configurationSet ? (
+            <>
+              <span className="font-mono text-xs">{configurationSet}</span>
+              <Tag variant="filled" color={ses.configuration_set_name ? 'purple' : 'blue'} className="!ml-2">
+                {ses.configuration_set_name ? t`custom` : t`managed`}
+              </Tag>
+            </>
+          ) : (
+            <Tag variant="filled" color="orange">
+              <FontAwesomeIcon icon={faExclamationTriangle} className="text-yellow-500 mr-1" />
+              {t`not created yet — register webhooks`}
+            </Tag>
+          )}
+        </Descriptions.Item>,
+        <Descriptions.Item key="reputation" label={t`Reputation`}>
+          {tenant ? (
+            <>
+              <Tag variant="filled" color="green">
+                {t`isolated`}
+              </Tag>
+              <span className="font-mono text-xs">{tenant}</span>
+            </>
+          ) : ses.tenant_isolation_enabled ? (
+            // Intent recorded but nothing provisioned: the state that must never look fine.
+            <Tag variant="filled" color="orange">
+              <FontAwesomeIcon icon={faExclamationTriangle} className="text-yellow-500 mr-1" />
+              {t`isolation requested but not provisioned`}
+            </Tag>
+          ) : (
+            <span className="text-gray-500">{t`shared with the rest of this AWS account`}</span>
+          )}
         </Descriptions.Item>
       )
     } else if (provider.kind === 'sparkpost' && provider.sparkpost) {
@@ -2115,7 +2542,7 @@ export function Integrations({ workspace, onSave, loading, isOwner }: Integratio
             ? `Edit ${selectedProviderType?.toUpperCase() || ''} Integration`
             : `Add New ${selectedProviderType?.toUpperCase() || ''} Integration`
         }
-        width={600}
+        size={600}
         open={providerDrawerVisible}
         onClose={closeProviderDrawer}
         footer={
@@ -2181,6 +2608,14 @@ export function Integrations({ workspace, onSave, loading, isOwner }: Integratio
         firecrawlProvider.getIcon('h-6 w-12 object-contain mr-1') as React.ReactElement
       ),
       onClick: () => handleSelectFirecrawl()
+    },
+    {
+      key: 'zapier',
+      label: zapierProvider.name,
+      icon: React.cloneElement(
+        zapierProvider.getIcon('h-6 w-12 object-contain mr-1') as React.ReactElement
+      ),
+      onClick: () => handleSelectZapier()
     }
   ]
 
@@ -2207,7 +2642,7 @@ export function Integrations({ workspace, onSave, loading, isOwner }: Integratio
           {(!workspace.settings.transactional_email_provider_id ||
             !workspace.settings.marketing_email_provider_id) && (
             <Alert
-              message={t`Email Provider Configuration Needed`}
+              title={t`Email Provider Configuration Needed`}
               description={
                 <div>
                   {!workspace.settings.transactional_email_provider_id && (
@@ -2300,7 +2735,7 @@ export function Integrations({ workspace, onSave, loading, isOwner }: Integratio
           style={{ marginBottom: 16 }}
         />
         <Alert
-          message={t`This will send a real test email to the address provided.`}
+          title={t`This will send a real test email to the address provided.`}
           type="info"
           showIcon
         />
@@ -2311,7 +2746,7 @@ export function Integrations({ workspace, onSave, loading, isOwner }: Integratio
         title={
           editingSupabaseIntegration ? 'Edit SUPABASE Integration' : 'Add New SUPABASE Integration'
         }
-        width={600}
+        size={600}
         open={supabaseDrawerVisible}
         onClose={() => {
           setSupabaseDrawerVisible(false)
@@ -2339,7 +2774,7 @@ export function Integrations({ workspace, onSave, loading, isOwner }: Integratio
             </Space>
           </div>
         }
-        destroyOnClose
+        destroyOnHidden
       >
         <SupabaseIntegration
           integration={editingSupabaseIntegration || undefined}
@@ -2357,7 +2792,7 @@ export function Integrations({ workspace, onSave, loading, isOwner }: Integratio
             ? `Edit ${getLLMProviderName(selectedLLMProvider || 'anthropic').toUpperCase()} Integration`
             : `Add New ${getLLMProviderName(selectedLLMProvider || 'anthropic').toUpperCase()} Integration`
         }
-        width={600}
+        size={600}
         open={llmDrawerVisible}
         onClose={() => {
           setLLMDrawerVisible(false)
@@ -2387,7 +2822,7 @@ export function Integrations({ workspace, onSave, loading, isOwner }: Integratio
             </Space>
           </div>
         }
-        destroyOnClose
+        destroyOnHidden
       >
         {selectedLLMProvider && (
           <LLMIntegration
@@ -2406,7 +2841,7 @@ export function Integrations({ workspace, onSave, loading, isOwner }: Integratio
         title={
           editingFirecrawlIntegration ? 'Edit Firecrawl Integration' : 'Add Firecrawl Integration'
         }
-        width={600}
+        size={600}
         open={firecrawlDrawerVisible}
         onClose={() => {
           setFirecrawlDrawerVisible(false)
@@ -2434,7 +2869,7 @@ export function Integrations({ workspace, onSave, loading, isOwner }: Integratio
             </Space>
           </div>
         }
-        destroyOnClose
+        destroyOnHidden
       >
         <FirecrawlIntegration
           integration={editingFirecrawlIntegration || undefined}
@@ -2442,6 +2877,45 @@ export function Integrations({ workspace, onSave, loading, isOwner }: Integratio
           onSave={saveFirecrawlIntegration}
           isOwner={isOwner}
           formRef={firecrawlFormRef}
+        />
+      </Drawer>
+
+      {/* Zapier Integration Drawer */}
+      <Drawer
+        title={editingZapierIntegration ? t`Edit Zapier connection` : t`Connect Zapier`}
+        size={600}
+        open={zapierDrawerVisible}
+        onClose={closeZapierDrawer}
+        footer={
+          // Edit mode only. The connect action stays in the body, where it can disable itself
+          // while in flight; a footer Save submitting the same form would be a second, always
+          // enabled way to mint a key, and nothing server-side refuses the second one.
+          editingZapierIntegration ? (
+            <div style={{ textAlign: 'right' }}>
+              <Space>
+                <Button onClick={closeZapierDrawer}>{t`Cancel`}</Button>
+                <Button
+                  type="primary"
+                  onClick={() => zapierFormRef.current?.submit()}
+                  loading={zapierSaving}
+                  disabled={!isOwner}
+                >
+                  {t`Save`}
+                </Button>
+              </Space>
+            </div>
+          ) : null
+        }
+        destroyOnHidden
+      >
+        <ZapierSettings
+          workspaceId={workspace.id}
+          integration={editingZapierIntegration || undefined}
+          onSave={saveZapierIntegration}
+          onConnected={refreshAfterZapierConnect}
+          onDone={closeZapierDrawer}
+          isOwner={isOwner}
+          formRef={zapierFormRef}
         />
       </Drawer>
     </>

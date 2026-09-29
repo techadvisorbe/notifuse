@@ -2,7 +2,13 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState, useMemo, useEffect } from 'react'
 import { Table, Tag, Space, Button, Tooltip, Empty, Spin, Select, Popover } from 'antd'
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
-import { faCheck, faTimes, faRefresh, faClock } from '@fortawesome/free-solid-svg-icons'
+import {
+  faCheck,
+  faTimes,
+  faRefresh,
+  faClock,
+  faPaperPlane
+} from '@fortawesome/free-solid-svg-icons'
 import dayjs from '../../lib/dayjs'
 import { useAuth } from '../../contexts/AuthContext'
 import {
@@ -77,6 +83,9 @@ export function OutgoingWebhooksTab({ workspaceId }: OutgoingWebhooksTabProps) {
         options: [
           { value: 'delivered', label: t`Delivered` },
           { value: 'pending', label: t`Pending` },
+          // A worker claims a delivery by writing this status to the row, so an operator
+          // investigating a slow endpoint needs a way to isolate what is in flight right now.
+          { value: 'delivering', label: t`Delivering` },
           { value: 'failed', label: t`Failed` }
         ]
       }
@@ -226,24 +235,30 @@ export function OutgoingWebhooksTab({ workspaceId }: OutgoingWebhooksTabProps) {
     switch (status) {
       case 'delivered':
         return (
-          <Tag color="green" bordered={false}>
+          <Tag color="green" variant="filled">
             <FontAwesomeIcon icon={faCheck} className="mr-1 opacity-70" /> {t`Delivered`}
           </Tag>
         )
       case 'pending':
         return (
-          <Tag color="blue" bordered={false}>
+          <Tag color="blue" variant="filled">
             <FontAwesomeIcon icon={faClock} className="mr-1 opacity-70" /> {t`Pending`}
+          </Tag>
+        )
+      case 'delivering':
+        return (
+          <Tag color="cyan" variant="filled">
+            <FontAwesomeIcon icon={faPaperPlane} className="mr-1 opacity-70" /> {t`Delivering`}
           </Tag>
         )
       case 'failed':
         return (
-          <Tag color="red" bordered={false}>
+          <Tag color="red" variant="filled">
             <FontAwesomeIcon icon={faTimes} className="mr-1 opacity-70" /> {t`Failed`}
           </Tag>
         )
       default:
-        return <Tag bordered={false}>{status}</Tag>
+        return <Tag variant="filled">{status}</Tag>
     }
   }
 
@@ -347,7 +362,7 @@ export function OutgoingWebhooksTab({ workspaceId }: OutgoingWebhooksTabProps) {
       title: t`Event`,
       dataIndex: 'event_type',
       key: 'event_type',
-      render: (type: string) => <Tag color="green" bordered={false}>{type}</Tag>
+      render: (type: string) => <Tag color="green" variant="filled">{type}</Tag>
     },
     {
       title: t`Subscription`,
@@ -386,7 +401,7 @@ export function OutgoingWebhooksTab({ workspaceId }: OutgoingWebhooksTabProps) {
                   ? 'green'
                   : 'red'
               }
-              bordered={false}
+              variant="filled"
             >
               HTTP {record.last_response_status}
             </Tag>

@@ -7,7 +7,17 @@ import (
 	"github.com/aws/aws-sdk-go/service/sns"
 )
 
-// SESWebhookClient defines the interface for interacting with AWS SES service
+//go:generate mockgen -destination mocks/mock_ses_webhook_client.go -package mocks github.com/Notifuse/notifuse/internal/domain SESWebhookClient
+
+// SESWebhookClient defines the interface for interacting with AWS SES service.
+//
+// This side deliberately stays on AWS SDK **v1** while the send path uses v2, and the
+// two coexist in one binary on purpose. Only sending needed v2 (tenant support), and
+// configuration-set CRUD, SNS topics, event destinations and inbound receipt rules —
+// roughly nine hundred lines — gain nothing from being ported. Linters flag every v1
+// import as deprecated, which makes "finish the migration" a recurring suggestion:
+// it is a large, risky rewrite of working code with no feature behind it, so weigh it
+// on its own merits rather than as cleanup.
 type SESWebhookClient interface {
 	CreateConfigurationSetWithContext(ctx aws.Context, input *ses.CreateConfigurationSetInput, opts ...request.Option) (*ses.CreateConfigurationSetOutput, error)
 	DeleteConfigurationSetWithContext(ctx aws.Context, input *ses.DeleteConfigurationSetInput, opts ...request.Option) (*ses.DeleteConfigurationSetOutput, error)
@@ -27,6 +37,8 @@ type SESWebhookClient interface {
 	DeleteReceiptRuleWithContext(ctx aws.Context, input *ses.DeleteReceiptRuleInput, opts ...request.Option) (*ses.DeleteReceiptRuleOutput, error)
 	ListIdentitiesWithContext(ctx aws.Context, input *ses.ListIdentitiesInput, opts ...request.Option) (*ses.ListIdentitiesOutput, error)
 }
+
+//go:generate mockgen -destination mocks/mock_sns_client.go -package mocks -mock_names SNSWebhookClient=MockSNSClient github.com/Notifuse/notifuse/internal/domain SNSWebhookClient
 
 // SNSWebhookClient defines the interface for interacting with AWS SNS service
 type SNSWebhookClient interface {

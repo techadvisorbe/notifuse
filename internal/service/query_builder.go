@@ -94,6 +94,13 @@ func (qb *QueryBuilder) initializeContactFields() {
 	}
 }
 
+// isRelativeDayOperator reports whether the operator compares against a rolling window whose
+// value is a day count rather than a date. These only make sense against a timestamp, and their
+// value must be read as a plain integer instead of being parsed as a date.
+func isRelativeDayOperator(operator string) bool {
+	return operator == "in_the_last_days" || operator == "not_in_the_last_days"
+}
+
 // initializeOperators sets up the whitelist of allowed operators
 func (qb *QueryBuilder) initializeOperators() {
 	qb.allowedOperators = map[string]sqlOperator{
@@ -119,6 +126,9 @@ func (qb *QueryBuilder) initializeOperators() {
 		"before_date":       {sql: "<", requiresValue: true},
 		"after_date":        {sql: ">", requiresValue: true},
 		"in_the_last_days":  {sql: "", requiresValue: true}, // Special handling in buildCondition
+		// Matches rows outside the window, including rows where the date was never set:
+		// "has not converted in the last 30 days" must cover contacts who never converted.
+		"not_in_the_last_days": {sql: "", requiresValue: true}, // Special handling in buildCondition
 
 		// JSON array operators
 		"in_array": {sql: "?", requiresValue: true}, // JSONB array containment check
@@ -256,7 +266,9 @@ func (qb *QueryBuilder) parseContactConditions(contact *domain.ContactCondition,
 	var args []interface{}
 
 	for _, filter := range contact.Filters {
-		condition, newArgs, newArgIndex, err := qb.parseFilter(filter, argIndex)
+		// Segments: a value that cannot be cast fails the query outright, which is a
+		// person waiting on a report rather than a write path going down.
+		condition, newArgs, newArgIndex, err := qb.parseFilter(filter, argIndex, castDirectly)
 		if err != nil {
 			return "", nil, argIndex, err
 		}
@@ -278,7 +290,7 @@ func (qb *QueryBuilder) parseContactConditions(contact *domain.ContactCondition,
 }
 
 // parseFilter parses a single filter (field + operator + value)
-func (qb *QueryBuilder) parseFilter(filter *domain.DimensionFilter, argIndex int) (string, []interface{}, int, error) {
+func (qb *QueryBuilder) parseFilter(filter *domain.DimensionFilter, argIndex int, mode castMode) (string, []interface{}, int, error) {
 	if filter == nil {
 		return "", nil, argIndex, fmt.Errorf("filter cannot be nil")
 	}
@@ -291,7 +303,7 @@ func (qb *QueryBuilder) parseFilter(filter *domain.DimensionFilter, argIndex int
 
 	// Route JSON fields to specialized handler
 	if fieldCfg.fieldType == "json" {
-		return qb.buildJSONCondition(fieldCfg.dbColumn, filter, argIndex)
+		return qb.buildJSONCondition(fieldCfg.dbColumn, filter, argIndex, mode)
 	}
 
 	// Validate operator exists in whitelist
@@ -314,8 +326,14 @@ func (qb *QueryBuilder) parseFilter(filter *domain.DimensionFilter, argIndex int
 		fieldType = fieldCfg.fieldType // Use whitelist type if not provided
 	}
 
-	// Special handling for in_the_last_days: treat as string (days count) not as date
-	if filter.Operator == "in_the_last_days" {
+	// Special handling for the relative-day operators: the value is a day count, not a date
+	if isRelativeDayOperator(filter.Operator) {
+		// Guard the combination rather than emitting SQL that only fails at execution: comparing
+		// a text or numeric column against NOW() - INTERVAL errors out inside the segment build,
+		// far from the request that defined the filter.
+		if fieldCfg.fieldType != "time" {
+			return "", nil, argIndex, fmt.Errorf("operator %s can only be used with a date field, not %s", filter.Operator, filter.FieldName)
+		}
 		values, err = qb.getStringValues(filter)
 	} else {
 		switch fieldType {
@@ -395,270 +413,26 @@ func (qb *QueryBuilder) getTimeValues(filter *domain.DimensionFilter) ([]interfa
 	return values, nil
 }
 
+// contactsEmailRef is the email reference used when conditions are compiled against the contacts
+// table itself (segment queries), as opposed to a trigger context where it is e.g. "NEW.email".
+const contactsEmailRef = "contacts.email"
+
 // parseContactListConditions generates SQL for contact_lists filtering
 // Uses EXISTS subquery to check if contact is in specific list(s)
 func (qb *QueryBuilder) parseContactListConditions(contactList *domain.ContactListCondition, argIndex int) (string, []interface{}, int, error) {
-	if contactList == nil {
-		return "", nil, argIndex, fmt.Errorf("contact_list condition cannot be nil")
-	}
-
-	if contactList.ListID == "" {
-		return "", nil, argIndex, fmt.Errorf("contact_list must have 'list_id'")
-	}
-
-	var args []interface{}
-	var conditions []string
-
-	// Build the EXISTS subquery
-	args = append(args, contactList.ListID)
-	conditions = append(conditions, fmt.Sprintf("cl.list_id = $%d", argIndex))
-	argIndex++
-
-	// Add status filter if provided
-	if contactList.Status != nil && *contactList.Status != "" {
-		args = append(args, *contactList.Status)
-		conditions = append(conditions, fmt.Sprintf("cl.status = $%d", argIndex))
-		argIndex++
-	}
-
-	// Add check for non-deleted lists
-	conditions = append(conditions, "l.deleted_at IS NULL")
-
-	// Build the EXISTS clause
-	whereClause := strings.Join(conditions, " AND ")
-	existsClause := fmt.Sprintf(
-		"EXISTS (SELECT 1 FROM contact_lists cl JOIN lists l ON cl.list_id = l.id WHERE cl.email = contacts.email AND %s)",
-		whereClause,
-	)
-
-	// Handle NOT IN operator
-	if contactList.Operator == "not_in" {
-		existsClause = "NOT " + existsClause
-	} else if contactList.Operator != "in" && contactList.Operator != "" {
-		return "", nil, argIndex, fmt.Errorf("invalid contact_list operator: %s (must be 'in' or 'not_in')", contactList.Operator)
-	}
-
-	return existsClause, args, argIndex, nil
+	return qb.parseContactListConditionsWithEmailRef(contactList, argIndex, contactsEmailRef)
 }
 
 // parseContactTimelineConditions generates SQL for contact_timeline filtering
 // Uses subquery to count timeline events matching criteria
 func (qb *QueryBuilder) parseContactTimelineConditions(timeline *domain.ContactTimelineCondition, argIndex int) (string, []interface{}, int, error) {
-	if timeline == nil {
-		return "", nil, argIndex, fmt.Errorf("contact_timeline condition cannot be nil")
-	}
-
-	if timeline.Kind == "" {
-		return "", nil, argIndex, fmt.Errorf("contact_timeline must have 'kind'")
-	}
-
-	if timeline.CountOperator == "" {
-		return "", nil, argIndex, fmt.Errorf("contact_timeline must have 'count_operator'")
-	}
-
-	var args []interface{}
-	var conditions []string
-
-	// Base condition: event kind
-	args = append(args, timeline.Kind)
-	conditions = append(conditions, fmt.Sprintf("ct.kind = $%d", argIndex))
-	argIndex++
-
-	// Add timeframe conditions if specified
-	if timeline.TimeframeOperator != nil && *timeline.TimeframeOperator != "" && *timeline.TimeframeOperator != "anytime" {
-		timeCondition, timeArgs, newArgIndex, err := qb.parseTimeframeCondition(*timeline.TimeframeOperator, timeline.TimeframeValues, argIndex)
-		if err != nil {
-			return "", nil, argIndex, err
-		}
-		if timeCondition != "" {
-			conditions = append(conditions, timeCondition)
-			args = append(args, timeArgs...)
-			argIndex = newArgIndex
-		}
-	}
-
-	// Add dimension filters if specified
-	if len(timeline.Filters) > 0 {
-		for _, filter := range timeline.Filters {
-			// Parse filter using existing logic, but prefix with "ct."
-			filterCondition, filterArgs, newArgIndex, err := qb.parseTimelineFilter(filter, argIndex)
-			if err != nil {
-				return "", nil, argIndex, err
-			}
-			if filterCondition != "" {
-				conditions = append(conditions, filterCondition)
-				args = append(args, filterArgs...)
-				argIndex = newArgIndex
-			}
-		}
-	}
-
-	// Scope to specific sent messages via message_history when template/broadcast/link
-	// filters are set. All are ANDed into one subquery on the message the timeline row
-	// points to (ct.entity_id = message_history.id). link_url does a case-insensitive
-	// substring match against the clicked destination URLs stored as keys of the
-	// clicked_links JSONB (populated for click events only).
-	var mhConds []string
-	if timeline.TemplateID != nil && *timeline.TemplateID != "" {
-		args = append(args, *timeline.TemplateID)
-		mhConds = append(mhConds, fmt.Sprintf("template_id = $%d", argIndex))
-		argIndex++
-	}
-	if timeline.BroadcastID != nil && *timeline.BroadcastID != "" {
-		args = append(args, *timeline.BroadcastID)
-		mhConds = append(mhConds, fmt.Sprintf("broadcast_id = $%d", argIndex))
-		argIndex++
-	}
-	if timeline.LinkURL != nil && *timeline.LinkURL != "" {
-		// Literal, case-insensitive substring match via strpos (NOT ILIKE): URLs routinely
-		// contain '%' (percent-encoding) and '_', which ILIKE would treat as wildcards.
-		// jsonb_object_keys errors on non-object values, so coerce a malformed clicked_links
-		// to an empty object first (same planner-independent guard the click-writer uses).
-		args = append(args, *timeline.LinkURL)
-		mhConds = append(mhConds, fmt.Sprintf(
-			"EXISTS (SELECT 1 FROM jsonb_object_keys(CASE WHEN jsonb_typeof(clicked_links) = 'object' THEN clicked_links ELSE '{}'::jsonb END) AS k WHERE strpos(lower(k), lower($%d)) > 0)", argIndex))
-		argIndex++
-	}
-	if len(mhConds) > 0 {
-		conditions = append(conditions, fmt.Sprintf(
-			"ct.entity_id IN (SELECT id FROM message_history WHERE %s)", strings.Join(mhConds, " AND ")))
-	}
-
-	// Build the subquery WHERE clause
-	whereClause := strings.Join(conditions, " AND ")
-
-	// Build the count comparison
-	var countComparison string
-	switch timeline.CountOperator {
-	case "at_least":
-		countComparison = ">="
-	case "at_most":
-		countComparison = "<="
-	case "exactly":
-		countComparison = "="
-	default:
-		return "", nil, argIndex, fmt.Errorf("invalid count_operator: %s (must be 'at_least', 'at_most', or 'exactly')", timeline.CountOperator)
-	}
-
-	args = append(args, timeline.CountValue)
-	countCondition := fmt.Sprintf(
-		"(SELECT COUNT(*) FROM contact_timeline ct WHERE ct.email = contacts.email AND %s) %s $%d",
-		whereClause,
-		countComparison,
-		argIndex,
-	)
-	argIndex++
-
-	return countCondition, args, argIndex, nil
+	return qb.parseContactTimelineConditionsWithEmailRef(timeline, argIndex, contactsEmailRef)
 }
 
 // parseCustomEventsGoalCondition generates SQL for custom_events goal-based filtering
 // Uses EXISTS subquery with aggregation to check goal metrics (LTV, transaction count, etc.)
 func (qb *QueryBuilder) parseCustomEventsGoalCondition(goal *domain.CustomEventsGoalCondition, argIndex int) (string, []interface{}, int, error) {
-	if goal == nil {
-		return "", nil, argIndex, fmt.Errorf("custom_events_goal condition cannot be nil")
-	}
-
-	var args []interface{}
-	var conditions []string
-
-	// Always exclude soft-deleted events
-	conditions = append(conditions, "ce.deleted_at IS NULL")
-
-	// Filter by goal_type if not "*" (wildcard for all)
-	if goal.GoalType != "*" {
-		// Validate goal_type against allowed values
-		validGoalType := false
-		for _, t := range domain.ValidGoalTypes {
-			if goal.GoalType == t {
-				validGoalType = true
-				break
-			}
-		}
-		if !validGoalType {
-			return "", nil, argIndex, fmt.Errorf("invalid goal_type: %s (must be one of: %v or '*' for all)", goal.GoalType, domain.ValidGoalTypes)
-		}
-
-		args = append(args, goal.GoalType)
-		conditions = append(conditions, fmt.Sprintf("ce.goal_type = $%d", argIndex))
-		argIndex++
-	} else {
-		// For wildcard, just ensure goal_type is set
-		conditions = append(conditions, "ce.goal_type IS NOT NULL")
-	}
-
-	// Filter by goal_name if provided
-	if goal.GoalName != nil && *goal.GoalName != "" {
-		args = append(args, *goal.GoalName)
-		conditions = append(conditions, fmt.Sprintf("ce.goal_name = $%d", argIndex))
-		argIndex++
-	}
-
-	// Add timeframe conditions
-	if goal.TimeframeOperator != "" && goal.TimeframeOperator != "anytime" {
-		timeCondition, timeArgs, newArgIndex, err := qb.parseGoalTimeframeCondition(goal.TimeframeOperator, goal.TimeframeValues, argIndex)
-		if err != nil {
-			return "", nil, argIndex, err
-		}
-		if timeCondition != "" {
-			conditions = append(conditions, timeCondition)
-			args = append(args, timeArgs...)
-			argIndex = newArgIndex
-		}
-	}
-
-	// Build aggregate expression
-	var aggExpr string
-	switch goal.AggregateOperator {
-	case "sum":
-		aggExpr = "COALESCE(SUM(ce.goal_value), 0)"
-	case "count":
-		aggExpr = "COUNT(*)"
-	case "avg":
-		aggExpr = "COALESCE(AVG(ce.goal_value), 0)"
-	case "min":
-		aggExpr = "MIN(ce.goal_value)"
-	case "max":
-		aggExpr = "MAX(ce.goal_value)"
-	default:
-		return "", nil, argIndex, fmt.Errorf("invalid aggregate_operator: %s", goal.AggregateOperator)
-	}
-
-	// Build comparison expression
-	var comparison string
-	switch goal.Operator {
-	case "gte":
-		args = append(args, goal.Value)
-		comparison = fmt.Sprintf("%s >= $%d", aggExpr, argIndex)
-		argIndex++
-	case "lte":
-		args = append(args, goal.Value)
-		comparison = fmt.Sprintf("%s <= $%d", aggExpr, argIndex)
-		argIndex++
-	case "eq":
-		args = append(args, goal.Value)
-		comparison = fmt.Sprintf("%s = $%d", aggExpr, argIndex)
-		argIndex++
-	case "between":
-		if goal.Value2 == nil {
-			return "", nil, argIndex, fmt.Errorf("between operator requires value_2")
-		}
-		args = append(args, goal.Value, *goal.Value2)
-		comparison = fmt.Sprintf("%s BETWEEN $%d AND $%d", aggExpr, argIndex, argIndex+1)
-		argIndex += 2
-	default:
-		return "", nil, argIndex, fmt.Errorf("invalid operator: %s", goal.Operator)
-	}
-
-	// Build the EXISTS subquery with GROUP BY and HAVING
-	whereClause := strings.Join(conditions, " AND ")
-	existsClause := fmt.Sprintf(
-		"EXISTS (SELECT 1 FROM custom_events ce WHERE ce.email = contacts.email AND %s GROUP BY ce.email HAVING %s)",
-		whereClause,
-		comparison,
-	)
-
-	return existsClause, args, argIndex, nil
+	return qb.parseCustomEventsGoalConditionWithEmailRef(goal, argIndex, contactsEmailRef)
 }
 
 // parseGoalTimeframeCondition generates SQL for goal timeframe filters
@@ -803,15 +577,113 @@ func (qb *QueryBuilder) parseTimeframeCondition(operator string, values []string
 
 // parseTimelineFilter parses a dimension filter for timeline events
 func (qb *QueryBuilder) parseTimelineFilter(filter *domain.DimensionFilter, argIndex int) (string, []interface{}, int, error) {
-	if filter == nil {
-		return "", nil, argIndex, fmt.Errorf("filter cannot be nil")
-	}
-
 	// Timeline event fields live in the contact_timeline.changes JSONB column, which the
 	// database triggers populate as {field: {old, new}} (an insert only sets "new"). Read
 	// the "new" value — the resulting value of the change. (There is no "metadata" column;
 	// referencing one produced SQL that failed at execution.)
-	fieldPath := fmt.Sprintf("ct.changes->'%s'->>'new'", filter.FieldName)
+	// Cast defensively, not directly. That was safe while every value in `changes`
+	// came from a database trigger reading a typed column — uniform per key, so a
+	// cast could not meet an odd row. The web analytics projection broke that
+	// premise: it is an application writer, and several of its keys (path,
+	// landing_path, exit_path, referrer_domain, utm_*) hold text a visitor
+	// supplied to a public endpoint. A numeric or date operator against one of
+	// them — refused by the console, reachable through the API — would otherwise
+	// compile to (…)::numeric over free text and abort the whole statement, and
+	// whether the kind predicate filters the offending row first is plan-
+	// dependent. A segment would work until the planner changed its mind, then
+	// fail every recompute with its count frozen.
+	return qb.parseJSONBKeyFilter(filter, argIndex, "ct.changes->%s->>'new'", castDefensively)
+}
+
+// parseEventPropertyFilter parses a dimension filter against the custom_events.properties payload.
+// Property keys are arbitrary (whatever the caller sent with the event), so they are never part of
+// the SQL text.
+func (qb *QueryBuilder) parseEventPropertyFilter(filter *domain.DimensionFilter, argIndex int) (string, []interface{}, int, error) {
+	return qb.parseJSONBKeyFilter(filter, argIndex, "ce.properties->>%s", castDefensively)
+}
+
+// castMode selects how a JSONB value is converted before it is compared.
+type castMode bool
+
+const (
+	// castDirectly casts the extracted text straight to the target type.
+	castDirectly castMode = false
+	// castDefensively yields NULL for a value that cannot be converted, instead of letting the
+	// cast abort the statement.
+	//
+	// custom_events.properties is an arbitrary caller payload: nothing constrains a key to hold
+	// the same type across events, so one event carrying {"renewed_at": "soon"} makes
+	// ('soon')::timestamptz kill the whole segment query. Worse, whether it does is
+	// plan-dependent — the identical filter returns rows while the odd row stays outside the
+	// scanned set and starts failing when it does not, so in production it surfaces long after
+	// the event was written and gets blamed on whatever changed most recently.
+	castDefensively castMode = true
+)
+
+// Permissive enough to accept everything the direct cast would have: a JSON number and a
+// numeric string both reach here as text, and PostgreSQL tolerates surrounding whitespace.
+const numericTextPattern = `^\s*[-+]?(\d+(\.\d*)?|\.\d+)([eE][-+]?\d+)?\s*$`
+
+// Dates live in JSON as strings, so only the ISO-8601 shape is recognised — which is what the
+// console tells the user to store and the only form that is unambiguous across locales.
+const timestampTextPattern = `^\s*\d{4}-\d{2}-\d{2}`
+
+// castNumeric renders the numeric conversion of a text expression under the given mode.
+func castNumeric(textExpr string, mode castMode) string {
+	if mode == castDefensively {
+		return fmt.Sprintf("CASE WHEN %s ~ '%s' THEN (%s)::numeric END", textExpr, numericTextPattern, textExpr)
+	}
+	return fmt.Sprintf("(%s)::numeric", textExpr)
+}
+
+// guardWholeColumnCast keeps a scalar stored in a custom_json column out of a numeric or date
+// comparison that addresses the column itself rather than a value inside it.
+//
+// Those five columns used to hold nothing but an object or an array — contacts.upsert answered 400
+// for anything else — so (custom_json_1::text)::numeric raised on every non-null row and such a
+// filter failed loudly and always. A scalar is now stored as-is, matching what lists.subscribe had
+// always accepted, and PostgreSQL converts one without complaint: ('42'::jsonb)::text::numeric is
+// 42, and ('"2024-01-01"'::jsonb)::text::timestamptz is a real timestamp. The filter therefore
+// started matching some rows and raising on others, and which of the two a customer saw depended on
+// the rows the planner happened to reach first.
+//
+// Only the whole-column form needs this. With a path, the subscript already answers NULL on a
+// scalar, and a typeof guard there would break an array index such as custom_json_1[0].
+//
+// CASE rather than a conjunct: PostgreSQL does not promise to evaluate AND left to right, so
+// `jsonb_typeof(col) = 'object' AND (col::text)::numeric > $1` can still be reordered behind the
+// cast it is meant to protect. An object keeps raising, which is what the segment path chose for
+// values it cannot convert.
+func guardWholeColumnCast(castExpr string, dbColumn string, hasJSONPath bool) string {
+	if hasJSONPath {
+		return castExpr
+	}
+	return fmt.Sprintf("CASE WHEN jsonb_typeof(%s) = 'object' THEN %s END", dbColumn, castExpr)
+}
+
+// castTimestamp renders the timestamp conversion of a text expression under the given mode.
+func castTimestamp(textExpr string, mode castMode) string {
+	if mode == castDefensively {
+		return fmt.Sprintf("CASE WHEN %s ~ '%s' THEN (%s)::timestamptz END", textExpr, timestampTextPattern, textExpr)
+	}
+	return fmt.Sprintf("(%s)::timestamptz", textExpr)
+}
+
+// parseJSONBKeyFilter builds a condition on a JSONB value addressed by a caller-supplied key.
+//
+// pathTemplate must contain exactly one %s verb, which receives the *placeholder* for the key —
+// never the key itself. Field names here are free-form (event property keys, timeline change
+// keys), so they cannot be whitelisted the way contact columns are; interpolating one into the
+// SQL text let a crafted field_name close the quote and append arbitrary SQL, which the segment
+// preview count then leaked one boolean at a time.
+func (qb *QueryBuilder) parseJSONBKeyFilter(filter *domain.DimensionFilter, argIndex int, pathTemplate string, mode castMode) (string, []interface{}, int, error) {
+	if filter == nil {
+		return "", nil, argIndex, fmt.Errorf("filter cannot be nil")
+	}
+
+	if filter.FieldName == "" {
+		return "", nil, argIndex, fmt.Errorf("filter must have 'field_name'")
+	}
 
 	// Validate operator
 	sqlOp, ok := qb.allowedOperators[filter.Operator]
@@ -819,9 +691,33 @@ func (qb *QueryBuilder) parseTimelineFilter(filter *domain.DimensionFilter, argI
 		return "", nil, argIndex, fmt.Errorf("invalid operator: %s", filter.Operator)
 	}
 
+	// The key is bound as an argument, so it must be appended before any value arguments to keep
+	// the placeholder numbering sequential.
+	args := []interface{}{filter.FieldName}
+	fieldPath := fmt.Sprintf(pathTemplate, fmt.Sprintf("$%d", argIndex))
+	argIndex++
+
 	// Handle operators that don't require values
 	if !sqlOp.requiresValue {
-		return fmt.Sprintf("%s %s", fieldPath, sqlOp.sql), nil, argIndex, nil
+		return fmt.Sprintf("%s %s", fieldPath, sqlOp.sql), args, argIndex, nil
+	}
+
+	// Relative-day operators compare a timestamp against a rolling window, so their value is a
+	// day count and the key has to be read as a date whatever else it could be cast to.
+	if isRelativeDayOperator(filter.Operator) {
+		if filter.FieldType != "time" {
+			return "", nil, argIndex, fmt.Errorf("operator %s can only be used with a date value, not %s", filter.Operator, filter.FieldType)
+		}
+		values, err := qb.getStringValues(filter)
+		if err != nil {
+			return "", nil, argIndex, err
+		}
+		condition, valueArgs, newArgIndex, err := qb.buildCondition(
+			castTimestamp(fieldPath, mode), filter.Operator, sqlOp, values, argIndex)
+		if err != nil {
+			return "", nil, argIndex, err
+		}
+		return condition, append(args, valueArgs...), newArgIndex, nil
 	}
 
 	// Get values based on field type
@@ -834,11 +730,11 @@ func (qb *QueryBuilder) parseTimelineFilter(filter *domain.DimensionFilter, argI
 	case "number":
 		values, err = qb.getNumberValues(filter)
 		// For number comparisons in JSONB, cast to numeric
-		fieldPath = fmt.Sprintf("(%s)::numeric", fieldPath)
+		fieldPath = castNumeric(fieldPath, mode)
 	case "time":
 		values, err = qb.getTimeValues(filter)
 		// For time comparisons in JSONB, cast to timestamptz
-		fieldPath = fmt.Sprintf("(%s)::timestamptz", fieldPath)
+		fieldPath = castTimestamp(fieldPath, mode)
 	default:
 		return "", nil, argIndex, fmt.Errorf("invalid field type: %s", filter.FieldType)
 	}
@@ -852,7 +748,12 @@ func (qb *QueryBuilder) parseTimelineFilter(filter *domain.DimensionFilter, argI
 	}
 
 	// Build SQL condition
-	return qb.buildCondition(fieldPath, filter.Operator, sqlOp, values, argIndex)
+	condition, valueArgs, newArgIndex, err := qb.buildCondition(fieldPath, filter.Operator, sqlOp, values, argIndex)
+	if err != nil {
+		return "", nil, argIndex, err
+	}
+
+	return condition, append(args, valueArgs...), newArgIndex, nil
 }
 
 // buildCondition builds the SQL condition with parameterized values
@@ -901,10 +802,10 @@ func (qb *QueryBuilder) buildCondition(dbColumn, operator string, sqlOp sqlOpera
 		condition := fmt.Sprintf("%s %s $%d AND $%d", dbColumn, sqlOp.sql, argIndex, argIndex+1)
 		return condition, args, argIndex + 2, nil
 
-	case "in_the_last_days":
+	case "in_the_last_days", "not_in_the_last_days":
 		// Special handling for relative date filters
 		if len(values) != 1 {
-			return "", nil, argIndex, fmt.Errorf("in_the_last_days requires 1 value")
+			return "", nil, argIndex, fmt.Errorf("%s requires 1 value", operator)
 		}
 		var days int
 		switch v := values[0].(type) {
@@ -922,6 +823,12 @@ func (qb *QueryBuilder) buildCondition(dbColumn, operator string, sqlOp sqlOpera
 		}
 		// Note: Not using parameterized query for interval as PostgreSQL doesn't support it directly
 		// But the value is parsed as int so it's safe from SQL injection
+		if operator == "not_in_the_last_days" {
+			// NULL-inclusive on purpose: a contact whose date was never set has not done the thing
+			// in the last N days either, and a plain NOT (col > ...) would silently drop them.
+			condition := fmt.Sprintf("(%s IS NULL OR %s <= NOW() - INTERVAL '%d days')", dbColumn, dbColumn, days)
+			return condition, args, argIndex, nil
+		}
 		condition := fmt.Sprintf("%s > NOW() - INTERVAL '%d days'", dbColumn, days)
 		return condition, args, argIndex, nil
 
@@ -938,7 +845,7 @@ func (qb *QueryBuilder) buildCondition(dbColumn, operator string, sqlOp sqlOpera
 
 // buildJSONCondition builds SQL conditions for JSON/JSONB fields
 // Uses PostgreSQL 17 subscript notation and proper type casting
-func (qb *QueryBuilder) buildJSONCondition(dbColumn string, filter *domain.DimensionFilter, argIndex int) (string, []interface{}, int, error) {
+func (qb *QueryBuilder) buildJSONCondition(dbColumn string, filter *domain.DimensionFilter, argIndex int, mode castMode) (string, []interface{}, int, error) {
 	var args []interface{}
 
 	// Validate operator
@@ -954,20 +861,50 @@ func (qb *QueryBuilder) buildJSONCondition(dbColumn string, filter *domain.Dimen
 			condition := fmt.Sprintf("%s %s", dbColumn, sqlOp.sql)
 			return condition, nil, argIndex, nil
 		}
-		// Check if a specific key exists in the JSON
-		// Use the ? operator for existence check
+		// A key belongs to an object, so require one before looking the key up.
+		//
+		// jsonb's ? operator does not require that: it matches a top-level scalar string as
+		// readily as an object key, so on PostgreSQL 17 '"gold"'::jsonb ? 'gold' is true. That
+		// was unreachable while contacts.upsert refused anything but an object or an array in
+		// these five columns, and stopped being unreachable when the endpoint widened to accept
+		// a scalar (matching what lists.subscribe had always stored). Unguarded, importing
+		// contacts whose custom_json_1 is the bare string "tier" drops every one of them into
+		// any segment carrying `custom_json_1.tier is_set`, though they hold no such key and no
+		// object at all — and the only symptom is the wrong recipients on the next broadcast.
+		//
+		// A plain conjunct is enough here because ? cannot raise, so it does not matter whether
+		// the planner reaches it before jsonb_typeof. The casts further down need a CASE.
 		key := filter.JSONPath[0]
 		args = append(args, key)
-		if filter.Operator == "is_set" {
-			condition := fmt.Sprintf("%s ? $%d", dbColumn, argIndex)
-			return condition, args, argIndex + 1, nil
+		condition := fmt.Sprintf("(jsonb_typeof(%s) = 'object' AND %s ? $%d)", dbColumn, dbColumn, argIndex)
+		if filter.Operator == "is_not_set" {
+			condition = "NOT " + condition
 		}
-		condition := fmt.Sprintf("NOT (%s ? $%d)", dbColumn, argIndex)
 		return condition, args, argIndex + 1, nil
 	}
 
 	// Build the JSON path using PostgreSQL subscript notation
 	jsonPath := qb.buildJSONPath(dbColumn, filter.JSONPath)
+	// An empty path addresses the column itself, which is the one shape a stored scalar can reach
+	// through a cast. See guardWholeColumnCast.
+	hasJSONPath := len(filter.JSONPath) > 0
+
+	// Relative-day operators need the same treatment as elsewhere: a day count for a value and a
+	// timestamp to compare it against. They carry no SQL operator of their own, so falling
+	// through to the generic comparison below emitted "<expr>  $1" — a syntax error that only
+	// surfaced when the segment ran.
+	if isRelativeDayOperator(filter.Operator) {
+		if filter.FieldType != "time" {
+			return "", nil, argIndex, fmt.Errorf("operator %s can only be used with a date value, not %s", filter.Operator, filter.FieldType)
+		}
+		values, err := qb.getStringValues(filter)
+		if err != nil {
+			return "", nil, argIndex, err
+		}
+		return qb.buildCondition(
+			guardWholeColumnCast(castTimestamp(fmt.Sprintf("%s::text", jsonPath), mode), dbColumn, hasJSONPath),
+			filter.Operator, sqlOp, values, argIndex)
+	}
 
 	// Handle array-specific operators
 	if filter.Operator == "in_array" {
@@ -976,7 +913,15 @@ func (qb *QueryBuilder) buildJSONCondition(dbColumn string, filter *domain.Dimen
 			return "", nil, argIndex, fmt.Errorf("in_array requires string_values")
 		}
 		args = append(args, filter.StringValues[0])
-		condition := fmt.Sprintf("%s ? $%d", jsonPath, argIndex)
+		// The same ? quirk as the existence check above, reached through a different operator: a
+		// stored scalar string satisfies `in_array "gold"` simply by being "gold".
+		//
+		// This guard keeps objects as well as arrays, unlike the one above, because is_set reads
+		// only JSONPath[0] and so can only ask about a top-level key. A nested key can be asked
+		// about through in_array alone, and that has worked since long before a scalar could be
+		// stored here, so narrowing to 'array' would take a capability away rather than close a
+		// hole the widening opened.
+		condition := fmt.Sprintf("(jsonb_typeof(%s) IN ('object', 'array') AND %s ? $%d)", jsonPath, jsonPath, argIndex)
 		return condition, args, argIndex + 1, nil
 	}
 
@@ -989,10 +934,10 @@ func (qb *QueryBuilder) buildJSONCondition(dbColumn string, filter *domain.Dimen
 		fieldExpr = fmt.Sprintf("%s::text", jsonPath)
 	case "number":
 		// Extract as text, then cast to numeric
-		fieldExpr = fmt.Sprintf("(%s::text)::numeric", jsonPath)
+		fieldExpr = guardWholeColumnCast(castNumeric(fmt.Sprintf("%s::text", jsonPath), mode), dbColumn, hasJSONPath)
 	case "time":
 		// Extract as text, then cast to timestamptz
-		fieldExpr = fmt.Sprintf("(%s::text)::timestamptz", jsonPath)
+		fieldExpr = guardWholeColumnCast(castTimestamp(fmt.Sprintf("%s::text", jsonPath), mode), dbColumn, hasJSONPath)
 	default:
 		return "", nil, argIndex, fmt.Errorf("invalid field_type for JSON field: %s", filter.FieldType)
 	}
@@ -1068,6 +1013,13 @@ func (qb *QueryBuilder) buildJSONCondition(dbColumn string, filter *domain.Dimen
 
 // buildJSONPath constructs a PostgreSQL JSONB path expression using subscript notation
 // Detects numeric strings and uses them as array indices
+//
+// Unlike the free-form keys in parseJSONBKeyFilter, these segments stay in the SQL text and are
+// defended by quote doubling. That is safe — a crafted segment collapses into an inert key lookup
+// rather than escaping the subscript — but it is the same shape as the interpolation that did turn
+// out to be exploitable, so treat any change here as security-sensitive. Binding them instead is
+// not a like-for-like swap: subscript notation takes a literal, and switching to the -> operator
+// chain would change how array indices and missing keys behave.
 func (qb *QueryBuilder) buildJSONPath(dbColumn string, path []string) string {
 	if len(path) == 0 {
 		return dbColumn
@@ -1224,7 +1176,13 @@ func (qb *QueryBuilder) parseContactConditionsForTrigger(contact *domain.Contact
 	var args []interface{}
 
 	for _, filter := range contact.Filters {
-		condition, newArgs, newArgIndex, err := qb.parseFilter(filter, argIndex)
+		// Triggers: cast defensively. This expression runs inside a trigger function on
+		// contact_timeline, which is written by triggers on contacts, contact_lists,
+		// message_history, custom_events, contact_segments and inbound_webhook_events — so a
+		// cast that raises takes all of those writes down for the contact concerned, and the
+		// install probe cannot foresee it because EXPLAIN plans without executing. A contact
+		// whose custom_json value does not convert simply does not match.
+		condition, newArgs, newArgIndex, err := qb.parseFilter(filter, argIndex, castDefensively)
 		if err != nil {
 			return "", nil, argIndex, err
 		}
@@ -1435,7 +1393,14 @@ func (qb *QueryBuilder) parseCustomEventsGoalConditionWithEmailRef(goal *domain.
 		conditions = append(conditions, fmt.Sprintf("ce.goal_type = $%d", argIndex))
 		argIndex++
 	} else {
-		// For wildcard, just ensure goal_type is set
+		// Wildcard: the row must carry a type. Deliberate, not lazy.
+		//
+		// Untyped rows are made matchable by stamping goal_type at WRITE time
+		// (web_analytics_contact_bridge.go), never by relaxing this predicate.
+		// Relaxing it would change SQL already frozen in segments.generated_sql and
+		// in installed automation trigger functions, so it needs a recompile
+		// migration (v36 and v37 are the precedent) — and it would bypass the
+		// partial index at database/init.go:367, which is WHERE goal_type IS NOT NULL.
 		conditions = append(conditions, "ce.goal_type IS NOT NULL")
 	}
 
@@ -1443,6 +1408,13 @@ func (qb *QueryBuilder) parseCustomEventsGoalConditionWithEmailRef(goal *domain.
 	if goal.GoalName != nil && *goal.GoalName != "" {
 		args = append(args, *goal.GoalName)
 		conditions = append(conditions, fmt.Sprintf("ce.goal_name = $%d", argIndex))
+		argIndex++
+	}
+
+	// Filter by the custom event name if provided
+	if goal.EventName != nil && *goal.EventName != "" {
+		args = append(args, *goal.EventName)
+		conditions = append(conditions, fmt.Sprintf("ce.event_name = $%d", argIndex))
 		argIndex++
 	}
 
@@ -1455,6 +1427,19 @@ func (qb *QueryBuilder) parseCustomEventsGoalConditionWithEmailRef(goal *domain.
 		if timeCondition != "" {
 			conditions = append(conditions, timeCondition)
 			args = append(args, timeArgs...)
+			argIndex = newArgIndex
+		}
+	}
+
+	// Narrow the matched events by their properties payload
+	for _, filter := range goal.Filters {
+		filterCondition, filterArgs, newArgIndex, err := qb.parseEventPropertyFilter(filter, argIndex)
+		if err != nil {
+			return "", nil, argIndex, err
+		}
+		if filterCondition != "" {
+			conditions = append(conditions, filterCondition)
+			args = append(args, filterArgs...)
 			argIndex = newArgIndex
 		}
 	}
@@ -1510,6 +1495,14 @@ func (qb *QueryBuilder) parseCustomEventsGoalConditionWithEmailRef(goal *domain.
 		whereClause,
 		comparison,
 	)
+
+	// Negation has to wrap the whole leaf rather than invert the comparison: the subquery groups
+	// by email, so a contact with no matching events produces no group and fails the EXISTS
+	// whatever the HAVING says. NOT EXISTS is the only form that also matches those contacts —
+	// which is exactly who "has not purchased in the last 30 days" is about.
+	if goal.Negate {
+		existsClause = "NOT " + existsClause
+	}
 
 	return existsClause, args, argIndex, nil
 }

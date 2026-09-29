@@ -15,7 +15,7 @@ import (
 	"github.com/spf13/viper"
 )
 
-const VERSION = "36.0"
+const VERSION = "39.1"
 
 type Config struct {
 	Server              ServerConfig
@@ -29,6 +29,7 @@ type Config struct {
 	Broadcast           BroadcastConfig
 	TaskScheduler       TaskSchedulerConfig
 	AutomationScheduler AutomationSchedulerConfig
+	Plan                PlanLimitsConfig
 	Telemetry           bool
 	CheckForUpdates     bool
 	RootEmail           string
@@ -39,13 +40,15 @@ type Config struct {
 	// console-facing URLs (workspace invitation emails, OIDC sign-in redirects,
 	// the endpoint the console SPA calls) so a split deployment can keep
 	// APIEndpoint on the public instance and the console on an intranet URL.
-	ConsoleEndpoint string
-	WebhookEndpoint string
-	LogLevel        string
-	Version         string
-	IsInstalled     bool // NEW: Indicates if setup wizard has been completed
-	MaxUsers        int  // 0 = unlimited (backward compat for self-hosted)
-	MaxWorkspaces   int  // 0 = unlimited (backward compat for self-hosted)
+	ConsoleEndpoint  string
+	WebhookEndpoint  string
+	LogLevel         string
+	GeoIPDBPath      string // MaxMind GeoLite2/GeoIP2 City .mmdb for web analytics; empty falls back to the shipped database (geoip.DefaultPaths)
+	AnalyticsWorkMem string // per-query work_mem for analytics aggregations (e.g. "64MB")
+	Version          string
+	IsInstalled      bool // NEW: Indicates if setup wizard has been completed
+	MaxUsers         int  // 0 = unlimited (backward compat for self-hosted)
+	MaxWorkspaces    int  // 0 = unlimited (backward compat for self-hosted)
 
 	// Track which values came from actual environment variables (not database, not generated)
 	EnvValues EnvValues
@@ -227,6 +230,17 @@ type AutomationSchedulerConfig struct {
 	BatchSize int           // Contacts per batch (default: 50)
 }
 
+// PlanLimitsConfig holds the quotas of the subscribed plan. Notifuse Cloud sets
+// these on every tenant container; self-hosted installs leave them unset, which
+// keeps every limit at 0 = unlimited.
+type PlanLimitsConfig struct {
+	MaxActiveContacts   int // 0 = unlimited
+	MaxStoredContacts   int // 0 = unlimited
+	MaxMonthlyEvents    int // 0 = unlimited
+	MaxMonthlyPageviews int // 0 = unlimited
+	DataRetentionMonths int // 0 = unlimited (data is never expired)
+}
+
 // LoadOptions contains options for loading configuration
 type LoadOptions struct {
 	EnvFile string // Optional environment file to load (e.g., ".env", ".env.test")
@@ -252,7 +266,6 @@ type SystemSettings struct {
 	SMTPBridgePort          int
 	SMTPBridgeTLSCertBase64 string
 	SMTPBridgeTLSKeyBase64  string
-	SMTPBridgeTLSMode       string
 
 	// OIDC settings loaded from the DB (used only when the matching env var is unset).
 	OIDCEnabled         bool
@@ -404,8 +417,6 @@ func loadSystemSettings(db *sql.DB, secretKey string) (*SystemSettings, error) {
 			}
 		}
 
-		settings.SMTPBridgeTLSMode = settingsMap["smtp_bridge_tls_mode"]
-
 		// OIDC settings
 		if v, ok := settingsMap["oidc_enabled"]; ok {
 			settings.OIDCEnabled = v == "true"
@@ -457,6 +468,8 @@ func LoadWithOptions(opts LoadOptions) (*Config, error) {
 	v.SetDefault("DB_CONNECTION_MAX_LIFETIME", "10m")
 	v.SetDefault("DB_CONNECTION_MAX_IDLE_TIME", "5m")
 	v.SetDefault("ENVIRONMENT", "production")
+	v.SetDefault("GEOIP_DB_PATH", "")
+	v.SetDefault("ANALYTICS_WORK_MEM", "64MB")
 	v.SetDefault("LOG_LEVEL", "info")
 	v.SetDefault("VERSION", VERSION)
 
@@ -517,6 +530,15 @@ func LoadWithOptions(opts LoadOptions) (*Config, error) {
 	v.SetDefault("AUTOMATION_SCHEDULER_DELAY", "30s")
 	v.SetDefault("AUTOMATION_SCHEDULER_INTERVAL", "10s")
 	v.SetDefault("AUTOMATION_SCHEDULER_BATCH_SIZE", 50)
+
+	// Plan limit defaults: 0 = unlimited, so a self-hosted install that sets none
+	// of them is unaffected. Unlike SMTP_BRIDGE_ENABLED/OIDC_*, these have no
+	// database fallback, so a viper default shadows nothing.
+	v.SetDefault("PLAN_MAX_ACTIVE_CONTACTS", 0)
+	v.SetDefault("PLAN_MAX_STORED_CONTACTS", 0)
+	v.SetDefault("PLAN_MAX_MONTHLY_EVENTS", 0)
+	v.SetDefault("PLAN_MAX_MONTHLY_PAGEVIEWS", 0)
+	v.SetDefault("PLAN_DATA_RETENTION_MONTHS", 0)
 
 	// Load environment file if specified
 	if opts.EnvFile != "" {
@@ -793,9 +815,8 @@ func LoadWithOptions(opts LoadOptions) (*Config, error) {
 		if smtpBridgeConfig.TLSKeyBase64 == "" {
 			smtpBridgeConfig.TLSKeyBase64 = systemSettings.SMTPBridgeTLSKeyBase64
 		}
-		if smtpBridgeConfig.TLSMode == "" {
-			smtpBridgeConfig.TLSMode = systemSettings.SMTPBridgeTLSMode
-		}
+		// TLS mode deliberately has no database fallback: it is environment-only,
+		// via SMTP_BRIDGE_TLS. Unset means auto-resolve from the certs below.
 	} else {
 		// First-run: use env vars only
 		rootEmail = envVals.RootEmail
@@ -905,6 +926,35 @@ func LoadWithOptions(opts LoadOptions) (*Config, error) {
 		publicExtraPaths = append(publicExtraPaths, p)
 	}
 
+	// Plan limits, as pushed by the Notifuse Cloud control plane. Unset means 0,
+	// which means unlimited.
+	planConfig := PlanLimitsConfig{
+		MaxActiveContacts:   v.GetInt("PLAN_MAX_ACTIVE_CONTACTS"),
+		MaxStoredContacts:   v.GetInt("PLAN_MAX_STORED_CONTACTS"),
+		MaxMonthlyEvents:    v.GetInt("PLAN_MAX_MONTHLY_EVENTS"),
+		MaxMonthlyPageviews: v.GetInt("PLAN_MAX_MONTHLY_PAGEVIEWS"),
+		DataRetentionMonths: v.GetInt("PLAN_DATA_RETENTION_MONTHS"),
+	}
+
+	// Validate plan limits. v.GetInt returns 0 on a value it cannot parse and 0
+	// means unlimited, so without this a typo would silently remove the quota
+	// instead of failing the boot.
+	if planConfig.MaxActiveContacts < 0 {
+		return nil, fmt.Errorf("PLAN_MAX_ACTIVE_CONTACTS cannot be negative (got %d)", planConfig.MaxActiveContacts)
+	}
+	if planConfig.MaxStoredContacts < 0 {
+		return nil, fmt.Errorf("PLAN_MAX_STORED_CONTACTS cannot be negative (got %d)", planConfig.MaxStoredContacts)
+	}
+	if planConfig.MaxMonthlyEvents < 0 {
+		return nil, fmt.Errorf("PLAN_MAX_MONTHLY_EVENTS cannot be negative (got %d)", planConfig.MaxMonthlyEvents)
+	}
+	if planConfig.MaxMonthlyPageviews < 0 {
+		return nil, fmt.Errorf("PLAN_MAX_MONTHLY_PAGEVIEWS cannot be negative (got %d)", planConfig.MaxMonthlyPageviews)
+	}
+	if planConfig.DataRetentionMonths < 0 {
+		return nil, fmt.Errorf("PLAN_DATA_RETENTION_MONTHS cannot be negative (got %d)", planConfig.DataRetentionMonths)
+	}
+
 	config := &Config{
 		Server: ServerConfig{
 			Port:             v.GetInt("SERVER_PORT"),
@@ -981,18 +1031,21 @@ func LoadWithOptions(opts LoadOptions) (*Config, error) {
 			Interval:  v.GetDuration("AUTOMATION_SCHEDULER_INTERVAL"),
 			BatchSize: v.GetInt("AUTOMATION_SCHEDULER_BATCH_SIZE"),
 		},
+		Plan: planConfig,
 
-		RootEmail:       rootEmail,
-		Environment:     v.GetString("ENVIRONMENT"),
-		APIEndpoint:     apiEndpoint,
-		ConsoleEndpoint: consoleEndpoint,
-		WebhookEndpoint: v.GetString("WEBHOOK_ENDPOINT"),
-		LogLevel:        v.GetString("LOG_LEVEL"),
-		Version:         v.GetString("VERSION"),
-		IsInstalled:     isInstalled,
-		MaxUsers:        v.GetInt("MAX_USERS"),
-		MaxWorkspaces:   v.GetInt("MAX_WORKSPACES"),
-		EnvValues:       envVals, // Store env values for setup service
+		RootEmail:        rootEmail,
+		Environment:      v.GetString("ENVIRONMENT"),
+		APIEndpoint:      apiEndpoint,
+		ConsoleEndpoint:  consoleEndpoint,
+		WebhookEndpoint:  v.GetString("WEBHOOK_ENDPOINT"),
+		LogLevel:         v.GetString("LOG_LEVEL"),
+		GeoIPDBPath:      v.GetString("GEOIP_DB_PATH"),
+		AnalyticsWorkMem: v.GetString("ANALYTICS_WORK_MEM"),
+		Version:          v.GetString("VERSION"),
+		IsInstalled:      isInstalled,
+		MaxUsers:         v.GetInt("MAX_USERS"),
+		MaxWorkspaces:    v.GetInt("MAX_WORKSPACES"),
+		EnvValues:        envVals, // Store env values for setup service
 	}
 
 	if config.WebhookEndpoint == "" {

@@ -64,6 +64,13 @@ func (h *WebhookSubscriptionHandler) handleCreate(w http.ResponseWriter, r *http
 		URL                string                     `json:"url"`
 		EventTypes         []string                   `json:"event_types"`
 		CustomEventFilters *domain.CustomEventFilters `json:"custom_event_filters,omitempty"`
+		ListIDs            []string                   `json:"list_ids,omitempty"`
+		SegmentIDs         []string                   `json:"segment_ids,omitempty"`
+		// Source attributes the subscription to whoever created it, and it can only
+		// be set here: a row written without it can never be attributed afterwards,
+		// because nothing else records who asked for it. Optional, so every existing
+		// client keeps working and lands as user-created.
+		Source string `json:"source,omitempty"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -76,9 +83,22 @@ func (h *WebhookSubscriptionHandler) handleCreate(w http.ResponseWriter, r *http
 		return
 	}
 
-	sub, err := h.service.Create(r.Context(), req.WorkspaceID, req.Name, req.URL, req.EventTypes, req.CustomEventFilters)
+	// Reject an unrecognised source at the edge rather than storing it. The column
+	// drives behaviour — the console badge, the delete-versus-disable branch on a
+	// dead endpoint — and an unknown value satisfies none of those branches while
+	// still reading as "not user-created", which is worse than no attribution.
+	if err := domain.ValidateWebhookSubscriptionSource(req.Source); err != nil {
+		WriteJSONError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	sub, err := h.service.Create(r.Context(), req.WorkspaceID, req.Name, req.URL, req.EventTypes, req.CustomEventFilters,
+		req.Source, req.ListIDs, req.SegmentIDs)
 	if err != nil {
 		h.logger.WithField("error", err.Error()).Error("Failed to create webhook subscription")
+		if writeServiceError(w, err, "You do not have permission to manage webhook subscriptions") {
+			return
+		}
 		WriteJSONError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -104,6 +124,9 @@ func (h *WebhookSubscriptionHandler) handleList(w http.ResponseWriter, r *http.R
 	subs, err := h.service.List(r.Context(), workspaceID)
 	if err != nil {
 		h.logger.WithField("error", err.Error()).Error("Failed to list webhook subscriptions")
+		if writeServiceError(w, err, "You do not have permission to read webhook subscriptions") {
+			return
+		}
 		WriteJSONError(w, "Failed to list webhook subscriptions", http.StatusInternalServerError)
 		return
 	}
@@ -135,6 +158,9 @@ func (h *WebhookSubscriptionHandler) handleGet(w http.ResponseWriter, r *http.Re
 	sub, err := h.service.GetByID(r.Context(), workspaceID, id)
 	if err != nil {
 		h.logger.WithField("error", err.Error()).Error("Failed to get webhook subscription")
+		if writeServiceError(w, err, "You do not have permission to read webhook subscriptions") {
+			return
+		}
 		WriteJSONError(w, "Webhook subscription not found", http.StatusNotFound)
 		return
 	}
@@ -145,6 +171,23 @@ func (h *WebhookSubscriptionHandler) handleGet(w http.ResponseWriter, r *http.Re
 }
 
 // handleUpdate handles POST /api/webhookSubscriptions.update
+//
+// The endpoint is a replace for what identifies a subscription — its name, its URL and
+// the event types it asked for — and a patch for everything that narrows it: the switch
+// and the three filters keep their stored value unless the body names them.
+//
+// The two halves are split on what their empty value means. An empty name or URL is
+// nonsense and the service rejects it, so nothing is lost by replacing them. An empty
+// filter is a valid, meaningful setting — "no filter, every list" — which makes a body
+// with nothing to say about one indistinguishable from a body asking to remove it. That
+// tie has to go to the stored value, because the two wrong answers are not equally
+// wrong: reading silence as "remove it" widens the subscription to every list, every
+// segment and every custom event in the workspace, and the only symptom is deliveries
+// nobody asked for.
+//
+// Deliberately no source field: a source read from the request would let any caller
+// re-attribute an existing subscription — or silently clear the attribution of a Zapier
+// one by sending the same body the console sends. The service keeps the stored value.
 func (h *WebhookSubscriptionHandler) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		WriteJSONError(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -152,13 +195,31 @@ func (h *WebhookSubscriptionHandler) handleUpdate(w http.ResponseWriter, r *http
 	}
 
 	var req struct {
-		WorkspaceID        string                     `json:"workspace_id"`
-		ID                 string                     `json:"id"`
-		Name               string                     `json:"name"`
-		URL                string                     `json:"url"`
-		EventTypes         []string                   `json:"event_types"`
-		CustomEventFilters *domain.CustomEventFilters `json:"custom_event_filters,omitempty"`
-		Enabled            bool                       `json:"enabled"`
+		WorkspaceID string   `json:"workspace_id"`
+		ID          string   `json:"id"`
+		Name        string   `json:"name"`
+		URL         string   `json:"url"`
+		EventTypes  []string `json:"event_types"`
+		// Pointers, so that "the body did not mention this" stays distinguishable
+		// from "the body asked for the empty value". Nil leaves the stored setting
+		// alone; a non-nil one replaces it, an explicitly empty array or object
+		// being how a caller removes a filter.
+		//
+		// A JSON null decodes to nil and so reads as silence rather than as a
+		// removal. Clearing is expressible without it, so the safer of the two
+		// readings wins — a client library that serialises its absent optionals as
+		// null cannot widen a subscription by accident.
+		//
+		// Decoding enabled as a plain bool made every body that omitted it switch
+		// the subscription off, and switching one off drains its queued deliveries,
+		// which no later re-enable brings back. The filters are the same defect
+		// three fields over. The console renders controls for the custom event
+		// filters only, so it is no protection either: the list and segment filters
+		// are Zapier's, written when a Zap registers and edited by nothing.
+		CustomEventFilters *domain.CustomEventFilters `json:"custom_event_filters"`
+		ListIDs            *[]string                  `json:"list_ids"`
+		SegmentIDs         *[]string                  `json:"segment_ids"`
+		Enabled            *bool                      `json:"enabled"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -175,9 +236,13 @@ func (h *WebhookSubscriptionHandler) handleUpdate(w http.ResponseWriter, r *http
 		return
 	}
 
-	sub, err := h.service.Update(r.Context(), req.WorkspaceID, req.ID, req.Name, req.URL, req.EventTypes, req.CustomEventFilters, req.Enabled)
+	sub, err := h.service.Update(r.Context(), req.WorkspaceID, req.ID, req.Name, req.URL, req.EventTypes, req.CustomEventFilters,
+		req.Enabled, req.ListIDs, req.SegmentIDs)
 	if err != nil {
 		h.logger.WithField("error", err.Error()).Error("Failed to update webhook subscription")
+		if writeServiceError(w, err, "You do not have permission to manage webhook subscriptions") {
+			return
+		}
 		WriteJSONError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -215,6 +280,9 @@ func (h *WebhookSubscriptionHandler) handleDelete(w http.ResponseWriter, r *http
 
 	if err := h.service.Delete(r.Context(), req.WorkspaceID, req.ID); err != nil {
 		h.logger.WithField("error", err.Error()).Error("Failed to delete webhook subscription")
+		if writeServiceError(w, err, "You do not have permission to manage webhook subscriptions") {
+			return
+		}
 		WriteJSONError(w, "Failed to delete webhook subscription", http.StatusInternalServerError)
 		return
 	}
@@ -254,6 +322,9 @@ func (h *WebhookSubscriptionHandler) handleToggle(w http.ResponseWriter, r *http
 	sub, err := h.service.Toggle(r.Context(), req.WorkspaceID, req.ID, req.Enabled)
 	if err != nil {
 		h.logger.WithField("error", err.Error()).Error("Failed to toggle webhook subscription")
+		if writeServiceError(w, err, "You do not have permission to manage webhook subscriptions") {
+			return
+		}
 		WriteJSONError(w, "Failed to toggle webhook subscription", http.StatusInternalServerError)
 		return
 	}
@@ -292,6 +363,11 @@ func (h *WebhookSubscriptionHandler) handleRegenerateSecret(w http.ResponseWrite
 	sub, err := h.service.RegenerateSecret(r.Context(), req.WorkspaceID, req.ID)
 	if err != nil {
 		h.logger.WithField("error", err.Error()).Error("Failed to regenerate webhook secret")
+		// Rotating a secret is owner-only, and the denial is an ErrUnauthorized: it
+		// belongs to the caller as a 403, not to the operator as a 500.
+		if writeServiceError(w, err, "Only a workspace owner may regenerate a webhook secret") {
+			return
+		}
 		WriteJSONError(w, "Failed to regenerate webhook secret", http.StatusInternalServerError)
 		return
 	}
@@ -340,6 +416,9 @@ func (h *WebhookSubscriptionHandler) handleGetDeliveries(w http.ResponseWriter, 
 	deliveries, total, err := h.service.GetDeliveries(r.Context(), workspaceID, subscriptionIDPtr, limit, offset)
 	if err != nil {
 		h.logger.WithField("error", err.Error()).Error("Failed to get webhook deliveries")
+		if writeServiceError(w, err, "You do not have permission to read webhook subscriptions") {
+			return
+		}
 		WriteJSONError(w, "Failed to get webhook deliveries", http.StatusInternalServerError)
 		return
 	}
@@ -379,10 +458,15 @@ func (h *WebhookSubscriptionHandler) handleTest(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	// Get the subscription
-	sub, err := h.service.GetByID(r.Context(), req.WorkspaceID, req.ID)
+	// Load the subscription through the write-gated path: sending a test fires a
+	// real request at the subscription's URL, so it is not a read. The secret it
+	// carries is used to sign that request and never leaves this handler.
+	sub, err := h.service.GetForTestDelivery(r.Context(), req.WorkspaceID, req.ID)
 	if err != nil {
 		h.logger.WithField("error", err.Error()).Error("Failed to get webhook subscription")
+		if writeServiceError(w, err, "You do not have permission to manage webhook subscriptions") {
+			return
+		}
 		WriteJSONError(w, "Webhook subscription not found", http.StatusNotFound)
 		return
 	}

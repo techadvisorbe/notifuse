@@ -1,3 +1,4 @@
+import './resizeObserverMock'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -5,9 +6,10 @@ import { ReactNode } from 'react'
 import { App, ConfigProvider } from 'antd'
 import { I18nProvider } from '@lingui/react'
 import { i18n } from '@lingui/core'
+import { createFullPermissions } from '../services/api/permissions'
 
 // Use vi.hoisted to define mock data before mocks are hoisted
-const { mockWorkspace, mockUser, mockPermissions } = vi.hoisted(() => ({
+const { mockWorkspace, mockUser } = vi.hoisted(() => ({
   mockWorkspace: {
     id: 'test-workspace',
     name: 'Test Workspace',
@@ -22,17 +24,6 @@ const { mockWorkspace, mockUser, mockPermissions } = vi.hoisted(() => ({
   mockUser: {
     id: 'user-123',
     email: 'test@example.com'
-  },
-  mockPermissions: {
-    contacts: { read: true, write: true },
-    lists: { read: true, write: true },
-    templates: { read: true, write: true },
-    broadcasts: { read: true, write: true },
-    transactional: { read: true, write: true },
-    workspace: { read: true, write: true },
-    message_history: { read: true, write: true },
-    blog: { read: true, write: true },
-    automations: { read: true, write: true }
   }
 }))
 
@@ -62,8 +53,13 @@ vi.mock('@tanstack/react-router', async () => {
     ...actual,
     useNavigate: () => vi.fn(),
     useMatch: () => false,
-    useParams: () => ({ workspaceId: 'test-workspace', section: 'team' }),
-    useSearch: () => ({})
+    useParams: () => ({ workspaceId: 'test-workspace', section: 'team', tab: 'dashboard' }),
+    useSearch: () => ({}),
+    // The real Link reads the router through context; these tests render pages
+    // in isolation, without a RouterProvider.
+    Link: ({ children, ...props }: { children?: ReactNode; to?: string }) => (
+      <a href={props.to ?? '#'}>{children}</a>
+    )
   }
 })
 
@@ -79,7 +75,7 @@ vi.mock('../contexts/AuthContext', () => ({
     refreshWorkspaces: vi.fn()
   }),
   useWorkspacePermissions: () => ({
-    permissions: mockPermissions,
+    permissions: createFullPermissions(),
     loading: false
   }),
   AuthProvider: ({ children }: { children: ReactNode }) => children
@@ -250,6 +246,11 @@ vi.mock('../services/api/analytics', () => ({
     getEmailMetrics: vi.fn().mockResolvedValue({ metrics: [] }),
     getFailedMessages: vi.fn().mockResolvedValue({ messages: [] }),
     query: vi.fn().mockResolvedValue({ data: [] })
+  },
+  // The web analytics views build their own client at module scope, so the
+  // mock has to offer the factory as well as the shared instance.
+  AnalyticsService: {
+    create: () => ({ query: vi.fn().mockResolvedValue({ data: [] }) })
   }
 }))
 
@@ -303,6 +304,8 @@ import { WorkspaceSettingsPage } from '../pages/WorkspaceSettingsPage'
 import { FileManagerPage } from '../pages/FileManagerPage'
 import { BlogPage } from '../pages/BlogPage'
 import { DebugSegmentPage } from '../pages/DebugSegmentPage'
+import { WebAnalyticsPage } from '../pages/WebAnalyticsPage'
+import { WebAnalyticsLivePage } from '../pages/WebAnalyticsLivePage'
 
 // Create a wrapper with all required providers
 function createWrapper() {
@@ -470,6 +473,22 @@ describe('Page Smoke Tests', () => {
     it('BlogPage renders without error', async () => {
       const Wrapper = createWrapper()
       expect(() => render(<BlogPage />, { wrapper: Wrapper })).not.toThrow()
+      await waitFor(() => {
+        expect(document.body).toBeTruthy()
+      })
+    })
+
+    it('WebAnalyticsPage renders without error', async () => {
+      const Wrapper = createWrapper()
+      expect(() => render(<WebAnalyticsPage />, { wrapper: Wrapper })).not.toThrow()
+      await waitFor(() => {
+        expect(document.body).toBeTruthy()
+      })
+    })
+
+    it('WebAnalyticsLivePage renders without error', async () => {
+      const Wrapper = createWrapper()
+      expect(() => render(<WebAnalyticsLivePage />, { wrapper: Wrapper })).not.toThrow()
       await waitFor(() => {
         expect(document.body).toBeTruthy()
       })

@@ -56,6 +56,18 @@ type ContactSegment struct {
 	ComputedAt time.Time `json:"computed_at"`
 }
 
+// SegmentContactDetail is one segment membership expanded with the contact record
+// behind it, carrying the moment the contact entered the segment.
+//
+// It exists for callers that need the *most recent* joiners as whole contacts —
+// a polling integration building sample records, for instance. The email-only
+// listing forces such a caller into one contact lookup per address, and the emails
+// alone carry no join time to sort on.
+type SegmentContactDetail struct {
+	Contact   *Contact  `json:"contact"`
+	MatchedAt time.Time `json:"matched_at"`
+}
+
 // Validate performs validation on the segment fields
 func (s *Segment) Validate() error {
 	if s.ID == "" {
@@ -410,6 +422,11 @@ type SegmentService interface {
 
 	// GetSegmentContacts retrieves the contacts belonging to a segment
 	GetSegmentContacts(ctx context.Context, workspaceID, segmentID string, limit, offset int) ([]string, error)
+
+	// GetSegmentContactDetails retrieves the contacts belonging to a segment as
+	// whole records, most recently joined first. Gated exactly like
+	// GetSegmentContacts: it answers the same question with more of the contact.
+	GetSegmentContactDetails(ctx context.Context, workspaceID, segmentID string, limit, offset int) ([]*SegmentContactDetail, error)
 }
 
 type SegmentRepository interface {
@@ -434,6 +451,13 @@ type SegmentRepository interface {
 	// RemoveContactFromSegment removes a contact from a segment
 	RemoveContactFromSegment(ctx context.Context, workspaceID string, email string, segmentID string) error
 
+	// DeleteForEmail removes every segment membership a contact has.
+	//
+	// Separate from RemoveContactFromSegment because erasure does not know which
+	// segments the contact was in, and enumerating them first would race with the
+	// queue processor.
+	DeleteForEmail(ctx context.Context, workspaceID string, email string) error
+
 	// RemoveOldMemberships removes contact_segment records with old versions
 	RemoveOldMemberships(ctx context.Context, workspaceID string, segmentID string, currentVersion int64) error
 
@@ -442,6 +466,10 @@ type SegmentRepository interface {
 
 	// GetSegmentContactCount gets the count of contacts in a segment
 	GetSegmentContactCount(ctx context.Context, workspaceID string, segmentID string) (int, error)
+
+	// GetSegmentContactDetails retrieves segment members joined to their contact
+	// records, ordered by join time descending.
+	GetSegmentContactDetails(ctx context.Context, workspaceID string, segmentID string, limit, offset int) ([]*SegmentContactDetail, error)
 
 	// PreviewSegment executes a segment query and returns the count of matching contacts
 	PreviewSegment(ctx context.Context, workspaceID string, sqlQuery string, args []interface{}, limit int) (int, error)

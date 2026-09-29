@@ -20,15 +20,31 @@ type WorkspaceHandler struct {
 	getJWTSecret     func() ([]byte, error)
 	logger           logger.Logger
 	secretKey        string
+
+	// webAnalyticsCacheInvalidator, when set, drops the ingest path's cached
+	// settings of a workspace after they change.
+	webAnalyticsCacheInvalidator func(workspaceID string)
+
+	isDemo bool
 }
 
-// NewWorkspaceHandler creates a new workspace handler
+// WithWebAnalyticsCacheInvalidator wires the ingest settings-cache
+// invalidation callback (optional).
+func (h *WorkspaceHandler) WithWebAnalyticsCacheInvalidator(fn func(workspaceID string)) *WorkspaceHandler {
+	h.webAnalyticsCacheInvalidator = fn
+	return h
+}
+
+// NewWorkspaceHandler creates a new workspace handler.
+// isDemo closes the mutating workspace routes on a demo instance; it is a
+// constructor parameter so that forgetting it is a compile error.
 func NewWorkspaceHandler(
 	workspaceService domain.WorkspaceServiceInterface,
 	authService domain.AuthService,
 	getJWTSecret func() ([]byte, error),
 	logger logger.Logger,
 	secretKey string,
+	isDemo bool,
 ) *WorkspaceHandler {
 	return &WorkspaceHandler{
 		workspaceService: workspaceService,
@@ -36,6 +52,7 @@ func NewWorkspaceHandler(
 		getJWTSecret:     getJWTSecret,
 		logger:           logger,
 		secretKey:        secretKey,
+		isDemo:           isDemo,
 	}
 }
 
@@ -45,29 +62,37 @@ func (h *WorkspaceHandler) RegisterRoutes(mux *http.ServeMux) {
 	authMiddleware := middleware.NewAuthMiddleware(h.getJWTSecret)
 	requireAuth := authMiddleware.RequireAuth()
 
+	// The demo instance is publicly writable, so every mutating endpoint is closed
+	// there — membership, API keys and integrations hand out durable credentials to
+	// whoever asks, and the rest reconfigures the single shared workspace. Reads
+	// stay open: the demo exists to be browsed.
+	restrictedInDemo := middleware.RestrictedInDemo(h.isDemo)
+
 	// Register RPC-style endpoints with dot notation
 	mux.Handle("/api/workspaces.list", requireAuth(http.HandlerFunc(h.handleList)))
 	mux.Handle("/api/workspaces.get", requireAuth(http.HandlerFunc(h.handleGet)))
-	mux.Handle("/api/workspaces.create", requireAuth(http.HandlerFunc(h.handleCreate)))
-	mux.Handle("/api/workspaces.update", requireAuth(http.HandlerFunc(h.handleUpdate)))
-	mux.Handle("/api/workspaces.delete", requireAuth(http.HandlerFunc(h.handleDelete)))
+	mux.Handle("/api/workspaces.create", restrictedInDemo(requireAuth(http.HandlerFunc(h.handleCreate))))
+	mux.Handle("/api/workspaces.update", restrictedInDemo(requireAuth(http.HandlerFunc(h.handleUpdate))))
+	mux.Handle("/api/workspaces.delete", restrictedInDemo(requireAuth(http.HandlerFunc(h.handleDelete))))
 	mux.Handle("/api/workspaces.members", requireAuth(http.HandlerFunc(h.handleMembers)))
-	mux.Handle("/api/workspaces.inviteMember", requireAuth(http.HandlerFunc(h.handleInviteMember)))
-	mux.Handle("/api/workspaces.createAPIKey", requireAuth(http.HandlerFunc(h.handleCreateAPIKey)))
-	mux.Handle("/api/workspaces.removeMember", requireAuth(http.HandlerFunc(h.handleRemoveMember)))
-	mux.Handle("/api/workspaces.deleteInvitation", requireAuth(http.HandlerFunc(h.handleDeleteInvitation)))
-	mux.Handle("/api/workspaces.setUserPermissions", requireAuth(http.HandlerFunc(h.handleSetUserPermissions)))
-	mux.Handle("/api/workspaces.setCustomFieldLabels", requireAuth(http.HandlerFunc(h.handleSetCustomFieldLabels)))
-	mux.Handle("/api/workspaces.setBlogSettings", requireAuth(http.HandlerFunc(h.handleSetBlogSettings)))
+	mux.Handle("/api/workspaces.inviteMember", restrictedInDemo(requireAuth(http.HandlerFunc(h.handleInviteMember))))
+	mux.Handle("/api/workspaces.createAPIKey", restrictedInDemo(requireAuth(http.HandlerFunc(h.handleCreateAPIKey))))
+	mux.Handle("/api/workspaces.removeMember", restrictedInDemo(requireAuth(http.HandlerFunc(h.handleRemoveMember))))
+	mux.Handle("/api/workspaces.deleteInvitation", restrictedInDemo(requireAuth(http.HandlerFunc(h.handleDeleteInvitation))))
+	mux.Handle("/api/workspaces.setUserPermissions", restrictedInDemo(requireAuth(http.HandlerFunc(h.handleSetUserPermissions))))
+	mux.Handle("/api/workspaces.setCustomFieldLabels", restrictedInDemo(requireAuth(http.HandlerFunc(h.handleSetCustomFieldLabels))))
+	mux.Handle("/api/workspaces.setBlogSettings", restrictedInDemo(requireAuth(http.HandlerFunc(h.handleSetBlogSettings))))
+	mux.Handle("/api/workspaces.setWebAnalyticsSettings", restrictedInDemo(requireAuth(http.HandlerFunc(h.handleSetWebAnalyticsSettings))))
 
 	// Public invitation routes (no authentication required)
 	mux.Handle("/api/workspaces.verifyInvitationToken", http.HandlerFunc(h.handleVerifyInvitationToken))
 	mux.Handle("/api/workspaces.acceptInvitation", http.HandlerFunc(h.handleAcceptInvitation))
 
 	// Integration management routes
-	mux.Handle("/api/workspaces.createIntegration", requireAuth(http.HandlerFunc(h.handleCreateIntegration)))
-	mux.Handle("/api/workspaces.updateIntegration", requireAuth(http.HandlerFunc(h.handleUpdateIntegration)))
-	mux.Handle("/api/workspaces.deleteIntegration", requireAuth(http.HandlerFunc(h.handleDeleteIntegration)))
+	mux.Handle("/api/workspaces.createIntegration", restrictedInDemo(requireAuth(http.HandlerFunc(h.handleCreateIntegration))))
+	mux.Handle("/api/workspaces.updateIntegration", restrictedInDemo(requireAuth(http.HandlerFunc(h.handleUpdateIntegration))))
+	mux.Handle("/api/workspaces.deleteIntegration", restrictedInDemo(requireAuth(http.HandlerFunc(h.handleDeleteIntegration))))
+	mux.Handle("/api/workspaces.connectZapier", restrictedInDemo(requireAuth(http.HandlerFunc(h.handleConnectZapier))))
 }
 
 func (h *WorkspaceHandler) handleList(w http.ResponseWriter, r *http.Request) {
@@ -78,35 +103,23 @@ func (h *WorkspaceHandler) handleList(w http.ResponseWriter, r *http.Request) {
 
 	workspaces, err := h.workspaceService.ListWorkspaces(r.Context())
 	if err != nil {
+		if writeServiceError(w, err, "Failed to list workspaces") {
+			return
+		}
 		WriteJSONError(w, "Failed to list workspaces", http.StatusInternalServerError)
 		return
 	}
 
+	// Credentials are decrypted on load for the sending path; they must not leave
+	// the process. See redactWorkspaceForCaller.
+	//
+	// This endpoint is the one an integration reaches for first — it is the only
+	// workspace endpoint no permission gates, so it is how a key discovers what it
+	// is attached to.
+	for _, ws := range workspaces {
+		redactWorkspaceForCaller(r.Context(), ws)
+	}
 	writeJSON(w, http.StatusOK, workspaces)
-}
-
-// writeWorkspaceServiceError maps common workspace-service errors to HTTP status codes,
-// writing the response and returning true when it handled the error. Authorization denials
-// (not a member / not an owner) map to 403 Forbidden rather than a generic 500, and missing
-// workspaces map to 404. It unwraps via errors.As/errors.Is, so it works even when the service
-// wraps these (e.g. "failed to authenticate user: %w"). Returns false for unrecognized errors
-// so callers can apply their own handling (e.g. a method-specific 500).
-func writeWorkspaceServiceError(w http.ResponseWriter, err error) bool {
-	var notFound *domain.ErrWorkspaceNotFound
-	if errors.As(err, &notFound) {
-		WriteJSONError(w, "Workspace not found", http.StatusNotFound)
-		return true
-	}
-	var unauthorized *domain.ErrUnauthorized
-	if errors.As(err, &unauthorized) {
-		WriteJSONError(w, unauthorized.Message, http.StatusForbidden)
-		return true
-	}
-	if errors.Is(err, domain.ErrUserNotInWorkspace) {
-		WriteJSONError(w, "You do not have access to this workspace", http.StatusForbidden)
-		return true
-	}
-	return false
 }
 
 func (h *WorkspaceHandler) handleGet(w http.ResponseWriter, r *http.Request) {
@@ -124,7 +137,7 @@ func (h *WorkspaceHandler) handleGet(w http.ResponseWriter, r *http.Request) {
 
 	workspace, err := h.workspaceService.GetWorkspace(r.Context(), workspaceID)
 	if err != nil {
-		if writeWorkspaceServiceError(w, err) {
+		if writeServiceError(w, err, "You do not have access to this workspace") {
 			return
 		}
 		WriteJSONError(w, "Failed to get workspace", http.StatusInternalServerError)
@@ -134,6 +147,8 @@ func (h *WorkspaceHandler) handleGet(w http.ResponseWriter, r *http.Request) {
 		WriteJSONError(w, "Workspace not found", http.StatusNotFound)
 		return
 	}
+
+	redactWorkspaceForCaller(r.Context(), workspace)
 
 	// Wrap the workspace in a response object with a workspace field to match frontend expectations
 	writeJSON(w, http.StatusOK, map[string]interface{}{
@@ -184,6 +199,7 @@ func (h *WorkspaceHandler) handleCreate(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	redactWorkspaceForCaller(r.Context(), workspace)
 	writeJSON(w, http.StatusCreated, workspace)
 }
 
@@ -218,7 +234,7 @@ func (h *WorkspaceHandler) handleUpdate(w http.ResponseWriter, r *http.Request) 
 		req.Settings,
 	)
 	if err != nil {
-		if writeWorkspaceServiceError(w, err) {
+		if writeServiceError(w, err, "You are not allowed to update this workspace") {
 			return
 		}
 		// Check if it's a validation error (e.g., DNS verification failed)
@@ -235,6 +251,7 @@ func (h *WorkspaceHandler) handleUpdate(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	redactWorkspaceForCaller(r.Context(), workspace)
 	writeJSON(w, http.StatusOK, workspace)
 }
 
@@ -257,7 +274,7 @@ func (h *WorkspaceHandler) handleDelete(w http.ResponseWriter, r *http.Request) 
 
 	err := h.workspaceService.DeleteWorkspace(r.Context(), req.ID)
 	if err != nil {
-		if writeWorkspaceServiceError(w, err) {
+		if writeServiceError(w, err, "You are not allowed to delete this workspace") {
 			return
 		}
 		WriteJSONError(w, "Failed to delete workspace", http.StatusInternalServerError)
@@ -284,7 +301,7 @@ func (h *WorkspaceHandler) handleMembers(w http.ResponseWriter, r *http.Request)
 	// Use the new method that includes emails
 	members, err := h.workspaceService.GetWorkspaceMembersWithEmail(r.Context(), workspaceID)
 	if err != nil {
-		if writeWorkspaceServiceError(w, err) {
+		if writeServiceError(w, err, "You do not have access to this workspace") {
 			return
 		}
 		WriteJSONError(w, "Failed to get workspace members", http.StatusInternalServerError)
@@ -323,6 +340,9 @@ func (h *WorkspaceHandler) handleInviteMember(w http.ResponseWriter, r *http.Req
 			WriteJSONError(w, limitErr.Error(), http.StatusForbidden)
 			return
 		}
+		if writeServiceError(w, err, "Only workspace owners can invite members") {
+			return
+		}
 		h.logger.WithField("workspace_id", req.WorkspaceID).WithField("email", req.Email).WithField("error", err.Error()).Error("Failed to invite member")
 		WriteJSONError(w, "Failed to invite member", http.StatusInternalServerError)
 		return
@@ -359,25 +379,18 @@ func (h *WorkspaceHandler) handleSetUserPermissions(w http.ResponseWriter, r *ht
 		return
 	}
 
-	// Validate request
-	if req.WorkspaceID == "" {
-		WriteJSONError(w, "Missing workspace_id", http.StatusBadRequest)
-		return
-	}
-	if req.UserID == "" {
-		WriteJSONError(w, "Missing user_id", http.StatusBadRequest)
-		return
-	}
-	if req.Permissions == nil {
-		WriteJSONError(w, "Missing permissions", http.StatusBadRequest)
+	// Validate here rather than leaving it to the service: the request carries a
+	// permission map, and an unknown resource key is a malformed request (400), not
+	// an internal failure.
+	if err := req.Validate(); err != nil {
+		WriteJSONError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
 	// Call service to set user permissions
 	err := h.workspaceService.SetUserPermissions(r.Context(), req.WorkspaceID, req.UserID, req.Permissions)
 	if err != nil {
-		if _, ok := err.(*domain.ErrUnauthorized); ok {
-			WriteJSONError(w, err.Error(), http.StatusForbidden)
+		if writeServiceError(w, err, "Only workspace owners can manage user permissions") {
 			return
 		}
 		h.logger.WithField("workspace_id", req.WorkspaceID).WithField("user_id", req.UserID).WithField("error", err.Error()).Error("Failed to set user permissions")
@@ -411,12 +424,12 @@ func (h *WorkspaceHandler) handleSetCustomFieldLabels(w http.ResponseWriter, r *
 	}
 
 	if err := h.workspaceService.SetCustomFieldLabels(r.Context(), workspaceID, labels); err != nil {
-		if _, ok := err.(*domain.PermissionError); ok {
-			WriteJSONError(w, err.Error(), http.StatusForbidden)
+		if writePermissionError(w, err) {
 			return
 		}
-		if _, ok := err.(*domain.ErrUnauthorized); ok {
-			WriteJSONError(w, err.Error(), http.StatusForbidden)
+		var unauthorized *domain.ErrUnauthorized
+		if errors.As(err, &unauthorized) {
+			WriteJSONError(w, unauthorized.Message, http.StatusForbidden)
 			return
 		}
 		h.logger.WithField("workspace_id", workspaceID).WithField("error", err.Error()).Error("Failed to set custom field labels")
@@ -446,19 +459,23 @@ func (h *WorkspaceHandler) handleSetBlogSettings(w http.ResponseWriter, r *http.
 		return
 	}
 
-	workspaceID, enabled, settings, err := req.Validate()
+	workspaceID, enabled, settings, settingsSpecified, err := req.Validate()
 	if err != nil {
 		WriteJSONError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	if err := h.workspaceService.SetBlogSettings(r.Context(), workspaceID, enabled, settings); err != nil {
-		if _, ok := err.(*domain.PermissionError); ok {
-			WriteJSONError(w, err.Error(), http.StatusForbidden)
+	// settingsSpecified travels with the settings rather than being resolved here: blog_settings
+	// is not part of the replace when the body leaves it out, and the merge belongs to the write,
+	// which already holds the workspace it is about to save. Clearing the configuration
+	// deliberately stays expressible, as an explicit null.
+	if err := h.workspaceService.SetBlogSettings(r.Context(), workspaceID, enabled, settings, settingsSpecified); err != nil {
+		if writePermissionError(w, err) {
 			return
 		}
-		if _, ok := err.(*domain.ErrUnauthorized); ok {
-			WriteJSONError(w, err.Error(), http.StatusForbidden)
+		var unauthorized *domain.ErrUnauthorized
+		if errors.As(err, &unauthorized) {
+			WriteJSONError(w, unauthorized.Message, http.StatusForbidden)
 			return
 		}
 		h.logger.WithField("workspace_id", workspaceID).WithField("error", err.Error()).Error("Failed to set blog settings")
@@ -469,6 +486,53 @@ func (h *WorkspaceHandler) handleSetBlogSettings(w http.ResponseWriter, r *http.
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"status":  "success",
 		"message": "Blog settings updated successfully",
+	})
+}
+
+// handleSetWebAnalyticsSettings replaces a workspace's web analytics settings
+// via the dedicated, web_analytics:write gated endpoint (mirrors the blog
+// settings pattern: members with the feature permission manage it without
+// workspace:write).
+func (h *WorkspaceHandler) handleSetWebAnalyticsSettings(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		WriteJSONError(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req domain.SetWebAnalyticsSettingsRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		WriteJSONError(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	workspaceID, settings, err := req.Validate()
+	if err != nil {
+		WriteJSONError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if err := h.workspaceService.SetWebAnalyticsSettings(r.Context(), workspaceID, settings); err != nil {
+		if writePermissionError(w, err) {
+			return
+		}
+		var unauthorized *domain.ErrUnauthorized
+		if errors.As(err, &unauthorized) {
+			WriteJSONError(w, unauthorized.Message, http.StatusForbidden)
+			return
+		}
+		h.logger.WithField("workspace_id", workspaceID).WithField("error", err.Error()).Error("Failed to set web analytics settings")
+		WriteJSONError(w, "Failed to set web analytics settings", http.StatusInternalServerError)
+		return
+	}
+
+	// The ingest path caches settings for a minute; apply changes promptly.
+	if h.webAnalyticsCacheInvalidator != nil {
+		h.webAnalyticsCacheInvalidator(workspaceID)
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"status":  "success",
+		"message": "Web analytics settings updated successfully",
 	})
 }
 
@@ -490,14 +554,23 @@ func (h *WorkspaceHandler) handleCreateAPIKey(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	// Use the workspace service to create the API key
-	token, apiEmail, err := h.workspaceService.CreateAPIKey(r.Context(), req.WorkspaceID, req.EmailPrefix)
+	// Use the workspace service to create the API key. An absent or null permissions
+	// map means full access, which is what the endpoint granted before it took one.
+	token, apiEmail, err := h.workspaceService.CreateAPIKey(r.Context(), req.WorkspaceID, req.EmailPrefix, req.Permissions)
 	if err != nil {
 		h.logger.WithField("workspace_id", req.WorkspaceID).WithField("error", err.Error()).Error("Failed to create API key")
 
 		// Check if it's an authorization error
-		if _, ok := err.(*domain.ErrUnauthorized); ok {
+		var unauthorized *domain.ErrUnauthorized
+		if errors.As(err, &unauthorized) {
 			WriteJSONError(w, "Only workspace owners can create API keys", http.StatusForbidden)
+			return
+		}
+
+		// users.email is unique across the deployment, so a prefix can be claimed once.
+		var userExists *domain.ErrUserExists
+		if errors.As(err, &userExists) {
+			WriteJSONError(w, err.Error(), http.StatusConflict)
 			return
 		}
 
@@ -554,8 +627,9 @@ func (h *WorkspaceHandler) handleRemoveMember(w http.ResponseWriter, r *http.Req
 	// Call service to remove the member
 	err := h.workspaceService.RemoveMember(r.Context(), req.WorkspaceID, req.UserID)
 	if err != nil {
-		if _, ok := err.(*domain.ErrUnauthorized); ok {
-			WriteJSONError(w, err.Error(), http.StatusForbidden)
+		var unauthorized *domain.ErrUnauthorized
+		if errors.As(err, &unauthorized) {
+			WriteJSONError(w, unauthorized.Message, http.StatusForbidden)
 			return
 		}
 		h.logger.WithField("workspace_id", req.WorkspaceID).WithField("user_id", req.UserID).WithField("error", err.Error()).Error("Failed to remove member from workspace")
@@ -592,8 +666,9 @@ func (h *WorkspaceHandler) handleCreateIntegration(w http.ResponseWriter, r *htt
 	if err != nil {
 		h.logger.WithField("workspace_id", req.WorkspaceID).WithField("error", err.Error()).Error("Failed to create integration")
 
-		if _, ok := err.(*domain.ErrUnauthorized); ok {
-			WriteJSONError(w, err.Error(), http.StatusForbidden)
+		var unauthorized *domain.ErrUnauthorized
+		if errors.As(err, &unauthorized) {
+			WriteJSONError(w, unauthorized.Message, http.StatusForbidden)
 			return
 		}
 
@@ -629,8 +704,9 @@ func (h *WorkspaceHandler) handleUpdateIntegration(w http.ResponseWriter, r *htt
 	if err != nil {
 		h.logger.WithField("workspace_id", req.WorkspaceID).WithField("integration_id", req.IntegrationID).WithField("error", err.Error()).Error("Failed to update integration")
 
-		if _, ok := err.(*domain.ErrUnauthorized); ok {
-			WriteJSONError(w, err.Error(), http.StatusForbidden)
+		var unauthorized *domain.ErrUnauthorized
+		if errors.As(err, &unauthorized) {
+			WriteJSONError(w, unauthorized.Message, http.StatusForbidden)
 			return
 		}
 
@@ -670,8 +746,9 @@ func (h *WorkspaceHandler) handleDeleteIntegration(w http.ResponseWriter, r *htt
 	if err != nil {
 		h.logger.WithField("workspace_id", req.WorkspaceID).WithField("integration_id", req.IntegrationID).WithField("error", err.Error()).Error("Failed to delete integration")
 
-		if _, ok := err.(*domain.ErrUnauthorized); ok {
-			WriteJSONError(w, err.Error(), http.StatusForbidden)
+		var unauthorized *domain.ErrUnauthorized
+		if errors.As(err, &unauthorized) {
+			WriteJSONError(w, unauthorized.Message, http.StatusForbidden)
 			return
 		}
 
@@ -682,6 +759,93 @@ func (h *WorkspaceHandler) handleDeleteIntegration(w http.ResponseWriter, r *htt
 	writeJSON(w, http.StatusOK, map[string]string{
 		"status":  "success",
 		"message": "Integration deleted successfully",
+	})
+}
+
+// ConnectZapierRequest defines the request structure for connecting Zapier to a workspace.
+//
+// The label is all the caller gets to choose: it names the card and seeds the address of the
+// key minted for it, which the server derives itself so that no client can claim an address
+// belonging to a key it did not create.
+type ConnectZapierRequest struct {
+	WorkspaceID string `json:"workspace_id"`
+	Label       string `json:"label"`
+}
+
+// Validate checks the two fields the service cannot supply for itself.
+//
+// The label check is not cosmetic. ConnectZapier mints the API key before it builds the
+// integration, and Integration.Validate rejects a nameless one, so a blank label that got
+// this far would cost a key minted and then revoked by the compensation path.
+func (r *ConnectZapierRequest) Validate() error {
+	if r.WorkspaceID == "" {
+		return errors.New("workspace_id is required")
+	}
+
+	if r.Label == "" {
+		return errors.New("label is required")
+	}
+
+	return nil
+}
+
+// handleConnectZapier mints an API key for a Zapier connection and records it on the workspace
+// as a zapier integration, in one call. The token is in the response once and is unrecoverable
+// afterwards — nothing stores it.
+//
+// This is a control-plane endpoint the console alone calls, so it is deliberately absent from
+// openapi/, which documents the customer-facing API only.
+//
+// It stays in the workspaces.* namespace rather than taking a zapier.* one of its own. The
+// vendor precedent — ses.enableTenantIsolation and its siblings on their own handler — is a
+// real one, but those proxy an external AWS API. This calls nothing external: it mints a
+// workspace API key and writes the workspace row, both WorkspaceService concerns.
+func (h *WorkspaceHandler) handleConnectZapier(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		WriteJSONError(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req ConnectZapierRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		WriteJSONError(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if err := req.Validate(); err != nil {
+		WriteJSONError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	token, apiEmail, integrationID, err := h.workspaceService.ConnectZapier(r.Context(), req.WorkspaceID, req.Label)
+	if err != nil {
+		h.logger.WithField("workspace_id", req.WorkspaceID).WithField("error", err.Error()).Error("Failed to connect Zapier")
+
+		var unauthorized *domain.ErrUnauthorized
+		if errors.As(err, &unauthorized) {
+			WriteJSONError(w, unauthorized.Message, http.StatusForbidden)
+			return
+		}
+
+		// users.email is unique across the deployment, so an address can be claimed once.
+		// The service already retried with fresh randomness and still wraps *ErrUserExists
+		// when it gives up. Nothing else on this path knows the type — writeServiceError
+		// has no case for it either — so without this a conflict reads as a 500.
+		var userExists *domain.ErrUserExists
+		if errors.As(err, &userExists) {
+			WriteJSONError(w, err.Error(), http.StatusConflict)
+			return
+		}
+
+		WriteJSONError(w, "Failed to connect Zapier", http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"status":         "success",
+		"token":          token,
+		"email":          apiEmail,
+		"integration_id": integrationID,
 	})
 }
 
@@ -741,6 +905,11 @@ func (h *WorkspaceHandler) handleVerifyInvitationToken(w http.ResponseWriter, r 
 		WriteJSONError(w, "Failed to get workspace", http.StatusInternalServerError)
 		return
 	}
+
+	// This route is public — no authentication at all (see RegisterRoutes) — so it
+	// redacts harder than the member-facing ones: no integrations, no credential
+	// hints, no S3 secret. The page shows the workspace's name.
+	workspace.RedactForPublic()
 
 	// Return invitation and workspace details
 	writeJSON(w, http.StatusOK, map[string]interface{}{

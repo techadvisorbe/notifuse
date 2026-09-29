@@ -2,6 +2,7 @@ package analytics
 
 import (
 	"database/sql/driver"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -91,7 +92,7 @@ func TestSQLBuilder_BuildSQL(t *testing.T) {
 					Granularity: "day",
 				}},
 			},
-			expectedSQL: "SELECT (COUNT(*)) AS count, (DATE_TRUNC('day', created_at)) AS created_at_day FROM message_history GROUP BY created_at_day",
+			expectedSQL: "SELECT (COUNT(*)) AS count, (DATE_TRUNC('day', created_at AT TIME ZONE 'UTC')) AS created_at_day FROM message_history GROUP BY created_at_day",
 		},
 		{
 			name: "query with timezone",
@@ -159,8 +160,13 @@ func TestSQLBuilder_BuildSQL(t *testing.T) {
 					DateRange:   &[2]string{"2024-01-01", "2024-12-31"},
 				}},
 			},
-			expectedSQL:  "SELECT (COUNT(*)) AS count, (DATE_TRUNC('day', created_at)) AS created_at_day FROM message_history WHERE created_at >= $1 AND created_at <= $2 GROUP BY created_at_day",
-			expectedArgs: []interface{}{"2024-01-01", "2024-12-31"},
+			expectedSQL: "SELECT (COUNT(*)) AS count, (DATE_TRUNC('day', created_at AT TIME ZONE 'UTC')) AS created_at_day FROM message_history WHERE created_at >= $1 AND created_at <= $2 GROUP BY created_at_day",
+			// A bare end date covers its whole day, so the bound is the last
+			// instant of 2024-12-31 rather than its midnight.
+			expectedArgs: []interface{}{
+				time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+				time.Date(2024, 12, 31, 23, 59, 59, int(999*time.Millisecond), time.UTC),
+			},
 		},
 		{
 			name: "query with order by",
@@ -205,8 +211,12 @@ func TestSQLBuilder_BuildSQL(t *testing.T) {
 				},
 				Limit: intPtr(100),
 			},
-			expectedSQL:  "SELECT (COUNT(*)) AS count, (COUNT(*) FILTER (WHERE sent_at IS NOT NULL)) AS count_sent, contact_email AS contact_email, (DATE_TRUNC('day', created_at)) AS created_at_day FROM message_history WHERE broadcast_id <> $1 AND created_at >= $2 AND created_at <= $3 GROUP BY contact_email, created_at_day ORDER BY created_at DESC LIMIT 100",
-			expectedArgs: []interface{}{"test-broadcast", "2024-01-01", "2024-12-31"},
+			expectedSQL: "SELECT (COUNT(*)) AS count, (COUNT(*) FILTER (WHERE sent_at IS NOT NULL)) AS count_sent, contact_email AS contact_email, (DATE_TRUNC('day', created_at AT TIME ZONE 'UTC')) AS created_at_day FROM message_history WHERE broadcast_id <> $1 AND created_at >= $2 AND created_at <= $3 GROUP BY contact_email, created_at_day ORDER BY created_at DESC LIMIT 100",
+			expectedArgs: []interface{}{
+				"test-broadcast",
+				time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+				time.Date(2024, 12, 31, 23, 59, 59, int(999*time.Millisecond), time.UTC),
+			},
 		},
 		{
 			name: "invalid measure",
@@ -405,7 +415,7 @@ func TestSQLBuilder_buildTimeDimensionSQL(t *testing.T) {
 				Granularity: "hour",
 			},
 			timezone:    "UTC",
-			expectedSQL: "DATE_TRUNC('hour', created_at)",
+			expectedSQL: "DATE_TRUNC('hour', created_at AT TIME ZONE 'UTC')",
 		},
 		{
 			name: "day granularity",
@@ -414,7 +424,7 @@ func TestSQLBuilder_buildTimeDimensionSQL(t *testing.T) {
 				Granularity: "day",
 			},
 			timezone:    "UTC",
-			expectedSQL: "DATE_TRUNC('day', created_at)",
+			expectedSQL: "DATE_TRUNC('day', created_at AT TIME ZONE 'UTC')",
 		},
 		{
 			name: "week granularity",
@@ -423,7 +433,7 @@ func TestSQLBuilder_buildTimeDimensionSQL(t *testing.T) {
 				Granularity: "week",
 			},
 			timezone:    "UTC",
-			expectedSQL: "DATE_TRUNC('week', created_at)",
+			expectedSQL: "DATE_TRUNC('week', created_at AT TIME ZONE 'UTC')",
 		},
 		{
 			name: "month granularity",
@@ -432,7 +442,7 @@ func TestSQLBuilder_buildTimeDimensionSQL(t *testing.T) {
 				Granularity: "month",
 			},
 			timezone:    "UTC",
-			expectedSQL: "DATE_TRUNC('month', created_at)",
+			expectedSQL: "DATE_TRUNC('month', created_at AT TIME ZONE 'UTC')",
 		},
 		{
 			name: "year granularity",
@@ -441,7 +451,7 @@ func TestSQLBuilder_buildTimeDimensionSQL(t *testing.T) {
 				Granularity: "year",
 			},
 			timezone:    "UTC",
-			expectedSQL: "DATE_TRUNC('year', created_at)",
+			expectedSQL: "DATE_TRUNC('year', created_at AT TIME ZONE 'UTC')",
 		},
 		{
 			name: "with timezone",
@@ -2698,4 +2708,38 @@ func TestBuildMeasureSQL_EdgeCases(t *testing.T) {
 			assert.Equal(t, tt.expected, result, tt.description)
 		})
 	}
+}
+
+// TestProcessRowsEmptyBreakdownSerializesAsArray covers a JSON contract, not a
+// Go one: a breakdown that matches nothing must serialize as "data": [], never
+// "data": null.
+//
+// ScanRows builds its result with `var data []map[string]interface{}`, and a nil
+// Go slice marshals to null. Every consumer's type declares this field as an
+// array, so nothing warns — the client simply calls .map on null and the page
+// crashes. An empty workspace, or any filter combination that matches nothing,
+// is enough to trigger it.
+func TestProcessRowsEmptyBreakdownSerializesAsArray(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectQuery("SELECT").WillReturnRows(sqlmock.NewRows([]string{"country", "sessions"}))
+	rows, err := db.Query("SELECT country, sessions FROM web_sessions")
+	require.NoError(t, err)
+	defer func() { _ = rows.Close() }()
+
+	data, err := ProcessRows(rows, Query{
+		Schema:     "web_sessions",
+		Measures:   []string{"sessions"},
+		Dimensions: []string{"country"},
+	})
+	require.NoError(t, err)
+
+	assert.NotNil(t, data, "an empty breakdown must be an empty slice, not nil")
+	assert.Len(t, data, 0, "and it must stay empty — no invented placeholder row")
+
+	encoded, err := json.Marshal(map[string]interface{}{"data": data})
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"data":[]}`, string(encoded))
 }

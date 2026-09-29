@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -29,6 +30,11 @@ const (
 	PermissionResourceBlog           PermissionResource = "blog"
 	PermissionResourceAutomations    PermissionResource = "automations"
 	PermissionResourceLLM            PermissionResource = "llm"
+	PermissionResourceWebAnalytics   PermissionResource = "web_analytics"
+
+	PermissionResourceSegments             PermissionResource = "segments"
+	PermissionResourceWebhookSubscriptions PermissionResource = "webhook_subscriptions"
+	PermissionResourceWebhookEvents        PermissionResource = "webhook_events"
 )
 
 // PermissionType defines the types of permissions (read/write)
@@ -39,18 +45,52 @@ const (
 	PermissionTypeWrite PermissionType = "write"
 )
 
-var FullPermissions = UserPermissions{
-	PermissionResourceContacts:       ResourcePermissions{Read: true, Write: true},
-	PermissionResourceLists:          ResourcePermissions{Read: true, Write: true},
-	PermissionResourceTemplates:      ResourcePermissions{Read: true, Write: true},
-	PermissionResourceBroadcasts:     ResourcePermissions{Read: true, Write: true},
-	PermissionResourceTransactional:  ResourcePermissions{Read: true, Write: true},
-	PermissionResourceWorkspace:      ResourcePermissions{Read: true, Write: true},
-	PermissionResourceMessageHistory: ResourcePermissions{Read: true, Write: true},
-	PermissionResourceBlog:           ResourcePermissions{Read: true, Write: true},
-	PermissionResourceAutomations:    ResourcePermissions{Read: true, Write: true},
-	PermissionResourceLLM:            ResourcePermissions{Read: true, Write: true},
+// AllPermissionResources is the canonical list of permission resources.
+// FullPermissions and UserPermissions.Validate both derive from it.
+var AllPermissionResources = []PermissionResource{
+	// Audience
+	PermissionResourceContacts,
+	PermissionResourceSegments,
+	PermissionResourceLists,
+	// Content
+	PermissionResourceTemplates,
+	PermissionResourceBlog,
+	// Sending
+	PermissionResourceBroadcasts,
+	PermissionResourceTransactional,
+	PermissionResourceAutomations,
+	// Reporting
+	PermissionResourceMessageHistory,
+	PermissionResourceWebAnalytics,
+	// Integrations
+	PermissionResourceWebhookSubscriptions,
+	PermissionResourceWebhookEvents,
+	PermissionResourceLLM,
+	// Workspace
+	PermissionResourceWorkspace,
 }
+
+// knownPermissionResources is the lookup set behind UserPermissions.Validate
+var knownPermissionResources = func() map[PermissionResource]struct{} {
+	set := make(map[PermissionResource]struct{}, len(AllPermissionResources))
+	for _, resource := range AllPermissionResources {
+		set[resource] = struct{}{}
+	}
+	return set
+}()
+
+// NewFullPermissions returns a fresh map granting read and write on every resource.
+// Callers must never share FullPermissions by reference: it is a package-level map
+// and mutating it corrupts the global for the whole process.
+func NewFullPermissions() UserPermissions {
+	permissions := make(UserPermissions, len(AllPermissionResources))
+	for _, resource := range AllPermissionResources {
+		permissions[resource] = ResourcePermissions{Read: true, Write: true}
+	}
+	return permissions
+}
+
+var FullPermissions = NewFullPermissions()
 
 // ResourcePermissions defines read/write permissions for a specific resource
 type ResourcePermissions struct {
@@ -61,9 +101,22 @@ type ResourcePermissions struct {
 // UserPermissions maps resources to their permission settings
 type UserPermissions map[PermissionResource]ResourcePermissions
 
-// Value implements the driver.Valuer interface for database serialization
+// Validate rejects unknown resource keys. A nil or empty map is valid: it means
+// no permissions at all.
+func (up UserPermissions) Validate() error {
+	for resource := range up {
+		if _, ok := knownPermissionResources[resource]; !ok {
+			return fmt.Errorf("unknown permission resource: %s", resource)
+		}
+	}
+	return nil
+}
+
+// Value implements the driver.Valuer interface for database serialization.
+// Only a nil map becomes SQL NULL: an explicitly empty map persists as '{}' so
+// it stays visible to the permission backfills, which skip NULL rows.
 func (up UserPermissions) Value() (driver.Value, error) {
-	if len(up) == 0 {
+	if up == nil {
 		return nil, nil
 	}
 	return json.Marshal(up)
@@ -96,6 +149,7 @@ const (
 	IntegrationTypeSupabase  IntegrationType = "supabase"
 	IntegrationTypeLLM       IntegrationType = "llm"
 	IntegrationTypeFirecrawl IntegrationType = "firecrawl"
+	IntegrationTypeZapier    IntegrationType = "zapier"
 )
 
 // Integrations is a slice of Integration with database serialization methods
@@ -134,8 +188,13 @@ type Integration struct {
 	SupabaseSettings  *SupabaseIntegrationSettings `json:"supabase_settings,omitempty"`
 	LLMProvider       *LLMProvider                 `json:"llm_provider,omitempty"`
 	FirecrawlSettings *FirecrawlSettings           `json:"firecrawl_settings,omitempty"`
-	CreatedAt         time.Time                    `json:"created_at"`
-	UpdatedAt         time.Time                    `json:"updated_at"`
+	ZapierSettings    *ZapierSettings              `json:"zapier_settings,omitempty"`
+	// CredentialHints maps a credential to its last few characters, so an owner
+	// can tell which key is configured without the key being served. Computed by
+	// Redact at the API boundary and cleared by BeforeSave — never stored.
+	CredentialHints map[string]string `json:"credential_hints,omitempty"`
+	CreatedAt       time.Time         `json:"created_at"`
+	UpdatedAt       time.Time         `json:"updated_at"`
 }
 
 // Validate validates the integration
@@ -183,6 +242,17 @@ func (i *Integration) Validate(passphrase string) error {
 		if err := i.FirecrawlSettings.Validate(passphrase); err != nil {
 			return fmt.Errorf("invalid firecrawl settings: %w", err)
 		}
+	case IntegrationTypeZapier:
+		// Nothing a Zapier record holds is encrypted, so its Validate takes no passphrase.
+		// The nil check is what closes the create path to service-layer callers that never
+		// reach CreateIntegrationRequest.Validate: no create switch fills these settings, so
+		// a zapier record arriving that way carries none and is rejected here.
+		if i.ZapierSettings == nil {
+			return fmt.Errorf("zapier settings are required for zapier integration")
+		}
+		if err := i.ZapierSettings.Validate(); err != nil {
+			return fmt.Errorf("invalid zapier settings: %w", err)
+		}
 	default:
 		return fmt.Errorf("unsupported integration type: %s", i.Type)
 	}
@@ -192,6 +262,11 @@ func (i *Integration) Validate(passphrase string) error {
 
 // BeforeSave prepares an Integration for saving by encrypting secrets
 func (i *Integration) BeforeSave(secretkey string) error {
+	// Display-only, recomputed on every read. Persisting it would leave a stale
+	// hint behind after a rotation, and put a fragment of the secret in a column
+	// that is not meant to hold one.
+	i.CredentialHints = nil
+
 	// Encrypt based on integration type
 	switch i.Type {
 	case IntegrationTypeEmail:
@@ -362,16 +437,33 @@ type WorkspaceSettings struct {
 	MarketingEmailProviderID     string              `json:"marketing_email_provider_id,omitempty"`
 	EncryptedSecretKey           string              `json:"encrypted_secret_key,omitempty"`
 	EmailTrackingEnabled         bool                `json:"email_tracking_enabled"`
-	TemplateBlocks               []TemplateBlock     `json:"template_blocks,omitempty"`
-	CustomEndpointURL            *string             `json:"custom_endpoint_url,omitempty"`
-	CustomFieldLabels            map[string]string   `json:"custom_field_labels,omitempty"`
-	BlogEnabled                  bool                `json:"blog_enabled"`            // Enable blog feature at workspace level
-	BlogSettings                 *BlogSettings       `json:"blog_settings,omitempty"` // Blog styling and SEO settings
-	DefaultLanguage              string              `json:"default_language"`
-	Languages                    []string            `json:"languages"`
+	// TemplateBlocks live inside this settings blob rather than in their own table,
+	// which is why block CRUD emits no webhook events while template CRUD does:
+	// every webhook event in the product is produced by a row trigger writing to
+	// webhook_deliveries, and there are no block rows to trigger on. Adding them
+	// would mean inserting deliveries from the service layer — a second, parallel
+	// mechanism — so it is a deliberate initiative, not an oversight to patch.
+	TemplateBlocks    []TemplateBlock       `json:"template_blocks,omitempty"`
+	CustomEndpointURL *string               `json:"custom_endpoint_url,omitempty"`
+	CustomFieldLabels map[string]string     `json:"custom_field_labels,omitempty"`
+	BlogEnabled       bool                  `json:"blog_enabled"`            // Enable blog feature at workspace level
+	BlogSettings      *BlogSettings         `json:"blog_settings,omitempty"` // Blog styling and SEO settings
+	WebAnalytics      *WebAnalyticsSettings `json:"web_analytics,omitempty"` // Web analytics configuration
+	DefaultLanguage   string                `json:"default_language"`
+	Languages         []string              `json:"languages"`
 
 	// decoded secret key, not stored in the database
 	SecretKey string `json:"-"`
+
+	// omittedKeys names the settings an update body did not carry, so the service
+	// can tell "the caller said nothing" from "the caller sent the zero value" —
+	// every field above has a meaningful zero, and the difference is otherwise gone
+	// by the time UpdateWorkspace runs.
+	//
+	// Written only by UpdateWorkspaceRequest.UnmarshalJSON, so settings decoded
+	// anywhere else (a stored row, another endpoint) carry no record and are used
+	// whole, exactly as before.
+	omittedKeys map[string]struct{}
 }
 
 // Validate validates workspace settings
@@ -465,6 +557,10 @@ func (ws *WorkspaceSettings) Validate(passphrase string) error {
 	}
 	if !found {
 		return fmt.Errorf("default language %s must be in the languages list", ws.DefaultLanguage)
+	}
+
+	if err := ws.WebAnalytics.Validate(); err != nil {
+		return fmt.Errorf("invalid web analytics settings: %w", err)
 	}
 
 	return nil
@@ -867,7 +963,7 @@ type UserWorkspace struct {
 	UserID      string          `json:"user_id" db:"user_id"`
 	WorkspaceID string          `json:"workspace_id" db:"workspace_id"`
 	Role        string          `json:"role" db:"role"`
-	Permissions UserPermissions `json:"permissions,omitempty" db:"permissions"`
+	Permissions UserPermissions `json:"permissions" db:"permissions"`
 	CreatedAt   time.Time       `json:"created_at" db:"created_at"`
 	UpdatedAt   time.Time       `json:"updated_at" db:"updated_at"`
 }
@@ -948,6 +1044,12 @@ type WorkspaceRepository interface {
 	GetWorkspaceByCustomDomain(ctx context.Context, hostname string) (*Workspace, error)
 	List(ctx context.Context) ([]*Workspace, error)
 	Update(ctx context.Context, workspace *Workspace) error
+
+	// PatchIntegrationSESSettings merges patch into one integration's SES settings in a single
+	// statement. Update() rewrites the whole row, so a read-modify-write there races with any
+	// concurrent integration edit and silently loses one side's changes. Server-owned fields
+	// are written through this instead.
+	PatchIntegrationSESSettings(ctx context.Context, workspaceID string, integrationID string, patch map[string]interface{}) error
 	Delete(ctx context.Context, id string) error
 
 	// User workspace management
@@ -1035,7 +1137,7 @@ type WorkspaceServiceInterface interface {
 	AddUserToWorkspace(ctx context.Context, workspaceID string, userID string, role string, permissions UserPermissions) error
 	RemoveUserFromWorkspace(ctx context.Context, workspaceID string, userID string) error
 	TransferOwnership(ctx context.Context, workspaceID string, newOwnerID string, currentOwnerID string) error
-	CreateAPIKey(ctx context.Context, workspaceID string, emailPrefix string) (string, string, error)
+	CreateAPIKey(ctx context.Context, workspaceID string, emailPrefix string, permissions UserPermissions) (string, string, error)
 	RemoveMember(ctx context.Context, workspaceID string, userIDToRemove string) error
 
 	// Invitation management
@@ -1048,22 +1150,41 @@ type WorkspaceServiceInterface interface {
 	UpdateIntegration(ctx context.Context, req UpdateIntegrationRequest) error
 	DeleteIntegration(ctx context.Context, workspaceID, integrationID string) error
 
+	// ConnectZapier mints an API key for a Zapier connection and records it as a zapier
+	// integration in one call. It returns the key's token — shown once and unrecoverable
+	// afterwards — the address the key answers to, and the id of the integration written.
+	ConnectZapier(ctx context.Context, workspaceID string, label string) (token string, email string, integrationID string, err error)
+
 	// Permission management
 	SetUserPermissions(ctx context.Context, workspaceID, userID string, permissions UserPermissions) error
 
 	// Custom field management
 	SetCustomFieldLabels(ctx context.Context, workspaceID string, labels map[string]string) error
 
-	// Blog management
-	SetBlogSettings(ctx context.Context, workspaceID string, enabled bool, settings *BlogSettings) error
+	// Blog management. A nil enabled means the caller said nothing about the flag,
+	// and the stored one stands; the settings are replaced whole.
+	// SetBlogSettings writes the two blog fields onto the workspace. Both arguments carry
+	// their own answer to "did the caller mention this at all": a nil enabled leaves the
+	// stored flag alone, and settingsSpecified false leaves the stored configuration alone.
+	// The settings need the separate flag because nil already means something else — it is
+	// how the configuration is deliberately cleared.
+	SetBlogSettings(ctx context.Context, workspaceID string, enabled *bool, settings *BlogSettings, settingsSpecified bool) error
+
+	// SetWebAnalyticsSettings replaces the workspace's web analytics settings
+	// (gated by web_analytics:write; recomputes the filters version).
+	SetWebAnalyticsSettings(ctx context.Context, workspaceID string, settings *WebAnalyticsSettings) error
 }
 
 // Request/Response types
 
+// apiKeyEmailPrefixRegex constrains the local part of the generated api key email
+var apiKeyEmailPrefixRegex = regexp.MustCompile(`^[a-z0-9_-]{1,64}$`)
+
 // CreateAPIKeyRequest defines the request structure for creating an API key
 type CreateAPIKeyRequest struct {
-	WorkspaceID string `json:"workspace_id"`
-	EmailPrefix string `json:"email_prefix"`
+	WorkspaceID string          `json:"workspace_id"`
+	EmailPrefix string          `json:"email_prefix"`
+	Permissions UserPermissions `json:"permissions,omitempty"` // absent or null means full access
 }
 
 // Validate validates the create API key request
@@ -1074,10 +1195,23 @@ func (r *CreateAPIKeyRequest) Validate() error {
 	if r.EmailPrefix == "" {
 		return errors.New("email prefix is required")
 	}
+	if !apiKeyEmailPrefixRegex.MatchString(r.EmailPrefix) {
+		return errors.New("email prefix must match ^[a-z0-9_-]{1,64}$")
+	}
+	if r.Permissions != nil {
+		if err := r.Permissions.Validate(); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
-// CreateIntegrationRequest defines the request structure for creating an integration
+// CreateIntegrationRequest defines the request structure for creating an integration.
+//
+// There is deliberately no zapier_settings field. A Zapier record holds one fact — the address
+// of the API key minted for it — and the server derives that address itself, so nothing a
+// client could send would fill it. Zapier connections are made through ConnectZapier instead,
+// which is why Validate below rejects the type outright.
 type CreateIntegrationRequest struct {
 	WorkspaceID       string                       `json:"workspace_id"`
 	Name              string                       `json:"name"`
@@ -1128,6 +1262,11 @@ func (r *CreateIntegrationRequest) Validate(passphrase string) error {
 		if err := r.FirecrawlSettings.Validate(passphrase); err != nil {
 			return fmt.Errorf("invalid firecrawl settings: %w", err)
 		}
+	case IntegrationTypeZapier:
+		// Cosmetic, not a gate: the default below rejects zapier just as firmly once the
+		// constant exists. This only trades "unsupported integration type" for a message
+		// that names the endpoint the caller wanted.
+		return fmt.Errorf("zapier integrations are created by workspaces.connectZapier")
 	default:
 		return fmt.Errorf("unsupported integration type: %s", r.Type)
 	}
@@ -1135,7 +1274,12 @@ func (r *CreateIntegrationRequest) Validate(passphrase string) error {
 	return nil
 }
 
-// UpdateIntegrationRequest defines the request structure for updating an integration
+// UpdateIntegrationRequest defines the request structure for updating an integration.
+//
+// There is deliberately no zapier_settings field, and here the absence is load-bearing rather
+// than tidy. UpdateIntegration rebuilds the integration from id, name and type and then refills
+// its settings from a switch on the stored type; a field here would let a rename arrive with a
+// blank address and overwrite the minted key's. With no field, no payload can express that.
 type UpdateIntegrationRequest struct {
 	WorkspaceID       string                       `json:"workspace_id"`
 	IntegrationID     string                       `json:"integration_id"`
@@ -1144,6 +1288,45 @@ type UpdateIntegrationRequest struct {
 	SupabaseSettings  *SupabaseIntegrationSettings `json:"supabase_settings,omitempty"`  // For Supabase integrations
 	LLMProvider       *LLMProvider                 `json:"llm_provider,omitempty"`       // For LLM integrations
 	FirecrawlSettings *FirecrawlSettings           `json:"firecrawl_settings,omitempty"` // For Firecrawl integrations
+
+	// providerOmitted records that the body named no provider. The three settings
+	// above are pointers, so nil already says that for them; Provider is a value,
+	// and without this flag "the caller sent nothing" and "the caller sent an empty
+	// provider" are the same bits by the time the service sees them.
+	//
+	// The polarity is deliberate: the zero value means PRESENT, so a request built
+	// in Go — which has no body to read a key set from — keeps meaning exactly what
+	// its fields say.
+	providerOmitted bool
+}
+
+// UnmarshalJSON decodes the request and records whether the body named provider.
+//
+// A null provider counts as omitted. An email integration with no provider is not
+// a state a caller can have meant — it stops sending — so a null there can only be
+// a serializer writing out an empty optional.
+func (r *UpdateIntegrationRequest) UnmarshalJSON(data []byte) error {
+	type wire UpdateIntegrationRequest // sheds this method, so the decode does not recurse
+	var decoded wire
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+
+	var keys map[string]json.RawMessage
+	if err := json.Unmarshal(data, &keys); err != nil {
+		return err
+	}
+
+	*r = UpdateIntegrationRequest(decoded)
+	raw, present := keys["provider"]
+	r.providerOmitted = !present || bytes.Equal(bytes.TrimSpace(raw), []byte("null"))
+	return nil
+}
+
+// ProviderSpecified reports whether the body that produced this request carried a
+// provider. False means "leave the stored provider alone", never "clear it".
+func (r *UpdateIntegrationRequest) ProviderSpecified() bool {
+	return !r.providerOmitted
 }
 
 func (r *UpdateIntegrationRequest) Validate(passphrase string) error {
@@ -1244,6 +1427,90 @@ type UpdateWorkspaceRequest struct {
 	Settings WorkspaceSettings `json:"settings"`
 }
 
+// preservableWorkspaceSettingKeys are the settings UpdateWorkspace copies from the
+// request onto the stored workspace, and so the ones whose absence has to survive
+// the decode. PreserveOmitted restores exactly these: a key added here wants a line
+// there, and vice versa.
+//
+// timezone, default_language and languages are deliberately absent. Validate
+// rejects a body that omits them, upstream of the service, so a preserve for them
+// could never run. template_blocks is absent too: it is a pointer-shaped slice and
+// UpdateWorkspace already skips a nil one.
+var preservableWorkspaceSettingKeys = []string{
+	"website_url",
+	"logo_url",
+	"cover_url",
+	"file_manager",
+	"transactional_email_provider_id",
+	"marketing_email_provider_id",
+	"email_tracking_enabled",
+	"custom_endpoint_url",
+}
+
+// UnmarshalJSON decodes the request and records which settings the body left out.
+//
+// Presence here means the key is there, not that its value is non-null: the console
+// clears the logo by sending null, so null has to keep meaning "clear it".
+//
+// The record is kept on the decoded Settings because that value is all the service
+// is given — UpdateWorkspace takes settings, not the request.
+func (r *UpdateWorkspaceRequest) UnmarshalJSON(data []byte) error {
+	type wire UpdateWorkspaceRequest // sheds this method, so the decode does not recurse
+	var decoded wire
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	*r = UpdateWorkspaceRequest(decoded)
+
+	var body map[string]json.RawMessage
+	if err := json.Unmarshal(data, &body); err != nil {
+		return err
+	}
+	var sent map[string]json.RawMessage
+	if raw, ok := body["settings"]; ok {
+		if err := json.Unmarshal(raw, &sent); err != nil {
+			return err
+		}
+	}
+
+	r.Settings.omittedKeys = nil
+	for _, key := range preservableWorkspaceSettingKeys {
+		if _, ok := sent[key]; ok {
+			continue
+		}
+		if r.Settings.omittedKeys == nil {
+			r.Settings.omittedKeys = make(map[string]struct{}, len(preservableWorkspaceSettingKeys))
+		}
+		r.Settings.omittedKeys[key] = struct{}{}
+	}
+	return nil
+}
+
+// PreserveOmitted restores, from the workspace as stored, every setting the update
+// body did not name.
+//
+// Settings assembled in Go record nothing and are therefore applied whole, which is
+// the only thing a caller with no body to omit keys from can mean.
+func (ws *WorkspaceSettings) PreserveOmitted(stored WorkspaceSettings) {
+	if len(ws.omittedKeys) == 0 {
+		return
+	}
+	keep := func(key string, restore func()) {
+		if _, omitted := ws.omittedKeys[key]; omitted {
+			restore()
+		}
+	}
+
+	keep("website_url", func() { ws.WebsiteURL = stored.WebsiteURL })
+	keep("logo_url", func() { ws.LogoURL = stored.LogoURL })
+	keep("cover_url", func() { ws.CoverURL = stored.CoverURL })
+	keep("file_manager", func() { ws.FileManager = stored.FileManager })
+	keep("transactional_email_provider_id", func() { ws.TransactionalEmailProviderID = stored.TransactionalEmailProviderID })
+	keep("marketing_email_provider_id", func() { ws.MarketingEmailProviderID = stored.MarketingEmailProviderID })
+	keep("email_tracking_enabled", func() { ws.EmailTrackingEnabled = stored.EmailTrackingEnabled })
+	keep("custom_endpoint_url", func() { ws.CustomEndpointURL = stored.CustomEndpointURL })
+}
+
 func (r *UpdateWorkspaceRequest) Validate(passphrase string) error {
 	// Validate ID
 	if r.ID == "" {
@@ -1326,29 +1593,115 @@ type SetBlogSettingsRequest struct {
 	WorkspaceID  string        `json:"workspace_id"`
 	BlogEnabled  bool          `json:"blog_enabled"`
 	BlogSettings *BlogSettings `json:"blog_settings"`
+
+	// blogEnabledOmitted records that the body named no blog_enabled. Both of that
+	// flag's values are meaningful, so without this the endpoint reads "the caller
+	// said nothing" as "turn the blog off". The console works around it by
+	// recomputing the flag from the workspace it holds; no other client can.
+	//
+	// Zero means PRESENT, so a request built in Go — which has no body to read a key
+	// set from — keeps meaning exactly what its fields say.
+	blogEnabledOmitted bool
+
+	// blogSettingsOmitted records that the body named no blog_settings. The stored
+	// configuration is replaced by whatever this request carries, so without this an
+	// absent key erases the title, the SEO block, the pagination and the feed settings
+	// — which is what a caller flipping blog_enabled on its own asks for by accident.
+	//
+	// Zero means PRESENT here too, for the same reason.
+	blogSettingsOmitted bool
+}
+
+// UnmarshalJSON decodes the request and records whether the body named blog_enabled.
+//
+// A null counts as omitted: there is no bool a null could have meant, so it can only
+// be a serializer writing out an absent optional.
+func (r *SetBlogSettingsRequest) UnmarshalJSON(data []byte) error {
+	type wire SetBlogSettingsRequest // sheds this method, so the decode does not recurse
+	var decoded wire
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+
+	var keys map[string]json.RawMessage
+	if err := json.Unmarshal(data, &keys); err != nil {
+		return err
+	}
+
+	*r = SetBlogSettingsRequest(decoded)
+	raw, present := keys["blog_enabled"]
+	r.blogEnabledOmitted = !present || bytes.Equal(bytes.TrimSpace(raw), []byte("null"))
+
+	// Presence alone for the settings, null included. Unlike a bool, an object has a null
+	// that means something — it is how the configuration is cleared — so folding null into
+	// "omitted" would take that away.
+	_, settingsPresent := keys["blog_settings"]
+	r.blogSettingsOmitted = !settingsPresent
+	return nil
+}
+
+// enabledFlag returns the flag the body carried, or nil when it carried none. The
+// copy keeps the caller from writing back into the request through the pointer.
+func (r *SetBlogSettingsRequest) enabledFlag() *bool {
+	if r.blogEnabledOmitted {
+		return nil
+	}
+	enabled := r.BlogEnabled
+	return &enabled
 }
 
 // Validate validates the set blog settings request and returns the sanitized
-// workspace ID, the enabled flag, and the (possibly nil) blog settings. A nil
-// BlogSettings is valid and clears the stored blog configuration.
-func (r *SetBlogSettingsRequest) Validate() (workspaceID string, enabled bool, settings *BlogSettings, err error) {
+// workspace ID, the enabled flag, the (possibly nil) blog settings, and whether
+// the body said anything about them at all.
+//
+// A nil enabled means the body did not name blog_enabled and the stored flag
+// stands. The two settings results are separate answers: settingsSpecified false
+// means the body named no blog_settings and the stored configuration stands,
+// while a nil settings that WAS specified is the explicit null that clears it.
+func (r *SetBlogSettingsRequest) Validate() (workspaceID string, enabled *bool, settings *BlogSettings, settingsSpecified bool, err error) {
 	if r.WorkspaceID == "" {
-		return "", false, nil, fmt.Errorf("invalid set blog settings request: workspace_id is required")
+		return "", nil, nil, false, fmt.Errorf("invalid set blog settings request: workspace_id is required")
 	}
 	if !govalidator.IsAlphanumeric(r.WorkspaceID) {
-		return "", false, nil, fmt.Errorf("invalid set blog settings request: workspace_id must be alphanumeric")
+		return "", nil, nil, false, fmt.Errorf("invalid set blog settings request: workspace_id must be alphanumeric")
 	}
 	if len(r.WorkspaceID) > 32 {
-		return "", false, nil, fmt.Errorf("invalid set blog settings request: workspace_id length must be between 1 and 32")
+		return "", nil, nil, false, fmt.Errorf("invalid set blog settings request: workspace_id length must be between 1 and 32")
 	}
 
 	if r.BlogSettings != nil {
 		if err := r.BlogSettings.Validate(); err != nil {
-			return "", false, nil, err
+			return "", nil, nil, false, err
 		}
 	}
 
-	return r.WorkspaceID, r.BlogEnabled, r.BlogSettings, nil
+	return r.WorkspaceID, r.enabledFlag(), r.BlogSettings, !r.blogSettingsOmitted, nil
+}
+
+// SetWebAnalyticsSettingsRequest defines the request structure for replacing a
+// workspace's web analytics settings via the dedicated, web_analytics:write
+// gated endpoint.
+type SetWebAnalyticsSettingsRequest struct {
+	WorkspaceID string                `json:"workspace_id"`
+	Settings    *WebAnalyticsSettings `json:"settings"`
+}
+
+// Validate validates the request and returns the workspace ID and the
+// (possibly nil) settings. Nil settings clear the stored configuration.
+func (r *SetWebAnalyticsSettingsRequest) Validate() (workspaceID string, settings *WebAnalyticsSettings, err error) {
+	if r.WorkspaceID == "" {
+		return "", nil, fmt.Errorf("invalid set web analytics settings request: workspace_id is required")
+	}
+	if !govalidator.IsAlphanumeric(r.WorkspaceID) {
+		return "", nil, fmt.Errorf("invalid set web analytics settings request: workspace_id must be alphanumeric")
+	}
+	if len(r.WorkspaceID) > 32 {
+		return "", nil, fmt.Errorf("invalid set web analytics settings request: workspace_id length must be between 1 and 32")
+	}
+	if err := r.Settings.ValidateForSave(); err != nil {
+		return "", nil, err
+	}
+	return r.WorkspaceID, r.Settings, nil
 }
 
 type InviteMemberRequest struct {
@@ -1364,7 +1717,8 @@ type SetUserPermissionsRequest struct {
 	Permissions UserPermissions `json:"permissions"`
 }
 
-// Validate validates the set user permissions request
+// Validate validates the set user permissions request. An empty map is allowed
+// here: this is the deliberate path for zeroing an existing member's permissions.
 func (r *SetUserPermissionsRequest) Validate() error {
 	if r.WorkspaceID == "" {
 		return fmt.Errorf("workspace_id is required")
@@ -1381,9 +1735,15 @@ func (r *SetUserPermissionsRequest) Validate() error {
 	if r.Permissions == nil {
 		return fmt.Errorf("permissions is required")
 	}
+	if err := r.Permissions.Validate(); err != nil {
+		return err
+	}
 	return nil
 }
 
+// Validate validates the invite member request. Unlike SetUserPermissionsRequest,
+// an empty map is rejected here: an invitation with no permissions produces a
+// member who can do nothing, which is never what the caller meant.
 func (r *InviteMemberRequest) Validate() error {
 	if r.WorkspaceID == "" {
 		return fmt.Errorf("invalid invite member request: workspace_id is required")
@@ -1402,15 +1762,28 @@ func (r *InviteMemberRequest) Validate() error {
 		return fmt.Errorf("invalid invite member request: email is not valid")
 	}
 
+	if len(r.Permissions) == 0 {
+		return fmt.Errorf("invalid invite member request: permissions is required and must grant at least one resource")
+	}
+	if err := r.Permissions.Validate(); err != nil {
+		return fmt.Errorf("invalid invite member request: %w", err)
+	}
+
 	return nil
 }
 
 // TestEmailProviderRequest is the request for testing an email provider
 // It includes the provider config, a recipient email, and the workspace ID
 type TestEmailProviderRequest struct {
-	Provider    EmailProvider `json:"provider"`
-	To          string        `json:"to"`
-	WorkspaceID string        `json:"workspace_id"`
+	Provider EmailProvider `json:"provider"`
+	To       string        `json:"to"`
+	// IntegrationID names the saved integration being tested, when there is one.
+	// Credentials are not served to clients, so a client testing a saved
+	// integration cannot send them back; blank ones are filled from this
+	// integration. Absent when testing a provider not yet saved, where the client
+	// still holds what it typed.
+	IntegrationID string `json:"integration_id,omitempty"`
+	WorkspaceID   string `json:"workspace_id"`
 }
 
 // TestEmailProviderResponse is the response for testing an email provider

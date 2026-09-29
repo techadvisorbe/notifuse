@@ -3,17 +3,17 @@ import { Handle, Position, useConnection, type NodeProps } from '@xyflow/react'
 import { UserMinus } from 'lucide-react'
 import { useLingui } from '@lingui/react/macro'
 import { BaseNode } from './BaseNode'
-import { nodeTypeColors } from './constants'
+import { nodeTypeColors, getNodeDescription } from './constants'
 import { useAutomation } from '../context'
-import type { AutomationNodeData } from '../utils/flowConverter'
+import type { AutomationFlowNode, Structural } from '../utils/flowConverter'
 import type { RemoveFromListNodeConfig } from '../../../services/api/automation'
 
-type RemoveFromListNodeProps = NodeProps<AutomationNodeData>
+type RemoveFromListNodeProps = NodeProps<AutomationFlowNode>
 
 export const RemoveFromListNode: React.FC<RemoveFromListNodeProps> = ({ data, selected }) => {
   const { t } = useLingui()
   const { lists } = useAutomation()
-  const config = data.config as RemoveFromListNodeConfig
+  const config = data.config as Structural<RemoveFromListNodeConfig>
   const listName = lists.find((l) => l.id === config?.list_id)?.name
 
   const connection = useConnection()
@@ -37,6 +37,7 @@ export const RemoveFromListNode: React.FC<RemoveFromListNodeProps> = ({ data, se
       <BaseNode
         type="remove_from_list"
         label={t`Remove from List`}
+        description={getNodeDescription(data.config)}
         icon={
           <UserMinus
             size={16}

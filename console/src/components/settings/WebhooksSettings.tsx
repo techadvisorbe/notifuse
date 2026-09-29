@@ -1,5 +1,18 @@
 import { useState, useEffect } from 'react'
-import { Card, Button, Space, Form, Input, Select, Checkbox, message, Drawer, Row, Col } from 'antd'
+import {
+  Alert,
+  Card,
+  Button,
+  Space,
+  Form,
+  Input,
+  Select,
+  Checkbox,
+  message,
+  Drawer,
+  Row,
+  Col
+} from 'antd'
 import { faPlus } from '@fortawesome/free-solid-svg-icons'
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
 import { useLingui } from '@lingui/react/macro'
@@ -9,7 +22,8 @@ import Subtitle from '../common/subtitle'
 import {
   webhookSubscriptionApi,
   WebhookSubscription,
-  CustomEventFilters
+  CustomEventFilters,
+  UpdateWebhookSubscriptionRequest
 } from '../../services/api/webhook_subscription'
 
 interface WebhooksSettingsProps {
@@ -54,11 +68,14 @@ export function WebhooksSettings({ workspaceId }: WebhooksSettingsProps) {
     }
   }
 
+  // Neither of these seeds `enabled`: the drawer registers no such Form.Item, so a value put in
+  // the store here is never returned by validateFields and only makes the switch look like it
+  // round-trips through the form. The drawer does not send the flag at all, and the switch
+  // itself lives on the subscription card.
   const handleCreate = () => {
     setEditingSubscription(null)
     form.resetFields()
     form.setFieldsValue({
-      enabled: true,
       event_types: []
     })
     setDrawerVisible(true)
@@ -70,7 +87,6 @@ export function WebhooksSettings({ workspaceId }: WebhooksSettingsProps) {
       name: subscription.name,
       url: subscription.url,
       event_types: subscription.settings.event_types,
-      enabled: subscription.enabled,
       custom_event_goal_types: subscription.custom_event_filters?.goal_types,
       custom_event_names: subscription.custom_event_filters?.event_names
     })
@@ -97,15 +113,33 @@ export function WebhooksSettings({ workspaceId }: WebhooksSettingsProps) {
       }
 
       if (editingSubscription) {
-        await webhookSubscriptionApi.update({
+        // enabled is deliberately absent: it is one of the keys this endpoint patches
+        // instead of replacing, so a body that never mentions it leaves the subscription
+        // set to whatever it is set to now. Sending editingSubscription.enabled would send
+        // the value read when the drawer opened, and a stale true switches back on a
+        // subscription somebody disabled from the card meanwhile — wiping its failure
+        // counters on the way through. The switch on the card is the only place enabled
+        // moves. Nothing here casts the key away any more; the request type says it is
+        // optional, which is what keeps the next author from innocently filling it in.
+        const update: UpdateWebhookSubscriptionRequest = {
           workspace_id: workspaceId,
           id: editingSubscription.id,
           name: values.name,
           url: values.url,
           event_types: values.event_types,
-          custom_event_filters: customEventFilters,
-          enabled: values.enabled
-        })
+          // Named on every save, empty included. The endpoint keeps a filter the body does
+          // not name, and this drawer is the only place a user can remove these — it renders
+          // their controls and rebuilds the filter from them each time — so "the controls
+          // are empty" is a removal and has to be said rather than implied.
+          custom_event_filters: customEventFilters ?? {},
+          // The opposite case: no control here owns the list and segment filters — Zapier
+          // writes them when it registers a Zap — so the drawer has no value of its own to
+          // send and passes back what it read. The endpoint would keep them either way now;
+          // echoing them is what makes that independent of the server's contract.
+          list_ids: editingSubscription.settings.list_ids,
+          segment_ids: editingSubscription.settings.segment_ids
+        }
+        await webhookSubscriptionApi.update(update)
         message.success(t`Webhook subscription updated`)
       } else {
         await webhookSubscriptionApi.create({
@@ -158,6 +192,10 @@ export function WebhooksSettings({ workspaceId }: WebhooksSettingsProps) {
     return eventType
   }
 
+  // Zapier owns the endpoint URL of the subscriptions it creates: repointing it
+  // here leaves the Zap switched on in Zapier while it silently stops firing.
+  const editingZapierSubscription = editingSubscription?.source === 'zapier'
+
   const selectedEventTypes = Form.useWatch('event_types', form)
   const showCustomEventFilters = selectedEventTypes?.some((t: string) =>
     t.startsWith('custom_event.')
@@ -204,7 +242,7 @@ export function WebhooksSettings({ workspaceId }: WebhooksSettingsProps) {
       {/* Create/Edit Drawer */}
       <Drawer
         title={editingSubscription ? t`Edit Webhook` : t`Create Webhook`}
-        width={500}
+        size={500}
         open={drawerVisible}
         onClose={() => setDrawerVisible(false)}
         footer={
@@ -219,6 +257,16 @@ export function WebhooksSettings({ workspaceId }: WebhooksSettingsProps) {
         }
       >
         <Form form={form} layout="vertical">
+          {editingZapierSubscription && (
+            <Alert
+              type="warning"
+              showIcon
+              className="mb-4"
+              title={t`Managed by Zapier`}
+              description={t`Zapier owns this webhook's endpoint URL, so it cannot be changed here. Changing the event types breaks the Zap that created this webhook without reporting any error in Zapier.`}
+            />
+          )}
+
           <Form.Item
             name="name"
             label={t`Name`}
@@ -235,7 +283,7 @@ export function WebhooksSettings({ workspaceId }: WebhooksSettingsProps) {
               { type: 'url', message: t`Please enter a valid URL` }
             ]}
           >
-            <Input placeholder="https://example.com/webhook" />
+            <Input placeholder="https://example.com/webhook" disabled={editingZapierSubscription} />
           </Form.Item>
 
           <Form.Item

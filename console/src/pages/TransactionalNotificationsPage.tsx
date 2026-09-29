@@ -108,7 +108,9 @@ interface NotificationStats {
 const TransactionalNotificationCard: React.FC<{
   notification: TransactionalNotification
   workspace: Workspace
-  permissions: UserPermissions | undefined
+  // null, not undefined: useWorkspacePermissions reports "not loaded / no permissions" as null,
+  // and this card is the only consumer of that value, so the boundary keeps the hook's shape.
+  permissions: UserPermissions | null
   stats: NotificationStats
   isLoadingStats: boolean
   selected: boolean
@@ -214,7 +216,7 @@ const TransactionalNotificationCard: React.FC<{
               </Space>
             }
             value={isLoadingStats ? '-' : stats.sent}
-            valueStyle={{ fontSize: '16px' }}
+            styles={{ content: { fontSize: '16px' } }}
             prefix={isLoadingStats ? <Spin size="small" /> : undefined}
           />
         </Col>
@@ -231,7 +233,7 @@ const TransactionalNotificationCard: React.FC<{
               </Space>
             }
             value={isLoadingStats ? '-' : getRate(stats.delivered, stats.sent)}
-            valueStyle={{ fontSize: '16px' }}
+            styles={{ content: { fontSize: '16px' } }}
             prefix={isLoadingStats ? <Spin size="small" /> : undefined}
           />
         </Col>
@@ -248,7 +250,7 @@ const TransactionalNotificationCard: React.FC<{
               </Space>
             }
             value={isLoadingStats ? '-' : stats.failed}
-            valueStyle={{ fontSize: '16px' }}
+            styles={{ content: { fontSize: '16px' } }}
             prefix={isLoadingStats ? <Spin size="small" /> : undefined}
           />
         </Col>
@@ -265,7 +267,7 @@ const TransactionalNotificationCard: React.FC<{
               </Space>
             }
             value={isLoadingStats ? '-' : stats.bounced}
-            valueStyle={{ fontSize: '16px' }}
+            styles={{ content: { fontSize: '16px' } }}
             prefix={isLoadingStats ? <Spin size="small" /> : undefined}
           />
         </Col>

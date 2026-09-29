@@ -8,6 +8,11 @@ export interface CustomEventFilters {
 export interface WebhookSubscriptionSettings {
   event_types: string[]
   custom_event_filters?: CustomEventFilters
+  // Narrow the fan-out of the list.* and segment.* event types to specific ids. Absent or empty
+  // means no filter — every list, every segment. Zapier sets these when it registers a Zap; the
+  // console offers no UI for them, so it never has a value of its own to send for either.
+  list_ids?: string[]
+  segment_ids?: string[]
 }
 
 export interface WebhookSubscription {
@@ -19,7 +24,22 @@ export interface WebhookSubscription {
   // Flattened from settings by backend MarshalJSON
   event_types?: string[]
   custom_event_filters?: CustomEventFilters
+  list_ids?: string[]
+  segment_ids?: string[]
   enabled: boolean
+  // Attribution for whatever created the subscription: absent or empty means a user made it by
+  // hand, 'zapier' means a Zap registered it. Typed as a plain string rather than a union so a
+  // value from a newer server is a value the console can still render, not a type error.
+  source?: string
+  // Delivery attempts that have failed back to back, reset to zero by the first success.
+  consecutive_failures?: number
+  // When the current run of failures started, cleared by the first success. The count alone
+  // does not retire an endpoint: a burst can fail twenty deliveries in one poll, so the
+  // threshold only acts once this shows the failures have persisted.
+  failing_since?: string
+  // Present only on a subscription Notifuse switched off itself after sustained delivery
+  // failure, which is what tells it apart from one the user switched off.
+  disabled_reason?: string
   last_delivery_at?: string
   created_at: string
   updated_at: string
@@ -30,7 +50,11 @@ export interface WebhookDelivery {
   subscription_id: string
   event_type: string
   payload: Record<string, unknown>
-  status: 'pending' | 'delivered' | 'failed'
+  // 'delivering' is a durable status, not a transient in-memory one: claiming a delivery is a
+  // status change written to the row, so a batch in flight is visible to anyone reading the
+  // table. A union that omits it makes those rows render as an untranslated raw literal and
+  // silently excludes them from the Pending count.
+  status: 'pending' | 'delivering' | 'delivered' | 'failed'
   attempts: number
   max_attempts: number
   next_attempt_at: string
@@ -50,6 +74,14 @@ export interface CreateWebhookSubscriptionRequest {
   custom_event_filters?: CustomEventFilters
 }
 
+// webhookSubscriptions.update replaces name, url and event_types, and patches everything else:
+// a key this request does not carry leaves the stored value alone. That is why the optional
+// fields below are optional in the type as well as on the wire — omitting one is a statement
+// the endpoint understands ("say nothing about it"), not a hole a caller has to plug.
+//
+// To clear a filter, name it as empty: [] for the id filters, {} for the custom event ones.
+// Omitting it would keep whatever is stored, which for a Zap registered against one list is
+// the difference between the events it asked for and every list event in the workspace.
 export interface UpdateWebhookSubscriptionRequest {
   workspace_id: string
   id: string
@@ -57,7 +89,13 @@ export interface UpdateWebhookSubscriptionRequest {
   url: string
   event_types: string[]
   custom_event_filters?: CustomEventFilters
-  enabled: boolean
+  list_ids?: string[]
+  segment_ids?: string[]
+  // Optional because the console deliberately never sends it: the drawer has no switch, and a
+  // flag echoed back from the value read when the drawer opened would re-enable a subscription
+  // somebody disabled meanwhile. Typing it as required only forced the one caller to cast the
+  // key away, which is how a required field ends up being the one nobody sends.
+  enabled?: boolean
 }
 
 export interface ToggleWebhookSubscriptionRequest {
@@ -110,6 +148,10 @@ export const webhookSubscriptionApi = {
   update: async (
     params: UpdateWebhookSubscriptionRequest
   ): Promise<{ subscription: WebhookSubscription }> => {
+    // Deliberately a pass-through. Which filters a save means to remove is a statement about
+    // what the user just did to a form, and only the caller holding that form knows it — a
+    // default applied here would be inherited invisibly by every future caller, including
+    // ones with no UI behind them.
     return api.post('/api/webhookSubscriptions.update', params)
   },
 

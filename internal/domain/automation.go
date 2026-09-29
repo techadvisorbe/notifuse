@@ -1,8 +1,10 @@
 package domain
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"strings"
@@ -193,6 +195,14 @@ func (c *TimelineTriggerConfig) Validate() error {
 		}
 	}
 
+	// Conditions reach the database as generated SQL, so a malformed tree must be
+	// caught here rather than at CREATE TRIGGER, where the caller only ever sees a 500.
+	if c.Conditions != nil {
+		if err := c.Conditions.Validate(); err != nil {
+			return fmt.Errorf("invalid trigger conditions: %w", err)
+		}
+	}
+
 	return nil
 }
 
@@ -230,6 +240,62 @@ type Automation struct {
 	CreatedAt   time.Time              `json:"created_at"`
 	UpdatedAt   time.Time              `json:"updated_at"`
 	DeletedAt   *time.Time             `json:"deleted_at,omitempty"` // Soft-delete timestamp
+
+	// These record that the body this automation was decoded from named no exit_on_reply,
+	// and no list_id. Both fields have a meaningful zero — reply detection off, and no list
+	// at all — so without this an update reads "the caller said nothing" as an instruction
+	// to switch reply detection off and to detach the automation from its list.
+	//
+	// Zero means SPECIFIED, so an automation assembled in Go — which has no body to read a
+	// key set from — keeps meaning exactly what its fields say.
+	exitOnReplyOmitted bool
+	listIDOmitted      bool
+}
+
+// UnmarshalJSON decodes an automation and records whether the body named exit_on_reply and
+// list_id.
+//
+// Every other field an update replaces is either something Validate insists on, or shaped
+// so that its absence is visible in the decoded value; these two are a plain bool and a
+// plain string, so the decode is the last place that can tell an absent key from a
+// deliberate "off" or a deliberate removal.
+//
+// A null counts as omitted for both: there is no bool and no list id a null could have
+// meant, so it can only be a serializer writing out an absent optional.
+func (a *Automation) UnmarshalJSON(data []byte) error {
+	type wire Automation // sheds this method, so the decode does not recurse
+	var decoded wire
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+
+	var keys map[string]json.RawMessage
+	if err := json.Unmarshal(data, &keys); err != nil {
+		return err
+	}
+
+	*a = Automation(decoded)
+	a.exitOnReplyOmitted = jsonKeyOmitted(keys, "exit_on_reply")
+	a.listIDOmitted = jsonKeyOmitted(keys, "list_id")
+	return nil
+}
+
+// jsonKeyOmitted reports whether a decoded body left key out, a null counting as left out.
+func jsonKeyOmitted(keys map[string]json.RawMessage, key string) bool {
+	raw, present := keys[key]
+	return !present || bytes.Equal(bytes.TrimSpace(raw), []byte("null"))
+}
+
+// ExitOnReplySpecified reports whether this automation carries an opinion about
+// exit_on_reply. It is false only for one decoded from a body that never named the key.
+func (a *Automation) ExitOnReplySpecified() bool {
+	return !a.exitOnReplyOmitted
+}
+
+// ListIDSpecified reports whether this automation carries an opinion about list_id. It is
+// false only for one decoded from a body that never named the key.
+func (a *Automation) ListIDSpecified() bool {
+	return !a.listIDOmitted
 }
 
 // GetNodeByID finds a node in the automation's Nodes array by ID
@@ -484,8 +550,16 @@ func (e *NodeExecution) Validate() error {
 
 // Node configuration types
 
+// NodeConfigDescription is the optional author-facing description shown under a node's title on the
+// automation canvas. It is display-only - no executor reads it - and lives in the node's config bag,
+// so it needs no schema change. Embedded rather than repeated so the JSON key is defined once.
+type NodeConfigDescription struct {
+	Description string `json:"description,omitempty"`
+}
+
 // DelayNodeConfig configures a delay node
 type DelayNodeConfig struct {
+	NodeConfigDescription
 	Duration int    `json:"duration"`
 	Unit     string `json:"unit"` // "minutes", "hours", "days"
 }
@@ -506,6 +580,7 @@ func (c DelayNodeConfig) Validate() error {
 
 // EmailNodeConfig configures an email node
 type EmailNodeConfig struct {
+	NodeConfigDescription
 	TemplateID      string  `json:"template_id"`
 	IntegrationID   *string `json:"integration_id,omitempty"`
 	SubjectOverride *string `json:"subject_override,omitempty"`
@@ -530,13 +605,14 @@ type BranchPath struct {
 
 // BranchNodeConfig configures a branch node
 type BranchNodeConfig struct {
+	NodeConfigDescription
 	Paths         []BranchPath `json:"paths"`
 	DefaultPathID string       `json:"default_path_id"`
 }
 
 // FilterNodeConfig configures a filter node
 type FilterNodeConfig struct {
-	Description    string    `json:"description,omitempty"`
+	NodeConfigDescription
 	Conditions     *TreeNode `json:"conditions"`
 	ContinueNodeID string    `json:"continue_node_id"`
 	ExitNodeID     string    `json:"exit_node_id"`
@@ -544,6 +620,7 @@ type FilterNodeConfig struct {
 
 // AddToListNodeConfig configures an add-to-list node
 type AddToListNodeConfig struct {
+	NodeConfigDescription
 	ListID   string                 `json:"list_id"`
 	Status   string                 `json:"status"` // "active", "pending"
 	Metadata map[string]interface{} `json:"metadata,omitempty"`
@@ -562,6 +639,7 @@ func (c AddToListNodeConfig) Validate() error {
 
 // RemoveFromListNodeConfig configures a remove-from-list node
 type RemoveFromListNodeConfig struct {
+	NodeConfigDescription
 	ListID string `json:"list_id"`
 }
 
@@ -576,6 +654,7 @@ func (c RemoveFromListNodeConfig) Validate() error {
 // ListStatusBranchNodeConfig configures a list status branch node
 // This node checks a contact's subscription status in a list and branches accordingly
 type ListStatusBranchNodeConfig struct {
+	NodeConfigDescription
 	ListID          string `json:"list_id"`             // List to check status in
 	NotInListNodeID string `json:"not_in_list_node_id"` // Next node when contact is not in list
 	ActiveNodeID    string `json:"active_node_id"`      // Next node when status is "active"
@@ -620,6 +699,7 @@ func (v ABTestVariant) Validate() error {
 
 // ABTestNodeConfig configures an A/B test node
 type ABTestNodeConfig struct {
+	NodeConfigDescription
 	Variants []ABTestVariant `json:"variants"`
 }
 
@@ -652,6 +732,7 @@ func (c ABTestNodeConfig) Validate() error {
 
 // WebhookNodeConfig configures a webhook node
 type WebhookNodeConfig struct {
+	NodeConfigDescription
 	URL    string  `json:"url"`
 	Secret *string `json:"secret,omitempty"` // Optional: becomes Authorization: Bearer <secret>
 }
@@ -700,6 +781,12 @@ type AutomationRepository interface {
 	List(ctx context.Context, workspaceID string, filter AutomationFilter) ([]*Automation, int, error)
 	Update(ctx context.Context, workspaceID string, automation *Automation) error
 	UpdateTx(ctx context.Context, tx *sql.Tx, workspaceID string, automation *Automation) error
+	// UpdateIfStatus persists the automation only while its stored status is still
+	// expectedStatus (optimistic lock). Returns false (no error) when no row was updated —
+	// another transition changed the status between the caller's read and this write — so a
+	// status transition can stop instead of overwriting it from a stale read, and before
+	// emitting the trigger DDL its stale read decided on.
+	UpdateIfStatus(ctx context.Context, workspaceID string, automation *Automation, expectedStatus AutomationStatus) (bool, error)
 	Delete(ctx context.Context, workspaceID, id string) error
 	DeleteTx(ctx context.Context, tx *sql.Tx, workspaceID, id string) error
 

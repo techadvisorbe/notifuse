@@ -164,21 +164,6 @@ func (mr *MockAutomationRepositoryMockRecorder) ExitContactJourneysOnReply(arg0,
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ExitContactJourneysOnReply", reflect.TypeOf((*MockAutomationRepository)(nil).ExitContactJourneysOnReply), arg0, arg1, arg2, arg3, arg4, arg5)
 }
 
-// UpdateContactAutomationIfActive mocks base method.
-func (m *MockAutomationRepository) UpdateContactAutomationIfActive(arg0 context.Context, arg1 string, arg2 *domain.ContactAutomation) (bool, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "UpdateContactAutomationIfActive", arg0, arg1, arg2)
-	ret0, _ := ret[0].(bool)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// UpdateContactAutomationIfActive indicates an expected call of UpdateContactAutomationIfActive.
-func (mr *MockAutomationRepositoryMockRecorder) UpdateContactAutomationIfActive(arg0, arg1, arg2 interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateContactAutomationIfActive", reflect.TypeOf((*MockAutomationRepository)(nil).UpdateContactAutomationIfActive), arg0, arg1, arg2)
-}
-
 // GetByID mocks base method.
 func (m *MockAutomationRepository) GetByID(arg0 context.Context, arg1, arg2 string) (*domain.Automation, error) {
 	m.ctrl.T.Helper()
@@ -401,6 +386,21 @@ func (mr *MockAutomationRepositoryMockRecorder) UpdateContactAutomation(arg0, ar
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateContactAutomation", reflect.TypeOf((*MockAutomationRepository)(nil).UpdateContactAutomation), arg0, arg1, arg2)
 }
 
+// UpdateContactAutomationIfActive mocks base method.
+func (m *MockAutomationRepository) UpdateContactAutomationIfActive(arg0 context.Context, arg1 string, arg2 *domain.ContactAutomation) (bool, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "UpdateContactAutomationIfActive", arg0, arg1, arg2)
+	ret0, _ := ret[0].(bool)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// UpdateContactAutomationIfActive indicates an expected call of UpdateContactAutomationIfActive.
+func (mr *MockAutomationRepositoryMockRecorder) UpdateContactAutomationIfActive(arg0, arg1, arg2 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateContactAutomationIfActive", reflect.TypeOf((*MockAutomationRepository)(nil).UpdateContactAutomationIfActive), arg0, arg1, arg2)
+}
+
 // UpdateContactAutomationTx mocks base method.
 func (m *MockAutomationRepository) UpdateContactAutomationTx(arg0 context.Context, arg1 *sql.Tx, arg2 string, arg3 *domain.ContactAutomation) error {
 	m.ctrl.T.Helper()
@@ -413,6 +413,21 @@ func (m *MockAutomationRepository) UpdateContactAutomationTx(arg0 context.Contex
 func (mr *MockAutomationRepositoryMockRecorder) UpdateContactAutomationTx(arg0, arg1, arg2, arg3 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateContactAutomationTx", reflect.TypeOf((*MockAutomationRepository)(nil).UpdateContactAutomationTx), arg0, arg1, arg2, arg3)
+}
+
+// UpdateIfStatus mocks base method.
+func (m *MockAutomationRepository) UpdateIfStatus(arg0 context.Context, arg1 string, arg2 *domain.Automation, arg3 domain.AutomationStatus) (bool, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "UpdateIfStatus", arg0, arg1, arg2, arg3)
+	ret0, _ := ret[0].(bool)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// UpdateIfStatus indicates an expected call of UpdateIfStatus.
+func (mr *MockAutomationRepositoryMockRecorder) UpdateIfStatus(arg0, arg1, arg2, arg3 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateIfStatus", reflect.TypeOf((*MockAutomationRepository)(nil).UpdateIfStatus), arg0, arg1, arg2, arg3)
 }
 
 // UpdateNodeExecution mocks base method.

@@ -753,7 +753,7 @@ func TestBroadcastOrchestrator_Process(t *testing.T) {
 					"secret-key",
 					gomock.Any(),
 					gomock.Any(),
-					true,
+					true, gomock.Any(),
 					"broadcast-123",
 					recipients,
 					gomock.Any(),
@@ -885,7 +885,7 @@ func TestBroadcastOrchestrator_Process(t *testing.T) {
 					"marketing-provider-id", "secret-key",
 					gomock.Any(),
 					gomock.Any(),
-					true,
+					true, gomock.Any(),
 					"broadcast-123",
 					recipients,
 					gomock.Any(),
@@ -1328,7 +1328,7 @@ func TestBroadcastOrchestrator_Process(t *testing.T) {
 					"marketing-provider-id", "secret-key",
 					gomock.Any(),
 					gomock.Any(),
-					true,
+					true, gomock.Any(),
 					"broadcast-456",
 					recipients,
 					gomock.Any(),
@@ -1374,6 +1374,9 @@ func TestBroadcastOrchestrator_Process(t *testing.T) {
 
 			mockMessageSender, mockBroadcastRepo, mockTemplateRepo, mockContactRepo, mockTaskRepo, mockWorkspaceRepo, mockLogger, mockTimeProvider := tc.setupMocks(ctrl)
 			mockEventBus := domainmocks.NewMockEventBus(ctrl)
+
+			// The run that begins sending announces itself; this test is not about that event.
+			mockEventBus.EXPECT().Publish(gomock.Any(), eventOfType(domain.EventBroadcastSendingStarted)).AnyTimes()
 
 			config := &broadcast.Config{
 				FetchBatchSize:      100,
@@ -1430,6 +1433,9 @@ func TestBroadcastOrchestrator_Process_ABTestStartSetsTestingAndCompletesTestPha
 	mockLogger := pkgmocks.NewMockLogger(ctrl)
 	mockTimeProvider := mocks.NewMockTimeProvider(ctrl)
 	mockEventBus := domainmocks.NewMockEventBus(ctrl)
+
+	// The run that begins sending announces itself; this test is not about that event.
+	mockEventBus.EXPECT().Publish(gomock.Any(), eventOfType(domain.EventBroadcastSendingStarted)).AnyTimes()
 
 	// Logger expectations
 	mockLogger.EXPECT().WithFields(gomock.Any()).Return(mockLogger).AnyTimes()
@@ -1490,7 +1496,7 @@ func TestBroadcastOrchestrator_Process_ABTestStartSetsTestingAndCompletesTestPha
 	mockContactRepo.EXPECT().GetContactsForBroadcast(gomock.Any(), "workspace-123", bcast.Audience, 1, "").Return(recipients, nil)
 
 	// Send batch
-	mockMessageSender.EXPECT().SendBatch(gomock.Any(), "workspace-123", "marketing-provider-id", "secret-key", gomock.Any(), gomock.Any(), true, "broadcast-123", recipients, gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(1, 0, nil)
+	mockMessageSender.EXPECT().SendBatch(gomock.Any(), "workspace-123", "marketing-provider-id", "secret-key", gomock.Any(), gomock.Any(), true, gomock.Any(), "broadcast-123", recipients, gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(1, 0, nil)
 
 	// Save state
 	mockTaskRepo.EXPECT().SaveState(gomock.Any(), "workspace-123", "task-123", gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
@@ -1529,6 +1535,9 @@ func TestBroadcastOrchestrator_Process_WinnerPhaseMissingTemplate_Error(t *testi
 	mockLogger := pkgmocks.NewMockLogger(ctrl)
 	mockTimeProvider := mocks.NewMockTimeProvider(ctrl)
 	mockEventBus := domainmocks.NewMockEventBus(ctrl)
+
+	// The run that begins sending announces itself; this test is not about that event.
+	mockEventBus.EXPECT().Publish(gomock.Any(), eventOfType(domain.EventBroadcastSendingStarted)).AnyTimes()
 
 	mockLogger.EXPECT().WithFields(gomock.Any()).Return(mockLogger).AnyTimes()
 	mockLogger.EXPECT().WithField(gomock.Any(), gomock.Any()).Return(mockLogger).AnyTimes()
@@ -1580,6 +1589,9 @@ func TestBroadcastOrchestrator_Process_ValidateTemplatesFailure(t *testing.T) {
 	mockLogger := pkgmocks.NewMockLogger(ctrl)
 	mockTimeProvider := mocks.NewMockTimeProvider(ctrl)
 	mockEventBus := domainmocks.NewMockEventBus(ctrl)
+
+	// The run that begins sending announces itself; this test is not about that event.
+	mockEventBus.EXPECT().Publish(gomock.Any(), eventOfType(domain.EventBroadcastSendingStarted)).AnyTimes()
 
 	mockLogger.EXPECT().WithFields(gomock.Any()).Return(mockLogger).AnyTimes()
 	mockLogger.EXPECT().WithField(gomock.Any(), gomock.Any()).Return(mockLogger).AnyTimes()
@@ -1636,6 +1648,9 @@ func TestBroadcastOrchestrator_Process_BatchSizeZeroTriggersPhaseCompletion(t *t
 	mockTimeProvider := mocks.NewMockTimeProvider(ctrl)
 	mockEventBus := domainmocks.NewMockEventBus(ctrl)
 
+	// The run that begins sending announces itself; this test is not about that event.
+	mockEventBus.EXPECT().Publish(gomock.Any(), eventOfType(domain.EventBroadcastSendingStarted)).AnyTimes()
+
 	mockLogger.EXPECT().WithFields(gomock.Any()).Return(mockLogger).AnyTimes()
 	mockLogger.EXPECT().WithField(gomock.Any(), gomock.Any()).Return(mockLogger).AnyTimes()
 	mockLogger.EXPECT().Error(gomock.Any()).AnyTimes()
@@ -1683,6 +1698,9 @@ func TestBroadcastOrchestrator_Process_EmptyRecipientsTriggersTestCompletion(t *
 	mockLogger := pkgmocks.NewMockLogger(ctrl)
 	mockTimeProvider := mocks.NewMockTimeProvider(ctrl)
 	mockEventBus := domainmocks.NewMockEventBus(ctrl)
+
+	// The run that begins sending announces itself; this test is not about that event.
+	mockEventBus.EXPECT().Publish(gomock.Any(), eventOfType(domain.EventBroadcastSendingStarted)).AnyTimes()
 
 	mockLogger.EXPECT().WithFields(gomock.Any()).Return(mockLogger).AnyTimes()
 	mockLogger.EXPECT().WithField(gomock.Any(), gomock.Any()).Return(mockLogger).AnyTimes()
@@ -1734,6 +1752,9 @@ func TestBroadcastOrchestrator_Process_AutoWinnerEvaluationPath(t *testing.T) {
 	mockTimeProvider := mocks.NewMockTimeProvider(ctrl)
 	mockEventBus := domainmocks.NewMockEventBus(ctrl)
 	msgRepo := domainmocks.NewMockMessageHistoryRepository(ctrl)
+
+	// The run that begins sending announces itself; this test is not about that event.
+	mockEventBus.EXPECT().Publish(gomock.Any(), eventOfType(domain.EventBroadcastSendingStarted)).AnyTimes()
 
 	mockLogger.EXPECT().WithFields(gomock.Any()).Return(mockLogger).AnyTimes()
 	mockLogger.EXPECT().WithField(gomock.Any(), gomock.Any()).Return(mockLogger).AnyTimes()
@@ -1803,7 +1824,7 @@ func TestBroadcastOrchestrator_Process_AutoWinnerEvaluationPath(t *testing.T) {
 	mockContactRepo.EXPECT().GetContactsForBroadcast(gomock.Any(), "w", bcast.Audience, 1, "").Return([]*domain.ContactWithList{{Contact: &domain.Contact{Email: "w@x.com"}}}, nil)
 
 	// Send
-	mockMessageSender.EXPECT().SendBatch(gomock.Any(), "w", "pid", "k", gomock.Any(), gomock.Any(), true, "b", gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(1, 0, nil)
+	mockMessageSender.EXPECT().SendBatch(gomock.Any(), "w", "pid", "k", gomock.Any(), gomock.Any(), true, gomock.Any(), "b", gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(1, 0, nil)
 
 	// Save state
 	mockTaskRepo.EXPECT().SaveState(gomock.Any(), "w", "t", gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
@@ -1940,7 +1961,7 @@ func TestBroadcastOrchestrator_Process_ABTestWinnerPhaseProcessesRemainingRecipi
 		"marketing-provider-id", "secret-key",
 		gomock.Any(), // custom endpoint
 		gomock.Any(),
-		true,
+		true, gomock.Any(),
 		"broadcast-123",
 		[]*domain.ContactWithList{recipient},
 		gomock.Any(), // templates
@@ -2792,6 +2813,9 @@ func TestBroadcastOrchestrator_Process_PartialBatchCursorUpdate(t *testing.T) {
 	mockTimeProvider := mocks.NewMockTimeProvider(ctrl)
 	mockEventBus := domainmocks.NewMockEventBus(ctrl)
 
+	// The run that begins sending announces itself; this test is not about that event.
+	mockEventBus.EXPECT().Publish(gomock.Any(), eventOfType(domain.EventBroadcastSendingStarted)).AnyTimes()
+
 	// Setup logger expectations
 	mockLogger.EXPECT().WithFields(gomock.Any()).Return(mockLogger).AnyTimes()
 	mockLogger.EXPECT().WithField(gomock.Any(), gomock.Any()).Return(mockLogger).AnyTimes()
@@ -2896,14 +2920,14 @@ func TestBroadcastOrchestrator_Process_PartialBatchCursorUpdate(t *testing.T) {
 		"secret-key",
 		gomock.Any(),
 		gomock.Any(),
-		true,
+		true, gomock.Any(),
 		"broadcast-123",
 		recipients1,
 		gomock.Any(),
 		gomock.Any(),
 		gomock.Any(),
 		gomock.Any(),
-	).DoAndReturn(func(_ context.Context, _, _, _, _, _ interface{}, _ bool, _ string, _ []*domain.ContactWithList, _, _, _, _ interface{}) (int, int, error) {
+	).DoAndReturn(func(_ context.Context, _, _, _, _, _ interface{}, _ bool, _ interface{}, _ string, _ []*domain.ContactWithList, _, _, _, _ interface{}) (int, int, error) {
 		sendBatchCalled = true
 		return 3, 0, nil // Only 3 sent due to internal timeout
 	})
@@ -2915,7 +2939,7 @@ func TestBroadcastOrchestrator_Process_PartialBatchCursorUpdate(t *testing.T) {
 		"secret-key",
 		gomock.Any(),
 		gomock.Any(),
-		true,
+		true, gomock.Any(),
 		"broadcast-123",
 		recipients2,
 		gomock.Any(),
@@ -3067,7 +3091,7 @@ func TestProcessBroadcastTask_RecipientFeedFailure_PausesBroadcast(t *testing.T)
 
 	// SendBatch returns ErrBroadcastShouldPause
 	mockMessageSender.EXPECT().SendBatch(
-		gomock.Any(), "workspace-123", "marketing-provider-id", "secret-key", gomock.Any(), gomock.Any(), true, "broadcast-123",
+		gomock.Any(), "workspace-123", "marketing-provider-id", "secret-key", gomock.Any(), gomock.Any(), true, gomock.Any(), "broadcast-123",
 		recipients, gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(),
 	).Return(0, 0, fmt.Errorf("%w: recipient feed failed for user1@test.com: server error", broadcast.ErrBroadcastShouldPause))
 
@@ -3080,8 +3104,11 @@ func TestProcessBroadcastTask_RecipientFeedFailure_PausesBroadcast(t *testing.T)
 		return nil
 	})
 
+	// This is also the run that begins sending, so it announces itself first
+	mockEventBus.EXPECT().Publish(gomock.Any(), eventOfType(domain.EventBroadcastSendingStarted)).Times(1)
+
 	// EventBus should publish a paused event
-	mockEventBus.EXPECT().Publish(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, event domain.EventPayload) {
+	mockEventBus.EXPECT().Publish(gomock.Any(), eventOfType(domain.EventBroadcastPaused)).DoAndReturn(func(_ context.Context, event domain.EventPayload) {
 		assert.Equal(t, domain.EventBroadcastPaused, event.Type)
 		assert.Equal(t, "workspace-123", event.WorkspaceID)
 		assert.Equal(t, "broadcast-123", event.EntityID)
@@ -3177,7 +3204,7 @@ func TestProcessBroadcastTask_RecipientFeedFailure_NotMarkedAsFailed(t *testing.
 
 	// SendBatch returns ErrBroadcastShouldPause
 	mockMessageSender.EXPECT().SendBatch(
-		gomock.Any(), "workspace-123", "marketing-provider-id", "secret-key", gomock.Any(), gomock.Any(), true, "broadcast-123",
+		gomock.Any(), "workspace-123", "marketing-provider-id", "secret-key", gomock.Any(), gomock.Any(), true, gomock.Any(), "broadcast-123",
 		recipients, gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(),
 	).Return(0, 0, fmt.Errorf("%w: recipient feed failed for user1@test.com: server error", broadcast.ErrBroadcastShouldPause))
 
